@@ -160,17 +160,13 @@ class _Action(NamedTuple):
         [stage],[rank],[action type],[microbatch],[dest_rank]
     """
 
-    # 重新排列字段顺序以匹配from_str中的参数顺序
-    stage_index: int  # required - 第1个参数
-    rank: Optional[int]  # 第2个参数
-    computation_type: _ComputationType  # required - 第3个参数  
-    microbatch_index: Optional[int]  # 第4个参数
-    dest_rank: Optional[int]  # 第5个参数
+    # 构造函数顺序必须符合如下
+    stage_index: int 
+    rank: Optional[int] 
+    computation_type: _ComputationType  
+    microbatch_index: Optional[int]  
+    dest_rank: Optional[int]  
 
-    # -----------------------------------------------------------------------
-    # NOTE: The order here matches the from_str method parameter order:
-    # stage_index, rank, computation_type, microbatch_index, dest_rank
-    # -----------------------------------------------------------------------
 
     def __repr__(self):  # noqa: D401 – keep simple string representation
         # Produce a fixed 5‑field CSV string, leaving empty positions for Nones.
@@ -196,11 +192,11 @@ class _Action(NamedTuple):
         if match := _action_regex.match(action_string):
             stage_index, rank, computation_type, microbatch_index, dest_rank = match.groups()
             return _Action(
-                int(stage_index),                                              # stage_index
-                int(rank) if len(rank) else None,                            # rank
-                _ComputationType.from_str(computation_type),                   # computation_type
-                int(microbatch_index) if len(microbatch_index) else None,     # microbatch_index
-                int(dest_rank) if len(dest_rank) else None                    # dest_rank
+                int(stage_index),                                             
+                int(rank) if len(rank) else None,                           
+                _ComputationType.from_str(computation_type),                  
+                int(microbatch_index) if len(microbatch_index) else None,    
+                int(dest_rank) if len(dest_rank) else None                   
             )
         elif action_string == "":
             return None
