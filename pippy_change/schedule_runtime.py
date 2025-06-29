@@ -7,6 +7,9 @@ from abc import ABC, abstractmethod
 from collections import Counter, defaultdict
 from enum import Enum
 from typing import Any, Callable, NamedTuple, Optional, Union
+import json
+from dataclasses import dataclass, asdict
+import os 
 
 import torch
 import torch.distributed as dist
@@ -131,7 +134,25 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
         TODO: Does not use sorted_batch_isend_irecv(). As a result, this schedule does
         not support models with skip connections.
-        """
+        """               
+        if not hasattr(self, "_global_batch"):
+            env_batch = os.getenv("PROFILE_BATCH")          # export PROFILE_BATCH=17
+            self._profile_batch = int(env_batch) if env_batch is not None else None
+
+            from timer import TimelineRecorder
+            self._rec = TimelineRecorder(self.rank)        
+            self._timeline_saved = False
+            self._global_batch = -1
+        
+        current_batch = self._global_batch
+        self._global_batch += 1
+
+        record_this_batch = (
+            self._profile_batch is not None                   
+            and current_batch == self._profile_batch        
+        )
+        self._rec.set_enabled(record_this_batch)
+        
         arg_mbs, kwarg_mbs = self._check_inputs(arg_mbs, kwarg_mbs, target_mbs, losses)
         if not self._stages_initialized:
             self._initialize_stages(arg_mbs[0], kwarg_mbs[0])
@@ -198,42 +219,46 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
              
                 if comp_type == SEND_F:
-                    ops = (
-                        stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
-                        if rank is not None and dest_rank is not None
-                        else stage.get_fwd_send_ops(mb_index)
-                    )
-                    send_ops.append(schedule._batch_p2p(ops))
+                    with self._rec.record("SEND_F", stage_idx, mb_index):
+                        ops = (
+                            stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
+                            if rank is not None and dest_rank is not None
+                            else stage.get_fwd_send_ops(mb_index)
+                        )
+                        send_ops.append(schedule._batch_p2p(ops))
 
                 elif comp_type == SEND_B:
-                    ops = (
-                        stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
-                        if rank is not None and dest_rank is not None
-                        else stage.get_bwd_send_ops(mb_index)
-                    )
-                    send_ops.append(schedule._batch_p2p(ops))
+                    with self._rec.record("SEND_B", stage_idx, mb_index):
+                        ops = (
+                            stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
+                            if rank is not None and dest_rank is not None
+                            else stage.get_bwd_send_ops(mb_index)
+                        )
+                        send_ops.append(schedule._batch_p2p(ops))
 
                 elif comp_type == RECV_F:
                     assert (stage_idx, mb_index) not in fwd_recv_ops, (
                         f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing forward"
                     )
-                    ops = (
-                        stage.get_fwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank)
-                        if rank is not None and dest_rank is not None
-                        else stage.get_fwd_recv_ops(mb_index)
-                    )
-                    fwd_recv_ops[(stage_idx, mb_index)] = schedule._batch_p2p(ops)
+                    with self._rec.record("RECV_F", stage_idx, mb_index):
+                        ops = (
+                            stage.get_fwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank)
+                            if rank is not None and dest_rank is not None
+                            else stage.get_fwd_recv_ops(mb_index)
+                        )
+                        fwd_recv_ops[(stage_idx, mb_index)] = schedule._batch_p2p(ops)
 
                 elif comp_type == RECV_B:
                     assert (stage_idx, mb_index) not in bwd_recv_ops, (
                         f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing backward"
                     )
-                    ops = (
-                        stage.get_bwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank)
-                        if rank is not None and dest_rank is not None
-                        else stage.get_bwd_recv_ops(mb_index)
-                    )
-                    bwd_recv_ops[(stage_idx, mb_index)] = schedule._batch_p2p(ops)
+                    with self._rec.record("RECV_B", stage_idx, mb_index):
+                        ops = (
+                            stage.get_bwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank)
+                            if rank is not None and dest_rank is not None
+                            else stage.get_bwd_recv_ops(mb_index)
+                        )
+                        bwd_recv_ops[(stage_idx, mb_index)] = schedule._batch_p2p(ops)
                 elif comp_type == UNSHARD:
                     if stage_uses_fsdp:
                         assert (
@@ -264,10 +289,12 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             mb_index,
                         ) in fwd_recv_ops, f"Computing {action=} before receiving input"
                         schedule._wait_batch_p2p(fwd_recv_ops.pop((stage_idx, mb_index)))
-
-                    output = stage.forward_one_chunk(
-                        mb_index, arg_mbs[mb_index], kwarg_mbs[mb_index]
-                    )
+                        
+                    with self._rec.record("FORWARD", stage_idx, mb_index):
+                        output = stage.forward_one_chunk(
+                            mb_index, arg_mbs[mb_index], kwarg_mbs[mb_index]
+                        )
+                        
                     self._maybe_compute_loss(stage, output, target_mbs, mb_index)
 
                     # SEND/RECV op are avoided for special case with 2 adjacent stages on same rank
@@ -297,12 +324,13 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     backward_counter[stage_idx] += 1
                     last_backward = backward_counter[stage_idx] == self._n_microbatches
                     grad_scale_factor = self._n_microbatches if self.scale_grads else 1
-                    stage.backward_one_chunk(
-                        mb_index,
-                        loss=loss,
-                        full_backward=True,
-                        last_backward=last_backward,
-                    )
+                    with self._rec.record("FULL_BACKWARD", stage_idx, mb_index):
+                        stage.backward_one_chunk(
+                            mb_index,
+                            loss=loss,
+                            full_backward=True,
+                            last_backward=last_backward,
+                        )
                     if last_backward:
                         stage.scale_grads(grad_scale_factor)
  
@@ -323,12 +351,13 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         )
                         schedule._wait_batch_p2p(bwd_recv_ops.pop((stage_idx, mb_index)))
                     loss = self._maybe_get_loss(stage, mb_index)
-                    stage.backward_one_chunk(
-                        mb_index,
-                        loss=loss,
-                        full_backward=False,
-                        last_backward=False,
-                    )
+                    with self._rec.record("BACKWARD_INPUT", stage_idx, mb_index):
+                        stage.backward_one_chunk(
+                            mb_index,
+                            loss=loss,
+                            full_backward=False,
+                            last_backward=False,
+                        )
 
                     if is_prev_stage_on_this_rank:
                         stage_index_to_stage[stage_idx - 1].set_local_bwd_input(
@@ -338,11 +367,14 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if stage_uses_fsdp:
                         _assert_unsharded(stage_idx)
                     backward_counter[stage_idx] += 1
-                    stage.backward_weight_one_chunk(
-                        mb_index,
-                        last_backward=backward_counter[stage_idx]
-                        == self._n_microbatches,
-                    )
+                    
+                    with self._rec.record("BACKWARD_WEIGHT", stage_idx, mb_index):
+                        stage.backward_weight_one_chunk(
+                            mb_index,
+                            last_backward=backward_counter[stage_idx]
+                            == self._n_microbatches,
+                        )
+                        
                 else:
                     raise ValueError(f"{action=} is unknown or unsupported")
             except Exception as e:
@@ -354,7 +386,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
               
                 print(
                     schedule._format_pipeline_order(
-                        self.pipeline_order_with_comms,  # type: ignore[arg-type]
+                        self.pipeline_order_with_comms, 
                         error_step_number=time_step,
                     )
                 )
@@ -367,3 +399,31 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
 
         self._update_losses(self._stages, losses)
+        
+        if (
+            record_this_batch
+            and self._profile_batch is not None
+            and not self._timeline_saved
+        ):
+            fname_prefix = f"timeline_batch{self._profile_batch}"
+            self.save_timeline(fname_prefix)
+            self._timeline_saved = True
+            self._rec.set_enabled(False)   
+
+    def save_timeline(self, fname_prefix="timeline"):
+        """
+        每个 rank dump 一份 json；如果想集中到 rank0，
+        可用 dist.gather_object 把 self._rec.events 收到 0 号后再统一写。
+        """
+        if dist.is_initialized():
+            if dist.get_world_size() == 1:
+                self._rec.dump(f"{fname_prefix}_rank0.json")
+            else:
+                gathered = [None] * dist.get_world_size()
+                dist.gather_object(self._rec.events, gathered if self.rank == 0 else None, dst=0)
+                if self.rank == 0:
+                    all_ev = sum(gathered, [])
+                    with open(f"{fname_prefix}_all.json", "w") as f:
+                        json.dump([asdict(e) for e in all_ev], f, indent=2)
+        else:
+            self._rec.dump(f"{fname_prefix}_solo.json")
