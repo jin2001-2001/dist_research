@@ -98,7 +98,9 @@ class Part1(nn.Module):  # rank 0
         attention_mask = torch.triu(
             torch.full((seqlen, seqlen), float('-inf'), device=device),
             diagonal=1
-        ).unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
+        )
+        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
+        attention_mask = attention_mask.expand(bsz, 1, -1, -1).contiguous()
 
         for layer in self.layers:
             layer_outputs = layer(
@@ -127,16 +129,18 @@ class Part2(nn.Module):  # rank 1
         device = hidden.device
         position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1).contiguous()
         position_embeddings = self.rotary_emb(hidden, position_ids)
-
+        
         if attention_mask.dim() == 2:
             seqlen = attention_mask.shape[-1]
             attention_mask = torch.triu(
                 torch.full((seqlen, seqlen), float('-inf'), device=device),
                 diagonal=1
-            ).unsqueeze(0).unsqueeze(0).expand(hidden.shape[0], 1, -1, -1).contiguous()
+            )
+            attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
+            attention_mask = attention_mask.expand(hidden.shape[0], 1, -1, -1).contiguous()
         elif not attention_mask.is_contiguous():
             attention_mask = attention_mask.contiguous()
-
+        
         for layer in self.layers:
             layer_outputs = layer(
                 hidden_states=hidden,
@@ -147,19 +151,18 @@ class Part2(nn.Module):  # rank 1
                 use_cache=False,
             )
             hidden = layer_outputs[0]
-
+            
         hidden = self.norm(hidden)
         return self.lm_head(hidden)
 
 
 def main():
-
-    dist.init_process_group("gloo", init_method="env://")
-
+    # ① 初始化分布式
+    dist.init_process_group("nccl", init_method="env://")
     rank = int(os.environ["RANK"])
     world = int(os.environ["WORLD_SIZE"])
-
-    device = torch.device("cpu")     
+    torch.cuda.set_device(0) 
+    device = torch.device(f"cuda:0")
 
     name = "Qwen/Qwen3-0.6B-Base"
     tok = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
@@ -189,6 +192,7 @@ def main():
     if rank == 0:
         loader = torch.utils.data.DataLoader(ds, batch_size=8, shuffle=True, drop_last=True)
 
+
     def loss_fn(output, target):
         if output is None or target is None:
             return None
@@ -196,13 +200,15 @@ def main():
         output = output[:, :-1, :].reshape(-1, vocab_size)
         target = target[:, 1:].reshape(-1)
         return F.cross_entropy(output, target)
-
+    
+    
     os.environ["PROFILE_BATCH"] = "0"
     sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=4, loss_fn=loss_fn)
     actions = create_pipeline_actions()
     sched._load_actions(actions, format="compute_comms")
-    
+
     opt = optim.Adam(stage_mod.parameters(), lr=1e-4)
+
 
     for epoch in range(1):
         if rank == 0:
@@ -229,19 +235,20 @@ def main():
                 batch = next(data_iter)
                 inp = batch["input_ids"].to(device)
                 tgt = batch["labels"].to(device)
+
                 dist.broadcast(tgt, src=0)
                 sched.step(inp, target=tgt)
             else:
-               
-                tgt = torch.empty(8, block, dtype=torch.long, device=device)
+
+                tgt = torch.zeros(8, block, dtype=torch.long, device=device)
                 dist.broadcast(tgt, src=0)
                 sched.step(target=tgt)
             
             opt.step()
-            
+
             if rank == 0:
                 step_time = time.time() - step_start_time
-                tokens_processed = 8 * block
+                tokens_processed = 8 * block 
                 tokens_per_second = tokens_processed / step_time
                 
                 pbar.set_postfix({
@@ -266,6 +273,7 @@ def main():
         merged_state = merged.state_dict()
         
         part1_state = stage_mod.state_dict()
+
         for key in part1_state:
             if key.startswith("embed_tokens"):
                 merged_state[f"model.{key}"] = part1_state[key]
@@ -295,7 +303,6 @@ def main():
     else:
         dist.broadcast_object_list([stage_mod.state_dict()], src=1)
 
-    
     sched.save_timeline("qwen_pp")
     dist.destroy_process_group()
 
