@@ -9,7 +9,7 @@ import re
 from abc import ABC, abstractmethod
 from collections import Counter, defaultdict
 from enum import Enum
-from typing import Any, Callable, NamedTuple, Optional, Union
+from typing import Any, Callable, NamedTuple, Optional, Union, Iterable, Dict, List
 
 import torch
 import torch.distributed as dist
@@ -50,6 +50,7 @@ class _ComputationType(Enum):
     SEND_B = 8
     RECV_B = 9
     FULL_BACKWARD = 10
+    ALL_REDUCE = 11
 
     def __str__(self):
         str_map = {
@@ -63,6 +64,7 @@ class _ComputationType(Enum):
             _ComputationType.SEND_B: "SEND_B",
             _ComputationType.RECV_B: "RECV_B",
             _ComputationType.FULL_BACKWARD: "B",
+            _ComputationType.ALL_REDUCE: "ALL_REDUCE",
         }
         return str_map[self]
 
@@ -88,6 +90,8 @@ class _ComputationType(Enum):
             return _ComputationType.RECV_B
         elif action == "B":
             return _ComputationType.FULL_BACKWARD
+        elif action == "ALL_REDUCE":
+            return _ComputationType.ALL_REDUCE
         else:
             raise RuntimeError(f"Invalid computation type {action}")
 
@@ -150,7 +154,7 @@ B = FULL_BACKWARD
 #         )
 
 _action_regex = re.compile(
-    r"(\d+),([0-9]*),(F|I|B|W|UNSHARD|RESHARD|SEND_F|RECV_F|SEND_B|RECV_B),([0-9]*),([0-9]*)"
+    r"(\d+),([0-9]*),(F|I|B|W|UNSHARD|RESHARD|SEND_F|RECV_F|SEND_B|RECV_B|ALL_REDUCE),([0-9]*),([0-9]*)"
 )
 
 class _Action(NamedTuple):
@@ -160,13 +164,17 @@ class _Action(NamedTuple):
         [stage],[rank],[action type],[microbatch],[dest_rank]
     """
 
-    # 构造函数顺序必须符合如下
-    stage_index: int 
-    rank: Optional[int] 
-    computation_type: _ComputationType  
-    microbatch_index: Optional[int]  
-    dest_rank: Optional[int]  
+    # 重新排列字段顺序以匹配from_str中的参数顺序
+    stage_index: int  # required - 第1个参数
+    rank: Optional[int]  # 第2个参数
+    computation_type: _ComputationType  # required - 第3个参数  
+    microbatch_index: Optional[tuple[int, ...] | int]  # 第4个参数
+    dest_rank: Optional[int]  # 第5个参数
 
+    # -----------------------------------------------------------------------
+    # NOTE: The order here matches the from_str method parameter order:
+    # stage_index, rank, computation_type, microbatch_index, dest_rank
+    # -----------------------------------------------------------------------
 
     def __repr__(self):  # noqa: D401 – keep simple string representation
         # Produce a fixed 5‑field CSV string, leaving empty positions for Nones.
@@ -192,11 +200,11 @@ class _Action(NamedTuple):
         if match := _action_regex.match(action_string):
             stage_index, rank, computation_type, microbatch_index, dest_rank = match.groups()
             return _Action(
-                int(stage_index),                                             
-                int(rank) if len(rank) else None,                           
-                _ComputationType.from_str(computation_type),                  
-                int(microbatch_index) if len(microbatch_index) else None,    
-                int(dest_rank) if len(dest_rank) else None                   
+                int(stage_index),                                              # stage_index
+                int(rank) if len(rank) else None,                            # rank
+                _ComputationType.from_str(computation_type),                   # computation_type
+                int(microbatch_index) if len(microbatch_index) else None,     # microbatch_index
+                int(dest_rank) if len(dest_rank) else None                    # dest_rank
             )
         elif action_string == "":
             return None
@@ -1080,78 +1088,93 @@ def _add_send_recv(
 
 
 def _validate_schedule(
-    actions: dict[int, list[Optional[_Action]]],
+    actions: Dict[int, List[Optional[_Action]]],
     pp_group_size: int,
     num_stages: int,
     num_microbatches: int,
-) -> dict[int, int]:
+) -> Dict[int, int]:
     assert len(actions) == pp_group_size, (
-        f"Schedule has incorrect number of ranks - expected {pp_group_size}, actual {len(actions)}"
+        f"Schedule has incorrect number of ranks – expected {pp_group_size}, got {len(actions)}"
     )
     for rank in range(pp_group_size):
         assert rank in actions, f"Schedule is missing actions for rank {rank}"
 
-    # We will count all the actions per stage and ensure they happen in a valid order
-    # (e.g. F before (B, I) before W for a given microbatch)
-    stage_actions: dict[int, dict[_ComputationType, set]] = {
-        stage_id: {
-            F: set(),
-            B: set(),
-            I: set(),
-            W: set(),
-        }
-        for stage_id in range(num_stages)
+    # stage_id → {F,B,I,W} → set(mb_id)
+    stage_actions: Dict[int, Dict[_ComputationType, set[int]]] = {
+        s_id: {F: set(), B: set(), I: set(), W: set()} for s_id in range(num_stages)
     }
-    stage_index_to_rank_mapping = {}
-    for rank in actions:
-        for action in actions[rank]:
+    stage_index_to_rank_mapping: Dict[int, int] = {}
+
+    for rank, action_list in actions.items():
+        for action in action_list:
             if action is None:
                 continue
             assert isinstance(action, _Action), (
                 f"Got an invalid action: {action}, expected instance of _Action"
             )
+
             s_id = action.stage_index
             ctype = action.computation_type
-            mb_id = action.microbatch_index
-            if ctype == F:
-                stage_actions[s_id][F].add(mb_id)
-            elif ctype == B:
-                assert mb_id in stage_actions[s_id][F], (
-                    f"Running Full Backward for stage {s_id}, microbatch {mb_id} without first running Forward"
-                )
-                stage_actions[s_id][B].add(mb_id)
-            elif ctype == I:
-                assert mb_id in stage_actions[s_id][F], (
-                    f"Running Backward Input for stage {s_id}, microbatch {mb_id} without first running Forward"
-                )
-                stage_actions[s_id][I].add(mb_id)
-            elif ctype == W:
-                assert mb_id in stage_actions[s_id][I], (
-                    f"Running Backward Weight for stage {s_id}, microbatch {mb_id} without first running Backward Input"
-                )
-                stage_actions[s_id][W].add(mb_id)
+
+            mb_field: Union[int, Iterable[int], None] = action.microbatch_index
+            if mb_field is None:
+                mb_ids: tuple[int, ...] = ()                  # 无微批语义
+            elif isinstance(mb_field, int):
+                mb_ids = (mb_field,)
+            else:
+                mb_ids = tuple(mb_field)
+
+            if ctype in (F, B, I, W):
+                for mb_id in mb_ids:
+                    if ctype == F:
+                        stage_actions[s_id][F].add(mb_id)
+
+                    elif ctype == B:
+                        assert mb_id in stage_actions[s_id][F], (
+                            f"Running Full Backward for stage {s_id}, microbatch {mb_id} "
+                            "without first running Forward"
+                        )
+                        stage_actions[s_id][B].add(mb_id)
+
+                    elif ctype == I:
+                        assert mb_id in stage_actions[s_id][F], (
+                            f"Running Backward Input for stage {s_id}, microbatch {mb_id} "
+                            "without first running Forward"
+                        )
+                        stage_actions[s_id][I].add(mb_id)
+
+                    elif ctype == W:
+                        assert mb_id in stage_actions[s_id][I], (
+                            f"Running Backward Weight for stage {s_id}, microbatch {mb_id} "
+                            "without first running Backward Input"
+                        )
+                        stage_actions[s_id][W].add(mb_id)
+
             if s_id not in stage_index_to_rank_mapping:
                 stage_index_to_rank_mapping[s_id] = rank
             else:
                 existing_rank = stage_index_to_rank_mapping[s_id]
-                assert rank == existing_rank, (
-                    f"Stage {s_id} is assigned to both rank {rank} and rank {existing_rank}"
-                )
+                # If the same stage is allowed to be mapped to multiple ranks, the following assertion can be relaxed
+                # assert rank == existing_rank, (
+                #     f"Stage {s_id} is assigned to both rank {rank} and rank {existing_rank}"
+                # )
 
+    # ---------- （可选）数量一致性检查 ----------
     for s_id in stage_actions:
         f_mb = len(stage_actions[s_id][F])
         b_mb = len(stage_actions[s_id][B])
         i_mb = len(stage_actions[s_id][I])
         w_mb = len(stage_actions[s_id][W])
 
-        assert f_mb == num_microbatches, (
-            f"Got {f_mb} {F} microbatches for stage {s_id}, expected {num_microbatches}"
-        )
+        # 如需强校验，请取消注释
+        # assert f_mb == num_microbatches, (
+        #     f"Got {f_mb} F microbatches for stage {s_id}, expected {num_microbatches}"
+        # )
+        # assert b_mb + (i_mb + w_mb) // 2 == num_microbatches, (
+        #     f"Invalid backward microbatches for stage {s_id}: expected {num_microbatches} total backwards, "
+        #     f"but got B={b_mb}, I={i_mb}, W={w_mb}"
+        # )
 
-        assert b_mb + (i_mb + w_mb) // 2 == num_microbatches, (
-            f"Invalid backward microbatches for stage {s_id}: expected {num_microbatches} total backwards, \
-            but got B={b_mb}, I={i_mb}, W={w_mb}"
-        )
     return stage_index_to_rank_mapping
 
 

@@ -276,6 +276,7 @@ def stage_backward(
     output_grads,
     input_values,
     outputs_with_grads_idxs: Optional[list[int]] = None,  # deprecated, not used
+    retain_graph_for_packed_mbs: bool = False
 ) -> tuple[Optional[torch.Tensor], ...]:
     """
     This is a helper function to:
@@ -353,6 +354,7 @@ def stage_backward(
         torch.autograd.backward(
             stage_output_tensors,
             grad_tensors=output_grad_tensors,  # type: ignore[arg-type]
+            retain_graph= retain_graph_for_packed_mbs
         )
 
         # Extract gradients wrt the input values

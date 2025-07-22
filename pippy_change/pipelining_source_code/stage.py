@@ -167,6 +167,7 @@ class _PipelineStageBase(ABC):
         # `group_rank` is rank in process group `group`.
         self.group_rank = dist.get_rank(self.group)
         self.group_size = dist.get_world_size(self.group)
+        #需修改
         if self.group_size > self.num_stages:
             raise RuntimeError(
                 f"Pipeline group size {self.group_size} cannot be larger than number of stages {self.num_stages}"

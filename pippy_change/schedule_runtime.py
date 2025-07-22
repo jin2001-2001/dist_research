@@ -6,15 +6,19 @@ import re
 from abc import ABC, abstractmethod
 from collections import Counter, defaultdict
 from enum import Enum
-from typing import Any, Callable, NamedTuple, Optional, Union
+from typing import Any, Callable, NamedTuple, Optional, Union, Dict, Tuple, List
 import json
 from dataclasses import dataclass, asdict
 import os 
+import copy
 
 import torch
 import torch.distributed as dist
 import torch.distributed.pipelining.schedules as schedule
 from torch.distributed.pipelining.schedules import _Action, _ComputationType
+from torch.distributed.pipelining.stage import _normalize_model_output_as_tuple
+from torch.distributed.pipelining._utils import flatten_args
+
 logger = logging.getLogger(__name__)
 
 FORWARD = _ComputationType.FORWARD
@@ -27,12 +31,71 @@ RECV_F = _ComputationType.RECV_F
 SEND_B = _ComputationType.SEND_B
 RECV_B = _ComputationType.RECV_B
 FULL_BACKWARD = _ComputationType.FULL_BACKWARD
+ALL_REDUCE = _ComputationType.ALL_REDUCE
 
 # Convenience shorthand for compute actions only since they are used in 'simple schedule format'
 F = FORWARD
 I = BACKWARD_INPUT
 W = BACKWARD_WEIGHT
 B = FULL_BACKWARD
+
+def _cat_like(items: List[Any]) -> Any:
+    """
+    Support recursive concatenation of tensors/tuples/lists/None.
+    Use torch.stack for 0-dimensional tensors; For other tensors, use torch.cat(dim=0).
+    """
+    first = items[0]
+    if torch.is_tensor(first):
+        if first.dim() == 0:
+            return torch.stack(items, dim=0)    
+        else:
+            return torch.cat(items, dim=0)
+    elif isinstance(first, (tuple, list)):
+        pieces = [_cat_like([itm[i] for itm in items]) for i in range(len(first))]
+        return type(first)(pieces)
+    else:
+        return first
+
+# Safely split the tensor into n parts in the batch dimension; If the number of blocks is less than n, the last block is copied to make up for it
+def _safe_chunk(t: torch.Tensor, n: int) -> List[torch.Tensor]:
+    chunks = list(torch.chunk(t, min(n, t.size(0)), dim=0))
+    if len(chunks) < n:
+        pad = chunks[-1].detach().clone()
+        chunks += [pad] * (n - len(chunks))
+    return chunks
+
+# Recursively split the "packaged object" (tensor/tuple/list)
+def _chunk_like(big_obj, n: int):
+    if torch.is_tensor(big_obj):
+        return _safe_chunk(big_obj, n)
+
+    if isinstance(big_obj, (tuple, list)):
+        # Recursively split each element; The result is list[list[Tensor]]
+        split_per_elem = [_chunk_like(o, n) for o in big_obj]
+        out = []
+        for i in range(n):
+            out.append(tuple(split_per_elem[j][i] for j in range(len(big_obj))))
+        return out
+
+    # Make n copies of other types exactly as they are
+    return [big_obj for _ in range(n)]
+
+# Recursively complete the gradient: Make the structure and length of grad exactly the same as those of ref; Missing or None → zeros_like
+def _fill_grads_like(ref, grad):
+    if torch.is_tensor(ref):
+        if grad is None:
+            return torch.zeros_like(ref, requires_grad=False)
+        return grad
+
+    if isinstance(ref, (tuple, list)):
+        g_list = list(grad) if isinstance(grad, (tuple, list)) else []
+        while len(g_list) < len(ref):
+            g_list.append(None)
+        filled = [_fill_grads_like(r, g) for r, g in zip(ref, g_list)]
+        return type(ref)(filled)
+
+    # 非张量非序列：保持原样或用 ref 占位
+    return grad if grad is not None else ref
 
 # ---------------------------------------------------------------------------
 # Action-string helpers (UPDATED FORMAT: [stage],[rank],[action type],[microbatch],[dest_rank])
@@ -44,6 +107,49 @@ B = FULL_BACKWARD
 
 class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
+    def __init__(self, stages, n_microbatches, loss_fn = None, args_chunk_spec = None, kwargs_chunk_spec = None, output_merge_spec = None, use_full_backward = None, scale_grads = True):
+        super().__init__(stages, n_microbatches, loss_fn, args_chunk_spec, kwargs_chunk_spec, output_merge_spec, use_full_backward, scale_grads)
+        self._internal_losses: dict[int, torch.Tensor] = {}
+        self.last_backward = False
+        self.grad_recv_info_copy = None
+        
+    def _maybe_compute_loss(self, stage, output, target_mbs, mb_index):
+        if stage.is_last and self._has_backward:
+            loss = self._compute_loss(output, target_mbs[mb_index])  # type: ignore[index]
+            self._internal_losses[mb_index] = loss     # ← 用 mb_index 做键
+    
+    def _maybe_get_loss(self, stage, mb_index):
+        if stage.is_last and self._has_backward:
+            if mb_index in self._internal_losses:
+                return self._internal_losses.pop(mb_index)
+            else:
+                raise RuntimeError(
+                    f"Loss for microbatch {mb_index} is not available. "
+                    f"Available losses for microbatches: {list(self._internal_losses.keys())}"
+                )
+        else:
+            return None
+
+    def _update_losses(self, stages, losses):
+        if not isinstance(stages, list):
+            stages = [stages]
+
+        contains_last_stage = any(stage.is_last for stage in stages)
+
+        if contains_last_stage and losses is not None:
+            if len(self._internal_losses) != self._n_microbatches:
+                raise RuntimeError(
+                    f"Expecting {self._n_microbatches} losses but got "
+                    f"{len(self._internal_losses)}"
+                )
+
+            losses.clear()
+            for idx in range(self._n_microbatches):
+                losses.append(self._internal_losses[idx])
+
+        self._internal_losses.clear()
+
+        
     def _load_actions(
         self,
         actions: dict[int, list[Optional[_Action]]],
@@ -134,13 +240,21 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
         TODO: Does not use sorted_batch_isend_irecv(). As a result, this schedule does
         not support models with skip connections.
-        """               
+        """ 
+        local_bwd_budget: Counter[int] = Counter()
+        for act in self.pipeline_order_with_comms[self.rank]:
+            if act.computation_type in (FULL_BACKWARD, BACKWARD_WEIGHT):
+                local_bwd_budget[act.stage_index] += 1
+                
+        self._pack_groups: Dict[tuple[int, int], int] = getattr(self, "_pack_groups", {})
+        self._mb_to_group: Dict[tuple[int, int], tuple[int, int]] = getattr(self, "_mb_to_group", {})
+                      
         if not hasattr(self, "_global_batch"):
-            env_batch = os.getenv("PROFILE_BATCH")          # export PROFILE_BATCH=17
+            env_batch = os.getenv("PROFILE_BATCH")         
             self._profile_batch = int(env_batch) if env_batch is not None else None
 
-            from timer import TimelineRecorder
-            self._rec = TimelineRecorder(self.rank)        
+            from recorder import Recorder
+            self._rec = Recorder(rank=self.rank,net_sample_interval_ms=10)       
             self._timeline_saved = False
             self._global_batch = -1
         
@@ -187,30 +301,39 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
             assert stage_idx in unsharded_stages, (
                 f"Attempted to compute on sharded {stage_idx=}"
             )
-
+        
         # count either full_backward or backward_weight together, to determine when to sync DP grads
         backward_counter: Counter[int] = Counter()
         for time_step, action in enumerate(self.pipeline_order_with_comms[self.rank]):
             try:
                 comp_type = action.computation_type
-                mb_index: int = (
-                    action.microbatch_index
-                    if action.microbatch_index is not None
-                    else -1
-                )
+                mb_field = action.microbatch_index
+                if mb_field is None:
+                    mb_ids: tuple[int, ...] = ()           
+                elif isinstance(mb_field, (tuple, list)):
+                    mb_ids = tuple(mb_field)                  
+                else: 
+                    mb_ids = (mb_field,)
+
+                mb_index: int = mb_ids[0] if mb_ids else -1   
+               
                 rank = action.rank
                 dest_rank = action.dest_rank
-                assert mb_index >= 0 or comp_type in (
-                    UNSHARD,
-                    RESHARD,
-                ), f"{action=} missing mb_index"
+
+                if comp_type not in (UNSHARD, RESHARD, ALL_REDUCE):
+                    assert mb_ids and all(m >= 0 for m in mb_ids), \
+                        f"{action=} missing mb_index"
                 stage_idx = action.stage_index
                 stage = stage_index_to_stage[stage_idx]
                 stage_uses_fsdp = isinstance(stage.submod, schedule.FSDPModule)
-                # see [Note: V-schedule special case]
+                
                 is_next_stage_on_this_rank = stage_idx + 1 in stage_index_to_stage
                 is_prev_stage_on_this_rank = stage_idx - 1 in stage_index_to_stage
+                
+                if(self.grad_recv_info_copy is None):
+                    self.grad_recv_info_copy = copy.deepcopy(stage.grad_recv_info)
 
+                
                 logger.debug(
                     "_PipelineScheduleRuntime running time_step %d, action %s",
                     time_step,
@@ -219,6 +342,14 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
              
                 if comp_type == SEND_F:
+                    print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}")
+                    
+                    output_tuple, _ = stage.fwd_cache[mb_index]
+                    print(f"[{dist.get_rank()}] SEND_F mb={mb_index} to rank={dest_rank}")
+                    for i, out in enumerate(output_tuple):
+                        if isinstance(out, torch.Tensor):
+                            print(f"  -> tensor[{i}] shape: {list(out.shape)}")
+                    
                     with self._rec.record("SEND_F", stage_idx, mb_index):
                         ops = (
                             stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
@@ -228,6 +359,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         send_ops.append(schedule._batch_p2p(ops))
 
                 elif comp_type == SEND_B:
+                    print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_B microbatch {mb_index}")
                     with self._rec.record("SEND_B", stage_idx, mb_index):
                         ops = (
                             stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
@@ -237,6 +369,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         send_ops.append(schedule._batch_p2p(ops))
 
                 elif comp_type == RECV_F:
+                    print(f"[{dist.get_rank()}]: batch {current_batch+1} RECV_F microbatch {mb_index}")
                     assert (stage_idx, mb_index) not in fwd_recv_ops, (
                         f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing forward"
                     )
@@ -247,8 +380,16 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             else stage.get_fwd_recv_ops(mb_index)
                         )
                         fwd_recv_ops[(stage_idx, mb_index)] = schedule._batch_p2p(ops)
-
+                    schedule._wait_batch_p2p(fwd_recv_ops[(stage_idx, mb_index)])
+                    recv_data = stage._retrieve_recv_activations(mb_index)
+                    print(f"[{dist.get_rank()}] RECV_F mb={mb_index} from rank={dest_rank}")
+                    if isinstance(recv_data, tuple):
+                        for i, data in enumerate(recv_data):
+                            if isinstance(data, torch.Tensor):
+                                print(f"  <- tensor[{i}] shape: {list(data.shape)}")
+                    fwd_recv_ops[(stage_idx, mb_index)] = []
                 elif comp_type == RECV_B:
+                    print(f"[{dist.get_rank()}]: batch {current_batch+1} RECV_B microbatch {mb_index}")
                     assert (stage_idx, mb_index) not in bwd_recv_ops, (
                         f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing backward"
                     )
@@ -275,69 +416,238 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             f"Resharding {stage_idx=} before finishing unshard"
                         )
                         stage.submod.reshard()  # type: ignore[operator]
+                
                 elif comp_type == FORWARD:
+                    print(f"[{dist.get_rank()}]: batch {current_batch+1} FORWARD microbatch {mb_field}")
+                    
+                    mb_ids: tuple[int, ...] = (mb_field,) if isinstance(mb_field, int) else tuple(mb_field)
+                    rep_id = mb_ids[0]
+
+                    
                     if stage_uses_fsdp:
                         _assert_unsharded(stage_idx)
-
-                    if (
-                        not stage.is_first
-                        # no recv op expected for V-schedule special case (see [Note: V-schedule special case])
-                        and not is_prev_stage_on_this_rank
-                    ):
-                        assert (
-                            stage_idx,
-                            mb_index,
-                        ) in fwd_recv_ops, f"Computing {action=} before receiving input"
-                        schedule._wait_batch_p2p(fwd_recv_ops.pop((stage_idx, mb_index)))
+                    
+                    if stage.is_first:
+                        if len(mb_ids) > 1:
+                            for mid in mb_ids:
+                                if mid not in arg_mbs and rep_id in arg_mbs:
+                                    arg_mbs[mid] = arg_mbs[rep_id]
+                                if kwarg_mbs and mid not in kwarg_mbs and rep_id in kwarg_mbs:
+                                    kwarg_mbs[mid] = kwarg_mbs[rep_id]
                         
-                    with self._rec.record("FORWARD", stage_idx, mb_index):
-                        output = stage.forward_one_chunk(
-                            mb_index, arg_mbs[mb_index], kwarg_mbs[mb_index]
+                        cat_args = tuple(
+                            torch.cat([arg_mbs[mid][i] for mid in mb_ids], dim=0)
+                            for i in range(len(arg_mbs[rep_id]))
                         )
                         
-                    self._maybe_compute_loss(stage, output, target_mbs, mb_index)
-
-                    # SEND/RECV op are avoided for special case with 2 adjacent stages on same rank
-                    # see [Note: V-schedule special case]
+                        if kwarg_mbs and kwarg_mbs[rep_id]:
+                            cat_kwargs: dict[str, Any] = {}
+                            for k in kwarg_mbs[rep_id]:
+                                vals = [kwarg_mbs[mid][k] for mid in mb_ids]
+                                v0 = vals[0]
+                                if isinstance(v0, torch.Tensor):
+                                    cat_kwargs[k] = torch.cat(vals, dim=0)
+                                else:
+                                    cat_kwargs[k] = v0
+                        else:
+                            cat_kwargs = {}
+                            
+                    else:
+                        if not is_prev_stage_on_this_rank:
+                            for mid in mb_ids:
+                                assert (
+                                    stage_idx,
+                                    mid,
+                                ) in fwd_recv_ops, f"Computing {action=} before receiving input"
+                                schedule._wait_batch_p2p(fwd_recv_ops.pop((stage_idx, mid)))
+                        
+                        if len(mb_ids) == 1:
+                            composite_args = stage._retrieve_recv_activations(mb_ids[0])
+                            cat_args = composite_args
+                        else:
+                            all_activations = []
+                            for mid in mb_ids:
+                                act = stage._retrieve_recv_activations(mid)
+                                all_activations.append(act)
+                            
+                            if all_activations and all_activations[0]:
+                                num_args = len(all_activations[0])
+                                cat_args = tuple(
+                                    torch.cat([all_activations[i][j] for i in range(len(mb_ids))], dim=0)
+                                    for j in range(num_args)
+                                )
+                            else:
+                                cat_args = ()
+                        
+                        cat_kwargs = {}
+                    
+                    
+                    if len(mb_ids) > 1:
+                        g_id = (stage_idx, rep_id)
+                        self._pack_groups[g_id] = len(mb_ids)
+                        for mid in mb_ids:
+                            self._mb_to_group[(stage_idx, mid)] = g_id
+                    
+                    with self._rec.record("FORWARD", stage_idx, mb_ids):
+                        output = stage.forward_one_chunk(rep_id, cat_args, cat_kwargs, len(mb_ids))
+                    
+                    
+                    # Split output
+                    if isinstance(output, tuple):
+                        split_out = list(zip(*[
+                            torch.chunk(t, len(mb_ids), dim=0) if isinstance(t, torch.Tensor)
+                            else (t,) * len(mb_ids)
+                            for t in output
+                        ]))
+                    else:
+                        split_out = list(torch.chunk(output, len(mb_ids), dim=0))
+                    
+                    flat_args = flatten_args(cat_args)
+                    flat_kwargs = flatten_args(cat_kwargs)
+                    
+                    for idx, mid in enumerate(mb_ids):
+                        if len(mb_ids) > 1:
+                            mb_inputs = []
+                            for i, arg in enumerate(cat_args):
+                                split_args = torch.chunk(arg, len(mb_ids), dim=0)
+                                mb_inputs.append(split_args[idx])
+                            
+                            if cat_kwargs:
+                                for k, v in cat_kwargs.items():
+                                    if isinstance(v, torch.Tensor):
+                                        split_v = torch.chunk(v, len(mb_ids), dim=0)
+                                        mb_inputs.append(split_v[idx])
+                                    else:
+                                        mb_inputs.append(v)
+                        else:
+                            mb_inputs = flat_args + flat_kwargs
+                        
+                        stage.fwd_cache[mid] = (
+                            _normalize_model_output_as_tuple(split_out[idx]),
+                            mb_inputs
+                        )
+                    
+                    if stage.is_first:
+                        split_args_per_dim = [
+                            torch.chunk(a, len(mb_ids), dim=0) for a in cat_args
+                        ]
+                        for idx, mid in enumerate(mb_ids):
+                            old_shape = [a.shape for a in arg_mbs[mid]] if mid in arg_mbs else []
+                            arg_mbs[mid] = tuple(split_args_per_dim[d][idx] for d in range(len(cat_args)))
+                            new_shape = [a.shape for a in arg_mbs[mid]]
+                        
+                        if kwarg_mbs and kwarg_mbs[rep_id]:
+                            for idx, mid in enumerate(mb_ids):
+                                kwarg_mbs[mid] = {
+                                    k: (torch.chunk(cat_kwargs[k], len(mb_ids), dim=0)[idx]
+                                    if isinstance(cat_kwargs[k], torch.Tensor) else cat_kwargs[k])
+                                    for k in cat_kwargs
+                                }
+                    
+                    for idx, mid in enumerate(mb_ids):
+                        tensor_tuple = split_out[idx]
+                        # print(f"split_out[{idx}] is a tuple with {len(tensor_tuple)} tensors:")
+                        # for j, t in enumerate(tensor_tuple):
+                        #     print(f"    [{j}] shape = {tuple(t.shape)}, numel = {t.numel()}")
+                        # print(f"output is a tuple with {len(output)} tensors:")    
+                        # for j, t in enumerate(output):
+                        #     print(f"    [{j}] shape = {tuple(t.shape)}, numel = {t.numel()}")
+                        self._maybe_compute_loss(stage, split_out[idx], target_mbs, mid)
+                    
                     if is_next_stage_on_this_rank:
-                        stage_index_to_stage[stage_idx + 1].set_local_fwd_input(
-                            output, mb_index
-                        )
-
+                        for idx, mid in enumerate(mb_ids):
+                            stage_index_to_stage[stage_idx + 1].set_local_fwd_input(
+                                split_out[idx], mid
+                            )
+                    
+                    #print(f"[{dist.get_rank()}]: FORWARD完成，最终fwd_cache状态:")
+                    for mid in mb_ids:
+                        if mid in stage.fwd_cache:
+                            outputs, inputs = stage.fwd_cache[mid]
+                        #     print(f"[{dist.get_rank()}]: fwd_cache[{mid}] - 输出数量: {len(outputs)}, 输入数量: {len(inputs)}")
+                        # else:
+                        #     print(f"[{dist.get_rank()}]: 警告: fwd_cache[{mid}]不存在!")
+                                    
+                # -----------------  FULL_BACKWARD  -----------------
                 elif comp_type == FULL_BACKWARD:
+                    mb_ids: Tuple[int, ...] = (mb_field,) if isinstance(mb_field, int) else tuple(mb_field)
+                    rep_id = mb_ids[0]
+                    print(f"[{dist.get_rank()}]: batch {current_batch+1} FULL_BACKWARD microbatch {mb_ids}")
+
                     if stage_uses_fsdp:
                         _assert_unsharded(stage_idx)
 
-                    if (
-                        not stage.is_last
-                  
-                        and not is_next_stage_on_this_rank
-                    ):
-                        assert (
-                            stage_idx,
-                            mb_index,
-                        ) in bwd_recv_ops, (
-                            f"Attempted to run compute {action=} before receiving input"
-                        )
-                        schedule._wait_batch_p2p(bwd_recv_ops.pop((stage_idx, mb_index)))
-                    loss = self._maybe_get_loss(stage, mb_index)
+                    if not stage.is_last and not is_next_stage_on_this_rank:
+                        for mid in mb_ids:
+                            key = (stage_idx, mid)
+                            if key in bwd_recv_ops:
+                                schedule._wait_batch_p2p(bwd_recv_ops.pop(key))
+
+                    fwd_out_lst, fwd_in_lst, loss_lst, grad_out_lst = [], [], [], []
+                    for mid in mb_ids:
+                        out, ins = stage.fwd_cache.pop(mid)
+                        fwd_out_lst.append(out)
+                        fwd_in_lst.append(ins)
+                        if stage.is_last:
+                            loss_lst.append(self._maybe_get_loss(stage, mid))      # 0-dimensional scalar
+                        else:
+                            grad_out_lst.append(stage._retrieve_recv_grads(mid))
+
+                    cat_fwd_out = _cat_like(fwd_out_lst)
+                    cat_fwd_in  = _cat_like(fwd_in_lst)
+                    cat_loss    = _cat_like(loss_lst).mean() if stage.is_last else None
+                    cat_gradout = _cat_like(grad_out_lst)   if not stage.is_last else None
+
+                    # Put the "big" forward result back into the cache for backward_one_chunk to read
+                    stage.fwd_cache[rep_id] = (cat_fwd_out, cat_fwd_in)
+
+                    # pack‑group report
+                    if len(mb_ids) > 1:
+                        g_id = (stage_idx, rep_id)
+                        self._pack_groups[g_id] = len(mb_ids)
+                        for m in mb_ids:
+                            self._mb_to_group[(stage_idx, m)] = g_id
+
                     backward_counter[stage_idx] += 1
-                    last_backward = backward_counter[stage_idx] == self._n_microbatches
-                    grad_scale_factor = self._n_microbatches if self.scale_grads else 1
-                    with self._rec.record("FULL_BACKWARD", stage_idx, mb_index):
+                    self.last_backward = backward_counter[stage_idx] == local_bwd_budget[stage_idx]
+
+                    if not stage.is_last:
+                        stage.set_local_bwd_input(cat_gradout, rep_id)
+
+                    with self._rec.record("FULL_BACKWARD", stage_idx, mb_ids):
                         stage.backward_one_chunk(
-                            mb_index,
-                            loss=loss,
+                            rep_id,
+                            loss=cat_loss,
                             full_backward=True,
-                            last_backward=last_backward,
+                            last_backward=False,
+                            retain_graph_for_packed_mbs=False,
                         )
-                    if last_backward:
-                        stage.scale_grads(grad_scale_factor)
- 
+
+                    # Split gradient
+                    big_grads_in = stage.bwd_cache.pop(rep_id)
+
+                    # A Recursively complete the None gradients / None → zeros_like
+                    _, ref_inputs = stage.fwd_cache.get(rep_id, (None, None))
+                    if ref_inputs is None and fwd_in_lst:
+                        ref_inputs = fwd_in_lst[0]
+                    big_grads_in = _fill_grads_like(ref_inputs, big_grads_in)
+
+                    # split
+                    split_grads = _chunk_like(big_grads_in, len(mb_ids))
+                    for mid, g in zip(mb_ids, split_grads):
+                        stage.bwd_cache[mid] = g
+
+                    # If the upstream stage is the same as this rank, the gradient will be directly transmitted locally
                     if is_prev_stage_on_this_rank:
-                        stage_index_to_stage[stage_idx - 1].set_local_bwd_input(
-                            stage.get_local_bwd_output(mb_index), mb_index
-                        )
+                        for mid in mb_ids:
+                            stage_index_to_stage[stage_idx - 1].set_local_bwd_input(
+                                stage.get_local_bwd_output(mid), mid
+                            )
+
+                    if self.last_backward:
+                        grad_scale_factor = backward_counter.total() if self.scale_grads else 1
+                        stage.scale_grads(grad_scale_factor)                 
+                        
                 elif comp_type == BACKWARD_INPUT:
                     if stage_uses_fsdp:
                         _assert_unsharded(stage_idx)
@@ -374,7 +684,11 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             last_backward=backward_counter[stage_idx]
                             == self._n_microbatches,
                         )
-                        
+                elif comp_type == _ComputationType.ALL_REDUCE:
+                    print(f"[{dist.get_rank()}]: batch {current_batch+1} ALL_REDUCE for stage {stage_idx}")
+                    with self._rec.record("ALL_REDUCE", stage_idx, -1):  # -1 not specific microbatch
+                        stage._execute_allreduce()
+                                
                 else:
                     raise ValueError(f"{action=} is unknown or unsupported")
             except Exception as e:
@@ -386,7 +700,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
               
                 print(
                     schedule._format_pipeline_order(
-                        self.pipeline_order_with_comms, 
+                        self.pipeline_order_with_comms,  # type: ignore[arg-type]
                         error_step_number=time_step,
                     )
                 )
@@ -408,13 +722,31 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
             fname_prefix = f"timeline_batch{self._profile_batch}"
             self.save_timeline(fname_prefix)
             self._timeline_saved = True
-            self._rec.set_enabled(False)   
+            self._rec.set_enabled(False)   # 后续 minibatch 不再计时
+        
+        # clear cache
+        stage.grad_recv_info = copy.deepcopy(self.grad_recv_info_copy)
+        self._clear_communication_state()
+        
+    def _clear_communication_state(self):
+        self._internal_losses.clear()
+        self._pack_groups.clear()
+        self._mb_to_group.clear()
+
+        for stage in self._stages:
+            stage.fwd_cache.clear()
+            stage.bwd_cache.clear()
+            if hasattr(stage, "grad_send_info"):
+                stage.grad_send_info = None
+            if hasattr(stage, "_local_grads"):
+                stage._local_grads.clear()
+            if hasattr(stage, "_local_acts"):
+                stage._local_acts.clear()
+
+
+
 
     def save_timeline(self, fname_prefix="timeline"):
-        """
-        每个 rank dump 一份 json；如果想集中到 rank0，
-        可用 dist.gather_object 把 self._rec.events 收到 0 号后再统一写。
-        """
         if dist.is_initialized():
             if dist.get_world_size() == 1:
                 self._rec.dump(f"{fname_prefix}_rank0.json")
@@ -427,3 +759,4 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         json.dump([asdict(e) for e in all_ev], f, indent=2)
         else:
             self._rec.dump(f"{fname_prefix}_solo.json")
+        self._rec.events.clear()
