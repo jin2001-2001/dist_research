@@ -1,6 +1,6 @@
 # Pipeline Parallelism for PyTorch
 
-`torch.distributed.pipelining` is a package for implementing pipeline parallelism on your model.
+`pipelining_source_code` is a package for implementing pipeline parallelism on your model.
 
 Our documentation is available [here](https://pytorch.org/docs/main/distributed.pipelining.html).
 

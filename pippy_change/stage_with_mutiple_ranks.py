@@ -15,10 +15,10 @@ from torch.fx.node import Argument, map_aggregate
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils._pytree import tree_map_only
 
-from torch.distributed.pipelining.stage import PipelineStage, InputInfo, _RecvInfo, _RootArgPlaceholder, _normalize_model_output_as_tuple
-from torch.distributed.pipelining._debug import map_debug_info
-from torch.distributed.pipelining._utils import flatten_args
-from torch.distributed.pipelining._backward import stage_backward, stage_backward_input, stage_backward_weight
+from pipelining_source_code.stage import PipelineStage, InputInfo, _RecvInfo, _RootArgPlaceholder, _normalize_model_output_as_tuple
+from pipelining_source_code._debug import map_debug_info
+from pipelining_source_code._utils import flatten_args
+from pipelining_source_code._backward import stage_backward, stage_backward_input, stage_backward_weight
 logger = logging.getLogger(__name__)
 
 class PipelineStage_with_mutiple_ranks(PipelineStage):

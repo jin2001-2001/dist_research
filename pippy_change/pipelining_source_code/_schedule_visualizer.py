@@ -12,7 +12,7 @@ visualize_schedule(ops, "test.png")
 from typing import Optional, Union
 from unittest import mock
 
-from torch.distributed.pipelining.schedules import (
+from pipelining_source_code.schedules import (
     _Action,
     _ComputationType,
     _PipelineSchedule,
@@ -20,7 +20,7 @@ from torch.distributed.pipelining.schedules import (
     PipelineScheduleMulti,
     PipelineScheduleSingle,
 )
-from torch.distributed.pipelining.stage import PipelineStage
+from pipelining_source_code.stage import PipelineStage
 
 
 def get_schedule_ops(

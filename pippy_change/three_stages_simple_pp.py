@@ -17,7 +17,7 @@ import time
 
 from stage_with_mutiple_ranks import PipelineStage_with_mutiple_ranks
 from schedule_runtime import PipelineScheduleRuntimeWithDirection
-from torch.distributed.pipelining.schedules import _Action, _ComputationType
+from pipelining_source_code.schedules import _Action, _ComputationType
 
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.algorithms.ddp_comm_hooks import default_hooks

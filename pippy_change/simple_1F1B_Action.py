@@ -1,4 +1,4 @@
-from torch.distributed.pipelining.schedules import _Action, _ComputationType
+from pipelining_source_code.schedules import _Action, _ComputationType
 
 
 def generate_1f1b_pipeline_actions(num_stages: int, num_microbatches: int):
