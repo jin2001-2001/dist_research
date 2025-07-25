@@ -18,10 +18,10 @@ _last_rate = None
 
 import torch
 import torch.distributed as dist
-import torch.distributed.pipelining.schedules as schedule
-from torch.distributed.pipelining.schedules import _Action, _ComputationType
-from torch.distributed.pipelining.stage import _normalize_model_output_as_tuple
-from torch.distributed.pipelining._utils import flatten_args
+import pipelining_source_code.schedules as schedule
+from pipelining_source_code.schedules import _Action, _ComputationType
+from pipelining_source_code.stage import _normalize_model_output_as_tuple
+from pipelining_source_code._utils import flatten_args
 from torch.distributed.distributed_c10d import _get_default_store
 import atexit, signal, threading, json
 logger = logging.getLogger(__name__)

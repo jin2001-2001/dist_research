@@ -16,8 +16,8 @@ from datasets import load_dataset
 from tqdm import tqdm
 import time
 
-from torch.distributed.pipelining import PipelineStage
-from torch.distributed.pipelining.schedules import ScheduleGPipe
+from pipelining_source_code import PipelineStage
+from pipelining_source_code.schedules import ScheduleGPipe
 
 class Part0(nn.Module):                          # rank 0
     def __init__(self, model):

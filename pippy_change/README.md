@@ -29,13 +29,13 @@ pip install torch==2.7.1+cpu torchvision torchaudio --index-url https://download
 pip install psutil transformers datasets
 ```
 
-Locate the `torch.distributed.pipelining` folder:
+Locate the `pipelining_source_code` folder:
 
 ```sh
 find $(python -c "import site; print(site.getsitepackages()[0])") -type d -name pipelining
 ```
 
-Replace all files in the `torch.distributed.pipelining` folder with those from `pipelining_source_code`.
+Replace all files in the `pipelining_source_code` folder with those from `pipelining_source_code`.
 
 ---
 
