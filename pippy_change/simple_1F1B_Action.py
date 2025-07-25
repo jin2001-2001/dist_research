@@ -2,87 +2,64 @@ from torch.distributed.pipelining.schedules import _Action, _ComputationType
 
 
 def generate_1f1b_pipeline_actions(num_stages: int, num_microbatches: int):
-    
     actions_per_rank = {}
-    
+
     for stage_idx in range(num_stages):
         rank = stage_idx  # stage == rank
         actions = []
-        
-        
+        local_id = 0
+
         warmup_chunks = min(num_microbatches, num_stages - stage_idx)
-        
-       
+
         fwd_mb = 0  
         bwd_mb = 0  
-        
+
+        def make_action(stage, rank, type_, mb, dest):
+            nonlocal local_id
+            a = _Action(stage, rank, local_id, type_, mb, dest, None, None)
+            local_id += 1
+            return a
+
         # Warmup
         for _ in range(warmup_chunks):
-            # Recv F
             if stage_idx > 0:
-                actions.append(_Action(stage_idx, rank, _ComputationType.RECV_F, fwd_mb, rank - 1))
-            
-            # Forward
-            actions.append(_Action(stage_idx, rank, _ComputationType.FORWARD, fwd_mb, None))
-            
-            # Send F
+                actions.append(make_action(stage_idx, rank, _ComputationType.RECV_F, fwd_mb, rank - 1))
+            actions.append(make_action(stage_idx, rank, _ComputationType.FORWARD, fwd_mb, None))
             if stage_idx < num_stages - 1:
-                actions.append(_Action(stage_idx, rank, _ComputationType.SEND_F, fwd_mb, rank + 1))
-            
+                actions.append(make_action(stage_idx, rank, _ComputationType.SEND_F, fwd_mb, rank + 1))
             fwd_mb += 1
-        
-        # 1B1F阶段
+
+        # 1B1F
         while fwd_mb < num_microbatches:
-            # 1B
-            # Recv B
             if stage_idx < num_stages - 1:
-                actions.append(_Action(stage_idx, rank, _ComputationType.RECV_B, bwd_mb, rank + 1))
-            
-            # Backward
-            actions.append(_Action(stage_idx, rank, _ComputationType.FULL_BACKWARD, bwd_mb, None))
-            
-            # Send B
+                actions.append(make_action(stage_idx, rank, _ComputationType.RECV_B, bwd_mb, rank + 1))
+            actions.append(make_action(stage_idx, rank, _ComputationType.FULL_BACKWARD, bwd_mb, None))
             if stage_idx > 0:
-                actions.append(_Action(stage_idx, rank, _ComputationType.SEND_B, bwd_mb, rank - 1))
-            
+                actions.append(make_action(stage_idx, rank, _ComputationType.SEND_B, bwd_mb, rank - 1))
             bwd_mb += 1
-            
-            # 1F
-            # Recv F
+
             if stage_idx > 0:
-                actions.append(_Action(stage_idx, rank, _ComputationType.RECV_F, fwd_mb, rank - 1))
-            
-            # Forward
-            actions.append(_Action(stage_idx, rank, _ComputationType.FORWARD, fwd_mb, None))
-            
-            # Send F
+                actions.append(make_action(stage_idx, rank, _ComputationType.RECV_F, fwd_mb, rank - 1))
+            actions.append(make_action(stage_idx, rank, _ComputationType.FORWARD, fwd_mb, None))
             if stage_idx < num_stages - 1:
-                actions.append(_Action(stage_idx, rank, _ComputationType.SEND_F, fwd_mb, rank + 1))
-            
+                actions.append(make_action(stage_idx, rank, _ComputationType.SEND_F, fwd_mb, rank + 1))
             fwd_mb += 1
-        
-        #Cooldown
+
+        # Cooldown
         while bwd_mb < num_microbatches:
-            # Recv B
             if stage_idx < num_stages - 1:
-                actions.append(_Action(stage_idx, rank, _ComputationType.RECV_B, bwd_mb, rank + 1))
-            
-            # Backward
-            actions.append(_Action(stage_idx, rank, _ComputationType.FULL_BACKWARD, bwd_mb, None))
-            
-            # Send B
+                actions.append(make_action(stage_idx, rank, _ComputationType.RECV_B, bwd_mb, rank + 1))
+            actions.append(make_action(stage_idx, rank, _ComputationType.FULL_BACKWARD, bwd_mb, None))
             if stage_idx > 0:
-                actions.append(_Action(stage_idx, rank, _ComputationType.SEND_B, bwd_mb, rank - 1))
-            
+                actions.append(make_action(stage_idx, rank, _ComputationType.SEND_B, bwd_mb, rank - 1))
             bwd_mb += 1
-        
+
         actions_per_rank[rank] = actions
-    
+
     return actions_per_rank
 
 
 def print_pipeline_actions(num_stages, num_microbatches):
-
     actions = generate_1f1b_pipeline_actions(num_stages, num_microbatches)
     
     print("def create_pipeline_actions():")

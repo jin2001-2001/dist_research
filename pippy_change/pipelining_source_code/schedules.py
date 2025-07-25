@@ -106,6 +106,7 @@ RECV_F = _ComputationType.RECV_F
 SEND_B = _ComputationType.SEND_B
 RECV_B = _ComputationType.RECV_B
 FULL_BACKWARD = _ComputationType.FULL_BACKWARD
+ALL_REDUCE = _ComputationType.ALL_REDUCE
 
 # Convenience shorthand for compute actions only since they are used in 'simple schedule format'
 F = FORWARD
@@ -157,23 +158,34 @@ _action_regex = re.compile(
     r"(\d+),([0-9]*),(F|I|B|W|UNSHARD|RESHARD|SEND_F|RECV_F|SEND_B|RECV_B|ALL_REDUCE),([0-9]*),([0-9]*)"
 )
 
-class _Action(NamedTuple):
+class _Action():
     """Represents a single operation in the pipeline schedule.
 
     Fields correspond to the comma‑separated action string in the order:
-        [stage],[rank],[action type],[microbatch],[dest_rank]
+        [stage],[rank],[id],[action type],[microbatch],[dest_rank],[upstream],[dependency]
     """
-
-    # 重新排列字段顺序以匹配from_str中的参数顺序
-    stage_index: int  # required - 第1个参数
-    rank: Optional[int]  # 第2个参数
-    computation_type: _ComputationType  # required - 第3个参数  
-    microbatch_index: Optional[tuple[int, ...] | int]  # 第4个参数
-    dest_rank: Optional[int]  # 第5个参数
+    stage_index: int 
+    rank: Optional[int] 
+    computation_type: _ComputationType
+    microbatch_index: Optional[tuple[int, ...] | int]
+    dest_rank: Optional[int]
+    upstream: Optional[int]
+    id: int
+    dependency: Optional[Dict[int, tuple[int, ...]]]
+    
+    def __init__(self, stage_index, rank, id, computation_type, microbatch_index, dest_rank=None, upstream=None, dependency=None):
+        self.stage_index = stage_index
+        self.rank = rank
+        self.id = id
+        self.computation_type = computation_type
+        self.microbatch_index = microbatch_index
+        self.dest_rank = dest_rank
+        self.upstream = upstream
+        self.dependency = dependency
 
     # -----------------------------------------------------------------------
     # NOTE: The order here matches the from_str method parameter order:
-    # stage_index, rank, computation_type, microbatch_index, dest_rank
+    # stage_index, rank, computation_type, microbatch_index, dest_rank, upstream
     # -----------------------------------------------------------------------
 
     def __repr__(self):  # noqa: D401 – keep simple string representation
@@ -187,7 +199,7 @@ class _Action(NamedTuple):
                 "" if self.dest_rank is None else str(self.dest_rank),
             ]
         )
-
+    #没修改，可能有问题
     @staticmethod
     def from_str(action_string: str):
         """

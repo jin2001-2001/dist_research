@@ -622,14 +622,14 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         logger.debug("%s Backwarded chunk %s", self.log_prefix, bwd_chunk_id)
         
         # 在 PipelineStage_with_mutiple_ranks 类里补一个简单 wrap
-    def _retrieve_recv_grads(self, bwd_chunk_id: int):
-        grads = super()._retrieve_recv_grads(bwd_chunk_id)
+    # def _retrieve_recv_grads(self, bwd_chunk_id: int):
+    #     grads = super()._retrieve_recv_grads(bwd_chunk_id)
 
-        if grads and isinstance(grads[0], torch.Tensor):
-            try:
-                print(f"[Rank {dist.get_rank()}] RECV_B {bwd_chunk_id} "
-                    f"grad shape {list(grads[0].shape)} "
-                    f"(stage_idx={self.stage_index})")
-            except Exception:
-                pass
-        return grads
+    #     if grads and isinstance(grads[0], torch.Tensor):
+    #         try:
+    #             print(f"[Rank {dist.get_rank()}] RECV_B {bwd_chunk_id} "
+    #                 f"grad shape {list(grads[0].shape)} "
+    #                 f"(stage_idx={self.stage_index})")
+    #         except Exception:
+    #             pass
+    #     return grads

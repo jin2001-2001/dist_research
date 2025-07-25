@@ -120,10 +120,12 @@ parser.add_argument("--batch_size", type=int,
 parser.add_argument("--microbatch_num", type=int,
                     default=int(os.getenv("MICROBATCH_NUM", 4)),
                     help="Micro-batch number (the environment variable MICROBATCH_NUM can be overridden)")
-parser.add_argument("--profile_batch", default=os.getenv("PROFILE_BATCH", "0"),
-                    help='Write the value of the environment variable PROFILE_BATCH')
+# parser.add_argument("--profile_batch", default=os.getenv("PROFILE_BATCH", "0"),
+#                     help='Write the value of the environment variable PROFILE_BATCH')
+parser.add_argument("--sudo_pass", default=os.getenv("SUDO_PASS"),
+                    help='Write the password of root')
 args = parser.parse_args()
-os.environ["PROFILE_BATCH"] = args.profile_batch
+#os.environ["PROFILE_BATCH"] = args.profile_batch
 def main():
 
     dist.init_process_group("gloo", init_method="env://")
@@ -193,7 +195,7 @@ def main():
         return F.cross_entropy(output, target)
 
     
-    sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=microbatch_num, loss_fn=loss_fn)
+    sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=microbatch_num, loss_fn=loss_fn, root_pass=args.sudo_pass)
     actions = generate_1f1b_pipeline_actions(3,microbatch_num) # 3 stages, 8 microbatchs 
     sched._load_actions(actions, format="compute_comms")
     

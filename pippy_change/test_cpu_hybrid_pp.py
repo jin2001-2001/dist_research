@@ -24,178 +24,53 @@ from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
 
 def create_pipeline_actions():
 
-    # [stage],[rank],[action type],[microbatch],[dest_rank]
+    # [stage],[rank],[id],[action type],[microbatch],[dest_rank],[upstream],[dependency]
     # Rank 0 (Stage 0) 的操作序列
     rank0_actions = [
-        _Action(0, 0, _ComputationType.FORWARD, (0,1,2,3), None),
-        #_Action(0, 0, _ComputationType.FORWARD, (2,3), None),
-        
-        _Action(0, 0, _ComputationType.SEND_F, (0,), 1),
-        _Action(0, 0, _ComputationType.SEND_F, (2,), 1),
-        _Action(0, 0, _ComputationType.SEND_F, (1,), 2),
-        _Action(0, 0, _ComputationType.SEND_F, (3,), 2),
-        
+        _Action(0, 0, 0, _ComputationType.FORWARD, (0,1,2,3), None, None, None),
+
+        _Action(0, 0, 1, _ComputationType.SEND_F, (0,), 1, 10, None),
+        _Action(0, 0, 2, _ComputationType.SEND_F, (2,), 1, 10, None),
+        _Action(0, 0, 3, _ComputationType.SEND_F, (1,), 2, 10, None),
+        _Action(0, 0, 4, _ComputationType.SEND_F, (3,), 2, 10, None),
         
         
-        _Action(0, 0, _ComputationType.RECV_B, (0,), 1),
-        _Action(0, 0, _ComputationType.RECV_B, (1,), 2),
-        _Action(0, 0, _ComputationType.RECV_B, (2,), 1),
-        _Action(0, 0, _ComputationType.RECV_B, (3,), 2),
         
-        _Action(0, 0, _ComputationType.FULL_BACKWARD, (0,1,2,3), None),
-        #_Action(0, 0, _ComputationType.FULL_BACKWARD, (2,3), None),      
+        _Action(0, 0, 5, _ComputationType.RECV_B, (0,), 1, None, None),
+        _Action(0, 0, 6, _ComputationType.RECV_B, (1,), 2, None, None),
+        _Action(0, 0, 7, _ComputationType.RECV_B, (2,), 1, None, None),
+        _Action(0, 0, 8, _ComputationType.RECV_B, (3,), 2, None, None),
+        
+        _Action(0, 0, 9, _ComputationType.FULL_BACKWARD, (0,1,2,3), None, None, None),    
     ]
     
     # Rank 1 (Stage 1) 的操作序列
     rank1_actions = [
-        _Action(1, 1, _ComputationType.RECV_F, (0,), 0),
-        _Action(1, 1, _ComputationType.RECV_F, (2,), 0),
-        _Action(1, 1, _ComputationType.FORWARD, (0,2), None),
-        _Action(1, 1, _ComputationType.FULL_BACKWARD, (0,2), None),
-        _Action(1, 1, _ComputationType.SEND_B, (0,), 0),
-        _Action(1, 1, _ComputationType.SEND_B, (2,), 0),
-        
-        _Action(1, 1, _ComputationType.ALL_REDUCE, None, None),
+        _Action(1, 1, 0, _ComputationType.RECV_F, (0,), 0, None, None),
+        _Action(1, 1, 1, _ComputationType.RECV_F, (2,), 0, None, None),
+        _Action(1, 1, 2, _ComputationType.FORWARD, (0,2), None, None, None),
+        _Action(1, 1, 3, _ComputationType.FULL_BACKWARD, (0,2), None, None, None),
+        _Action(1, 1, 4, _ComputationType.SEND_B, (0,), 0, 10, None),
+        _Action(1, 1, 5, _ComputationType.SEND_B, (2,), 0, 10, None),
+         
+        _Action(1, 1, 6, _ComputationType.ALL_REDUCE, None, None, None, {0:(5,6,7,8,)}),
     ]
     
     # Rank 2 (Stage 1) 的操作序列
     rank2_actions = [
-        _Action(1, 2, _ComputationType.RECV_F, (1,), 0),
-        _Action(1, 2, _ComputationType.RECV_F, (3,), 0),
-        
-        _Action(1, 2, _ComputationType.FORWARD, (1,3), None),
-        _Action(1, 2, _ComputationType.FULL_BACKWARD, (1,3), None),
-        _Action(1, 2, _ComputationType.SEND_B, (1,), 0),
-        _Action(1, 2, _ComputationType.SEND_B, (3,), 0),
-        
-        _Action(1, 2, _ComputationType.ALL_REDUCE, None, None),
+        _Action(1, 2, 0, _ComputationType.RECV_F, (1,), 0, None, None),
+        _Action(1, 2, 1, _ComputationType.RECV_F, (3,), 0, None, None),
+        _Action(1, 2, 2, _ComputationType.FORWARD, (1,3), None, None, None),
+        _Action(1, 2, 3, _ComputationType.FULL_BACKWARD, (1,3), None, None, None),
+        _Action(1, 2, 4, _ComputationType.SEND_B, (1,), 0, 10, None),
+        _Action(1, 2, 5, _ComputationType.SEND_B, (3,), 0, 10, None),
+
+        _Action(1, 2, 6, _ComputationType.ALL_REDUCE, None, None, None, {0:(5,6,7,8,)}),
     ]
     
     return {0: rank0_actions, 1: rank1_actions, 2: rank2_actions}
 
-# def create_pipeline_actions():
 
-#     # [stage],[rank],[action type],[microbatch],[dest_rank]
-#     # Rank 0 (Stage 0) 的操作序列
-#     rank0_actions = [
-#         _Action(0, 0, _ComputationType.FORWARD, (0,), None),
-#         #_Action(0, 0, _ComputationType.FORWARD, (0,1,2), None),
-#         _Action(0, 0, _ComputationType.FORWARD, (1,), None),
-        
-#         _Action(0, 0, _ComputationType.SEND_F, (0,), 1),
-#         _Action(0, 0, _ComputationType.SEND_F, (1,), 2),
-        
-#         _Action(0, 0, _ComputationType.RECV_B, (0,), 1),
-#         _Action(0, 0, _ComputationType.RECV_B, (1,), 2),
-        
-#         _Action(0, 0, _ComputationType.FULL_BACKWARD, (0,), None),
-#         _Action(0, 0, _ComputationType.FULL_BACKWARD, (1,), None),
-        
-        
-#         _Action(0, 0, _ComputationType.FORWARD, (2,), None),
-#         _Action(0, 0, _ComputationType.FORWARD, (3,), None),
-        
-#         _Action(0, 0, _ComputationType.SEND_F, (2,), 1),
-#         _Action(0, 0, _ComputationType.SEND_F, (3,), 2),
-        
-        
-
-#         _Action(0, 0, _ComputationType.RECV_B, (2,), 1),
-#         _Action(0, 0, _ComputationType.RECV_B, (3,), 2),
-        
-#         _Action(0, 0, _ComputationType.FULL_BACKWARD, (2,), None),
-#         _Action(0, 0, _ComputationType.FULL_BACKWARD, (3,), None),         
-#     ]
-    
-#     # Rank 1 (Stage 1) 的操作序列
-#     rank1_actions = [
-#         _Action(1, 1, _ComputationType.RECV_F, (0,), 0),
-#         _Action(1, 1, _ComputationType.FORWARD, (0,), None),
-#         _Action(1, 1, _ComputationType.FULL_BACKWARD, (0,), None),
-#         _Action(1, 1, _ComputationType.SEND_B, (0,), 0),
-        
-#         _Action(1, 1, _ComputationType.RECV_F, (2,), 0),
-#         _Action(1, 1, _ComputationType.FORWARD, (2,), None),
-#         _Action(1, 1, _ComputationType.FULL_BACKWARD, (2,), None),
-#         _Action(1, 1, _ComputationType.SEND_B, (2,), 0),
-        
-#         _Action(1, 1, _ComputationType.ALL_REDUCE, None, None),
-#     ]
-    
-#     # Rank 2 (Stage 1) 的操作序列
-#     rank2_actions = [
-#         _Action(1, 2, _ComputationType.RECV_F, (1,), 0),
-#         _Action(1, 2, _ComputationType.FORWARD, (1,), None),
-#         _Action(1, 2, _ComputationType.FULL_BACKWARD, (1,), None),
-#         _Action(1, 2, _ComputationType.SEND_B, (1,), 0),
-        
-#         _Action(1, 2, _ComputationType.RECV_F, (3,), 0),
-#         _Action(1, 2, _ComputationType.FORWARD, (3,), None),
-#         _Action(1, 2, _ComputationType.FULL_BACKWARD, (3,), None),
-#         _Action(1, 2, _ComputationType.SEND_B, (3,), 0),
-        
-#         _Action(1, 2, _ComputationType.ALL_REDUCE, None, None),
-#     ]
-    
-#     return {0: rank0_actions, 1: rank1_actions, 2: rank2_actions}
-
-# def create_pipeline_actions():
-
-#     # [stage],[rank],[action type],[microbatch],[dest_rank]
-#     # Rank 0 (Stage 0) 的操作序列
-#     rank0_actions = [
-#         _Action(0, 0, _ComputationType.FORWARD, (0,1), None),
-        
-#         _Action(0, 0, _ComputationType.SEND_F, (0,), 1),
-#         _Action(0, 0, _ComputationType.SEND_F, (1,), 2),
-        
-#         _Action(0, 0, _ComputationType.RECV_B, (0,), 1),
-#         _Action(0, 0, _ComputationType.RECV_B, (1,), 2),
-        
-#         _Action(0, 0, _ComputationType.FULL_BACKWARD, (0,1), None),
-    
-#         _Action(0, 0, _ComputationType.FORWARD, (2,3), None),
-
-#         _Action(0, 0, _ComputationType.SEND_F, (2,), 1),
-#         _Action(0, 0, _ComputationType.SEND_F, (3,), 2),
-        
-#         _Action(0, 0, _ComputationType.RECV_B, (2,), 1),
-#         _Action(0, 0, _ComputationType.RECV_B, (3,), 2),
-        
-#         _Action(0, 0, _ComputationType.FULL_BACKWARD, (2,3), None), 
-#     ]
-    
-#     # Rank 1 (Stage 1) 的操作序列
-#     rank1_actions = [
-#         _Action(1, 1, _ComputationType.RECV_F, (0,), 0),
-#         _Action(1, 1, _ComputationType.FORWARD, (0,), None),
-#         _Action(1, 1, _ComputationType.FULL_BACKWARD, (0,), None),
-#         _Action(1, 1, _ComputationType.SEND_B, (0,), 0),
-        
-#         _Action(1, 1, _ComputationType.RECV_F, (2,), 0),
-#         _Action(1, 1, _ComputationType.FORWARD, (2,), None),
-#         _Action(1, 1, _ComputationType.FULL_BACKWARD, (2,), None),
-#         _Action(1, 1, _ComputationType.SEND_B, (2,), 0),
-        
-#         _Action(1, 1, _ComputationType.ALL_REDUCE, None, None),
-#     ]
-    
-#     # Rank 2 (Stage 1) 的操作序列
-#     rank2_actions = [
-#         _Action(1, 2, _ComputationType.RECV_F, (1,), 0),
-#         _Action(1, 2, _ComputationType.FORWARD, (1,), None),
-#         _Action(1, 2, _ComputationType.FULL_BACKWARD, (1,), None),
-#         _Action(1, 2, _ComputationType.SEND_B, (1,), 0),
-        
-#         _Action(1, 2, _ComputationType.RECV_F, (3,), 0),
-#         _Action(1, 2, _ComputationType.FORWARD, (3,), None),
-#         _Action(1, 2, _ComputationType.FULL_BACKWARD, (3,), None),
-#         _Action(1, 2, _ComputationType.SEND_B, (3,), 0),
-        
-#         _Action(1, 2, _ComputationType.ALL_REDUCE, None, None),
-#     ]
-    
-#     return {0: rank0_actions, 1: rank1_actions, 2: rank2_actions}
 class Part1(nn.Module):  # rank 0
     def __init__(self, model):
         super().__init__()
@@ -274,10 +149,12 @@ parser.add_argument("--batch_size", type=int,
 parser.add_argument("--microbatch_num", type=int,
                     default=int(os.getenv("MICROBATCH_NUM", 4)),
                     help="Micro-batch number (the environment variable MICROBATCH_NUM can be overridden)")
-parser.add_argument("--profile_batch", default=os.getenv("PROFILE_BATCH", "0"),
-                    help='Write the value of the environment variable PROFILE_BATCH')
+# parser.add_argument("--profile_batch", default=os.getenv("PROFILE_BATCH", "0"),
+#                     help='Write the value of the environment variable PROFILE_BATCH')
+parser.add_argument("--sudo_pass", default=os.getenv("SUDO_PASS"),
+                    help='Write the password of root')
 args = parser.parse_args()
-os.environ["PROFILE_BATCH"] = args.profile_batch
+#os.environ["PROFILE_BATCH"] = args.profile_batch
 def main():
 
     dist.init_process_group("gloo", init_method="env://")
@@ -318,44 +195,38 @@ def main():
         #     state 里放一个 dict:
         #         {"pg": dp_group, "use_cuda_event": True/False}
         #     """
-        #     pg = state["pg"]               # 只含 rank 1,2 的 ProcessGroup
+        #     pg = state["pg"]
         #     use_evt = bucket.buffer().is_cuda and state.get("use_cuda_event", True)
-
         #     if use_evt:                    # GPU，用 cudaEvent 计时
         #         start_evt = torch.cuda.Event(enable_timing=True)
         #         end_evt   = torch.cuda.Event(enable_timing=True)
         #         start_evt.record()
         #     else:                          # CPU 或不想用 Event
         #         t0 = time.perf_counter()
-
-        #     # ------- 关键：指定 group=pg ----------
+        #      # ------- 关键：指定 group=pg ----------
         #     work = dist.all_reduce(bucket.buffer(), group=pg, async_op=True)
-
         #     def _callback(fut):
-        #         # 计时
+        #          # 计时
         #         if use_evt:
         #             end_evt.record()
         #             end_evt.synchronize()
         #             elapsed_ms = start_evt.elapsed_time(end_evt)
         #         else:
         #             elapsed_ms = (time.perf_counter() - t0) * 1e3
-
         #         print(f"[Rank {dist.get_rank()}] Bucket {bucket.index()} "
         #             f"all‑reduce took {elapsed_ms:.3f} ms")
-
         #         # 与 DDP 的默认行为保持一致：做平均
         #         bucket.buffer().div_(pg.size())
         #         return bucket.buffer()
-
-        #     # 返回包含 _callback 的 Future
+        #      # 返回包含 _callback 的 Future
         #     return work.get_future().then(_callback)
-        
+    
         # stage_mod.register_comm_hook(state={"pg": dp_group}, hook=timing_hook)
-        
+    
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=1,
-                            num_stages=world, device=device,
-                            group=dist.group.WORLD,  # Used for world pp
-                            prev_group=[0], this_group=[1,2], next_group=None)
+                                num_stages=world, device=device,
+                                group=dist.group.WORLD,  # Used for world pp
+                                prev_group=[0], this_group=[1,2], next_group=None)
     
     del full                        
     import gc; gc.collect()
@@ -389,7 +260,7 @@ def main():
         return F.cross_entropy(output, target)
 
     
-    sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=microbatch_num, loss_fn=loss_fn)
+    sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=microbatch_num, loss_fn=loss_fn, root_pass=args.sudo_pass)
     actions = create_pipeline_actions()
     sched._load_actions(actions, format="compute_comms")
     
