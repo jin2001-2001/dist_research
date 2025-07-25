@@ -2,15 +2,19 @@ import copy
 import csv
 import itertools
 import logging
+from pathlib import Path
 import re
 from abc import ABC, abstractmethod
 from collections import Counter, defaultdict
 from enum import Enum
-from typing import Any, Callable, NamedTuple, Optional, Union, Dict, Tuple, List
+import sys
+from typing import Any, Callable, NamedTuple, Optional, Union, Dict, Tuple, List, Set
 import json
 from dataclasses import dataclass, asdict
-import os 
-import copy
+import copy, time
+import os, socket, subprocess, functools, fcntl, tempfile
+ROOT_PASS = None              
+_last_rate = None
 
 import torch
 import torch.distributed as dist
@@ -18,7 +22,8 @@ import torch.distributed.pipelining.schedules as schedule
 from torch.distributed.pipelining.schedules import _Action, _ComputationType
 from torch.distributed.pipelining.stage import _normalize_model_output_as_tuple
 from torch.distributed.pipelining._utils import flatten_args
-
+from torch.distributed.distributed_c10d import _get_default_store
+import atexit, signal, threading, json
 logger = logging.getLogger(__name__)
 
 FORWARD = _ComputationType.FORWARD
@@ -38,6 +43,121 @@ F = FORWARD
 I = BACKWARD_INPUT
 W = BACKWARD_WEIGHT
 B = FULL_BACKWARD
+
+_EXEC_DONE: Set[int] = set()
+
+_STORE = None
+def _get_store():
+    global _STORE
+    if _STORE is None:
+        _STORE = _get_default_store()   # Only the first real get
+    return _STORE
+
+def _reset_exec_done():
+    _EXEC_DONE.clear()
+
+def _mark_done(batch_id: int, action_id: int | None):
+    if action_id is not None:
+        _EXEC_DONE.add(action_id)
+        key = f"batch_{batch_id}_done_{dist.get_rank()}_{action_id}"
+        _get_store().set(key, b"1")
+
+
+def _has_done(action_id: int) -> bool:
+    return action_id in _EXEC_DONE
+
+def _wait_remote_id(batch_id: int, owner_rank: int, dep_id: int, timeout: float | None = None):
+    """
+    Only block the current rank; Wait for owner_rank to mark dep_id as completed.
+    """
+    key = f"batch_{batch_id}_done_{owner_rank}_{dep_id}"
+    store = _get_store()
+    if timeout is None:
+        store.wait([key])      
+    else:
+        start = time.time()
+        while True:
+            try:
+                store.wait([key], timeout=timeout)
+                break
+            except RuntimeError:
+                if time.time() - start > timeout:
+                    raise TimeoutError(f"wait_remote_id timeout on {key}")
+
+
+NIC = os.getenv("PP_BW_IF", "eth0")   # The network card can be specified through environment variables
+_LOCK = f"/tmp/pp_bw_lock_{NIC}"
+_ORIG_FILE = f"/tmp/pp_orig_qdisc_{NIC}.txt"
+_last_rate = None 
+_restore_done = False
+_lock = threading.Lock() 
+
+def _run_tc(cmd: list[str]):
+    base = ["sudo", "-n"] if os.geteuid() else []
+    subprocess.run(base + cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def _save_original_qdisc():
+    if os.path.exists(_ORIG_FILE):
+        return
+    with open(_ORIG_FILE, "w") as f:
+        subprocess.run(["tc", "qdisc", "show", "dev", NIC], check=True, stdout=f)
+
+def _restore_qdisc():
+    global _restore_done
+    if _restore_done or not os.path.exists(_ORIG_FILE):
+        return
+    with _lock:
+        _restore_done = True
+        subprocess.run(["sudo", "-n", "tc", "qdisc", "del", "dev", NIC, "root"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with open(_ORIG_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("qdisc"):
+                    _run_tc(line.split())
+        os.remove(_ORIG_FILE)
+        print(f"[bw] restored original qdisc on {NIC}")
+
+# Register and exit hook
+atexit.register(_restore_qdisc)
+for sig in (signal.SIGINT, signal.SIGTERM):
+    signal.signal(sig, lambda *_: (_restore_qdisc(), sys.exit(1)))
+
+def _tc_set_rate(mbps: int | None):
+    """
+    System-level rate limiting: Change the root qdisc to tbf rate X mbit.
+    mbps = None indicates no speed limit (using 40Gbit).
+    Only LOCAL_RANK==0 is called; the rest of the ranks return directly.
+    """
+    global _last_rate
+    if int(os.getenv("LOCAL_RANK", "0")) != 0:
+        return
+    rate = 40000 if mbps is None else mbps         
+    if rate == _last_rate:
+        return
+
+    with open(_LOCK, "w") as fp:                
+        fcntl.flock(fp, fcntl.LOCK_EX)
+        _save_original_qdisc()
+        cmd = ["tc","qdisc","replace","dev", NIC, "root", "tbf",
+               "rate", f"{rate}mbit",
+               "burst","32kbit","latency","400ms"]
+        _run_tc(cmd)
+        _last_rate = rate
+        print(f"[bw] set {NIC} rate -> {rate} mbit/s")
+
+
+def _sudo(cmd: list[str]):
+    """以 root 执行；能用 -n 就用；否则喂 password"""
+    if os.geteuid() == 0:     
+        subprocess.run(cmd, check=True)
+        return
+    base = ["sudo", "-n"] if ROOT_PASS is None else ["sudo", "-S"]
+    subprocess.run(base + cmd,
+                   check=True,
+                   input=(ROOT_PASS + "\n").encode() if ROOT_PASS else None)
+
+
 
 def _cat_like(items: List[Any]) -> Any:
     """
@@ -98,7 +218,7 @@ def _fill_grads_like(ref, grad):
     return grad if grad is not None else ref
 
 # ---------------------------------------------------------------------------
-# Action-string helpers (UPDATED FORMAT: [stage],[rank],[action type],[microbatch],[dest_rank])
+# Action-string helpers (UPDATED FORMAT: [stage],[rank],[action type],[microbatch],[dest_rank],[upstream])
 # ---------------------------------------------------------------------------
 
 # ORIGINAL: _action_regex = re.compile(r"(\d+)(F|I|B|W|UNSHARD|RESHARD|SEND_F|RECV_F|SEND_B|RECV_B)(\d*)")
@@ -107,11 +227,21 @@ def _fill_grads_like(ref, grad):
 
 class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
-    def __init__(self, stages, n_microbatches, loss_fn = None, args_chunk_spec = None, kwargs_chunk_spec = None, output_merge_spec = None, use_full_backward = None, scale_grads = True):
+    def __init__(self, stages, n_microbatches, loss_fn = None, args_chunk_spec = None, kwargs_chunk_spec = None, output_merge_spec = None, use_full_backward = None, scale_grads = True, root_pass: str | None = None):
         super().__init__(stages, n_microbatches, loss_fn, args_chunk_spec, kwargs_chunk_spec, output_merge_spec, use_full_backward, scale_grads)
         self._internal_losses: dict[int, torch.Tensor] = {}
         self.last_backward = False
         self.grad_recv_info_copy = None
+        
+        global ROOT_PASS
+        ROOT_PASS = root_pass
+        
+        #Each node prepares HTB at one time
+        if int(os.getenv("LOCAL_RANK", "0")) == 0:
+            _save_original_qdisc() 
+        if dist.is_initialized():
+            dist.barrier()
+        
         
     def _maybe_compute_loss(self, stage, output, target_mbs, mb_index):
         if stage.is_last and self._has_backward:
@@ -241,6 +371,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         TODO: Does not use sorted_batch_isend_irecv(). As a result, this schedule does
         not support models with skip connections.
         """ 
+        _reset_exec_done()          # At the beginning of each batch, clear the completion table
+        
         local_bwd_budget: Counter[int] = Counter()
         for act in self.pipeline_order_with_comms[self.rank]:
             if act.computation_type in (FULL_BACKWARD, BACKWARD_WEIGHT):
@@ -250,8 +382,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         self._mb_to_group: Dict[tuple[int, int], tuple[int, int]] = getattr(self, "_mb_to_group", {})
                       
         if not hasattr(self, "_global_batch"):
-            env_batch = os.getenv("PROFILE_BATCH")         
-            self._profile_batch = int(env_batch) if env_batch is not None else None
+            # env_batch = os.getenv("PROFILE_BATCH")         
+            # self._profile_batch = int(env_batch) if env_batch is not None else None
 
             from recorder import Recorder
             self._rec = Recorder(rank=self.rank,net_sample_interval_ms=10)       
@@ -261,10 +393,13 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         current_batch = self._global_batch
         self._global_batch += 1
 
-        record_this_batch = (
-            self._profile_batch is not None                   
-            and current_batch == self._profile_batch        
-        )
+        # record_this_batch = (
+        #     self._profile_batch is not None                   
+        #     and current_batch == self._profile_batch        
+        # )
+        
+        record_this_batch = True
+        
         self._rec.set_enabled(record_this_batch)
         
         arg_mbs, kwarg_mbs = self._check_inputs(arg_mbs, kwarg_mbs, target_mbs, losses)
@@ -306,8 +441,25 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         backward_counter: Counter[int] = Counter()
         for time_step, action in enumerate(self.pipeline_order_with_comms[self.rank]):
             try:
+                deps = action.dependency
+                #print(f"{action.id} {action.computation_type} has dependency {deps}")
+                if deps:                              # Dependency format: {rank: (id1, id2, ...)}
+                    # Local Dependency
+                    while not all(_has_done(d) for d in deps.get(self.rank, ())):
+                        print(f"{action.computation_type} local wait")
+                        time.sleep(0.001)
+
+                    # Remote Dependency 
+                    for dep_rank, ids in deps.items():
+                        if dep_rank == self.rank:
+                            continue
+                        for dep_id in ids:
+                            print(f"{action.computation_type} remote wait")
+                            _wait_remote_id(current_batch+1,dep_rank, dep_id)
+                
                 comp_type = action.computation_type
                 mb_field = action.microbatch_index
+                action_id = action.id
                 if mb_field is None:
                     mb_ids: tuple[int, ...] = ()           
                 elif isinstance(mb_field, (tuple, list)):
@@ -339,67 +491,78 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     time_step,
                     action,
                 )
-
              
                 if comp_type == SEND_F:
-                    print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}")
+                    _tc_set_rate(action.upstream)
+                    if action.upstream is not None:
+                        print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}, upstream bandwidth {action.upstream} mbps")
+                    else:
+                        print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}")
                     
-                    output_tuple, _ = stage.fwd_cache[mb_index]
-                    print(f"[{dist.get_rank()}] SEND_F mb={mb_index} to rank={dest_rank}")
-                    for i, out in enumerate(output_tuple):
-                        if isinstance(out, torch.Tensor):
-                            print(f"  -> tensor[{i}] shape: {list(out.shape)}")
-                    
-                    with self._rec.record("SEND_F", stage_idx, mb_index):
-                        ops = (
-                            stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
-                            if rank is not None and dest_rank is not None
-                            else stage.get_fwd_send_ops(mb_index)
-                        )
-                        send_ops.append(schedule._batch_p2p(ops))
+                    #record time in SEND_F and SEND_B
+                    start_ns = time.time_ns()
+                    ops = (
+                        stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
+                        if rank is not None and dest_rank is not None
+                        else stage.get_fwd_send_ops(mb_index)
+                    )
+                    works = schedule._batch_p2p(ops)
+                    self._rec.record_async(current_batch+1,action_id,"SEND_F", stage_idx, mb_index, works, start_ns)
+                    send_ops.append(works)
 
                 elif comp_type == SEND_B:
-                    print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_B microbatch {mb_index}")
-                    with self._rec.record("SEND_B", stage_idx, mb_index):
-                        ops = (
-                            stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
-                            if rank is not None and dest_rank is not None
-                            else stage.get_bwd_send_ops(mb_index)
-                        )
-                        send_ops.append(schedule._batch_p2p(ops))
+                    _tc_set_rate(action.upstream)
+                    if action.upstream is not None:
+                        print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_B microbatch {mb_index}, upstream bandwidth {action.upstream} mbps")
+                    else:
+                        print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_B microbatch {mb_index}")
+                    
+                    #record time in SEND_F and SEND_B
+                    start_ns = time.time_ns()
+                    ops = (
+                        stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
+                        if rank is not None and dest_rank is not None
+                        else stage.get_bwd_send_ops(mb_index)
+                    )
+                    works = schedule._batch_p2p(ops)     
+                    self._rec.record_async(current_batch+1,action_id,"SEND_B", stage_idx, mb_index, works, start_ns)
+                    send_ops.append(works)
+
 
                 elif comp_type == RECV_F:
                     print(f"[{dist.get_rank()}]: batch {current_batch+1} RECV_F microbatch {mb_index}")
                     assert (stage_idx, mb_index) not in fwd_recv_ops, (
                         f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing forward"
                     )
-                    with self._rec.record("RECV_F", stage_idx, mb_index):
-                        ops = (
-                            stage.get_fwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank)
-                            if rank is not None and dest_rank is not None
-                            else stage.get_fwd_recv_ops(mb_index)
-                        )
-                        fwd_recv_ops[(stage_idx, mb_index)] = schedule._batch_p2p(ops)
-                    schedule._wait_batch_p2p(fwd_recv_ops[(stage_idx, mb_index)])
-                    recv_data = stage._retrieve_recv_activations(mb_index)
-                    print(f"[{dist.get_rank()}] RECV_F mb={mb_index} from rank={dest_rank}")
-                    if isinstance(recv_data, tuple):
-                        for i, data in enumerate(recv_data):
-                            if isinstance(data, torch.Tensor):
-                                print(f"  <- tensor[{i}] shape: {list(data.shape)}")
-                    fwd_recv_ops[(stage_idx, mb_index)] = []
+                    start_ns = time.time_ns()
+                    ops = (
+                        stage.get_fwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank)
+                        if rank is not None and dest_rank is not None
+                        else stage.get_fwd_recv_ops(mb_index)
+                    )
+                    works = schedule._batch_p2p(ops)       
+                    self._rec.record_async(current_batch+1,action_id,"RECV_F", stage_idx, mb_index, works, start_ns)
+                    fwd_recv_ops[(stage_idx, mb_index)] = works
+                    schedule._wait_batch_p2p(works) 
+                    #print("fwd_recv_ops[(stage_idx, mb_index)] = []")
+                    fwd_recv_ops[(stage_idx, mb_index)] = [] 
+
                 elif comp_type == RECV_B:
                     print(f"[{dist.get_rank()}]: batch {current_batch+1} RECV_B microbatch {mb_index}")
                     assert (stage_idx, mb_index) not in bwd_recv_ops, (
                         f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing backward"
                     )
-                    with self._rec.record("RECV_B", stage_idx, mb_index):
-                        ops = (
-                            stage.get_bwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank)
-                            if rank is not None and dest_rank is not None
-                            else stage.get_bwd_recv_ops(mb_index)
-                        )
-                        bwd_recv_ops[(stage_idx, mb_index)] = schedule._batch_p2p(ops)
+                    start_ns = time.time_ns()
+                    ops = (
+                        stage.get_bwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank)
+                        if rank is not None and dest_rank is not None
+                        else stage.get_bwd_recv_ops(mb_index)
+                    )
+                    works = schedule._batch_p2p(ops)
+                    self._rec.record_async(current_batch+1,action_id,"RECV_B", stage_idx, mb_index, works, start_ns)
+                    bwd_recv_ops[(stage_idx, mb_index)] = works
+
+
                 elif comp_type == UNSHARD:
                     if stage_uses_fsdp:
                         assert (
@@ -488,7 +651,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         for mid in mb_ids:
                             self._mb_to_group[(stage_idx, mid)] = g_id
                     
-                    with self._rec.record("FORWARD", stage_idx, mb_ids):
+                    with self._rec.record(current_batch+1,action_id,"FORWARD", stage_idx, mb_ids):
                         output = stage.forward_one_chunk(rep_id, cat_args, cat_kwargs, len(mb_ids))
                     
                     
@@ -545,13 +708,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                 }
                     
                     for idx, mid in enumerate(mb_ids):
-                        tensor_tuple = split_out[idx]
-                        # print(f"split_out[{idx}] is a tuple with {len(tensor_tuple)} tensors:")
-                        # for j, t in enumerate(tensor_tuple):
-                        #     print(f"    [{j}] shape = {tuple(t.shape)}, numel = {t.numel()}")
-                        # print(f"output is a tuple with {len(output)} tensors:")    
-                        # for j, t in enumerate(output):
-                        #     print(f"    [{j}] shape = {tuple(t.shape)}, numel = {t.numel()}")
                         self._maybe_compute_loss(stage, split_out[idx], target_mbs, mid)
                     
                     if is_next_stage_on_this_rank:
@@ -559,16 +715,11 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             stage_index_to_stage[stage_idx + 1].set_local_fwd_input(
                                 split_out[idx], mid
                             )
-                    
-                    #print(f"[{dist.get_rank()}]: FORWARD完成，最终fwd_cache状态:")
+                
                     for mid in mb_ids:
                         if mid in stage.fwd_cache:
                             outputs, inputs = stage.fwd_cache[mid]
-                        #     print(f"[{dist.get_rank()}]: fwd_cache[{mid}] - 输出数量: {len(outputs)}, 输入数量: {len(inputs)}")
-                        # else:
-                        #     print(f"[{dist.get_rank()}]: 警告: fwd_cache[{mid}]不存在!")
-                                    
-                # -----------------  FULL_BACKWARD  -----------------
+
                 elif comp_type == FULL_BACKWARD:
                     mb_ids: Tuple[int, ...] = (mb_field,) if isinstance(mb_field, int) else tuple(mb_field)
                     rep_id = mb_ids[0]
@@ -614,7 +765,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if not stage.is_last:
                         stage.set_local_bwd_input(cat_gradout, rep_id)
 
-                    with self._rec.record("FULL_BACKWARD", stage_idx, mb_ids):
+                    with self._rec.record(current_batch+1,action_id,"FULL_BACKWARD", stage_idx, mb_ids):
                         stage.backward_one_chunk(
                             rep_id,
                             loss=cat_loss,
@@ -661,7 +812,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         )
                         schedule._wait_batch_p2p(bwd_recv_ops.pop((stage_idx, mb_index)))
                     loss = self._maybe_get_loss(stage, mb_index)
-                    with self._rec.record("BACKWARD_INPUT", stage_idx, mb_index):
+                    with self._rec.record(current_batch+1,action_id,"BACKWARD_INPUT", stage_idx, mb_index):
                         stage.backward_one_chunk(
                             mb_index,
                             loss=loss,
@@ -678,15 +829,19 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         _assert_unsharded(stage_idx)
                     backward_counter[stage_idx] += 1
                     
-                    with self._rec.record("BACKWARD_WEIGHT", stage_idx, mb_index):
+                    with self._rec.record(current_batch+1,action_id,"BACKWARD_WEIGHT", stage_idx, mb_index):
                         stage.backward_weight_one_chunk(
                             mb_index,
                             last_backward=backward_counter[stage_idx]
                             == self._n_microbatches,
                         )
                 elif comp_type == _ComputationType.ALL_REDUCE:
-                    print(f"[{dist.get_rank()}]: batch {current_batch+1} ALL_REDUCE for stage {stage_idx}")
-                    with self._rec.record("ALL_REDUCE", stage_idx, -1):  # -1 not specific microbatch
+                    _tc_set_rate(action.upstream)
+                    if action.upstream is not None:
+                        print(f"[{dist.get_rank()}]: batch {current_batch+1} ALL_REDUCE for stage {stage_idx}, upstream bandwidth {action.upstream} mbps")
+                    else:
+                        print(f"[{dist.get_rank()}]: batch {current_batch+1} ALL_REDUCE for stage {stage_idx}")
+                    with self._rec.record(current_batch+1,action_id,"ALL_REDUCE", stage_idx, -1):  # -1 not specific microbatch
                         stage._execute_allreduce()
                                 
                 else:
@@ -716,13 +871,13 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         
         if (
             record_this_batch
-            and self._profile_batch is not None
-            and not self._timeline_saved
+            # and self._profile_batch is not None
+            # and not self._timeline_saved
         ):
-            fname_prefix = f"timeline_batch{self._profile_batch}"
+            fname_prefix = f"timeline_batch{current_batch + 1}"
             self.save_timeline(fname_prefix)
-            self._timeline_saved = True
-            self._rec.set_enabled(False)   # 后续 minibatch 不再计时
+            # self._timeline_saved = True
+            # self._rec.set_enabled(False)   # 后续 minibatch 不再计时
         
         # clear cache
         stage.grad_recv_info = copy.deepcopy(self.grad_recv_info_copy)
