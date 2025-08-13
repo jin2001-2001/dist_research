@@ -1,11 +1,20 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Two-stage pipeline-parallel training for Qwen-0.6B  (PyTorch ≥ 2.5)
+test_cpu_hybrid_pp.py
 
-GPU-0:   embedding + layers 0-13
-GPU-1:   layers 14-27 + ln + lm_head
+This is the main experiment script for training Qwen-0.6B using a custom 
+Hybrid Pipeline Parallelism framework built on top of PiPPy.
+
+- Stage 0 (rank 0): embedding + layers 0–13
+- Stage 1 (ranks 1 & 2): layers 14–27 + norm + lm_head (with DDP)
+
+Key Features:
+- CPU-only execution with 3 ranks
+- Manual microbatch scheduling via custom action list
+- Used for testing correctness and loss behavior of the hybrid PP runtime
 """
+
 
 import argparse, os, torch, torch.nn as nn, torch.nn.functional as F, torch.optim as optim
 import torch.distributed as dist
@@ -21,31 +30,75 @@ from pipelining_source_code.schedules import _Action, _ComputationType
 
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
-from simple_1F1B_Action import generate_1f1b_pipeline_actions
 
-class Part1(nn.Module):  # rank 0
+def create_pipeline_actions():
+
+    # [stage],[rank],[id],[action type],[microbatch],[dest_rank],[upstream],[dependency]
+    # Rank 0 (Stage 0)
+    rank0_actions = [
+        _Action(0, 0, 0, _ComputationType.FORWARD, (0,1,), None, None, None),
+
+        _Action(0, 0, 1, _ComputationType.SEND_F, (0,), 1, None, None),
+        _Action(0, 0, 2, _ComputationType.SEND_F, (1,), 2, None, None),
+        
+        _Action(0, 0, 3, _ComputationType.RECV_B, (0,), 1, None, None),
+        _Action(0, 0, 4, _ComputationType.RECV_B, (1,), 2, None, None), 
+    
+        _Action(0, 0, 5, _ComputationType.FULL_BACKWARD, (0,1,), None, None, None),    
+    ]
+    
+    # Rank 1 (Stage 1)
+    rank1_actions = [
+        _Action(1, 1, 0, _ComputationType.RECV_F, (0,), 0, None, None),
+        _Action(1, 1, 1, _ComputationType.FORWARD, (0,), None, None, None),
+        _Action(1, 1, 2, _ComputationType.SEND_F, (0,), 3, None, None),
+        
+        _Action(1, 1, 3, _ComputationType.RECV_B, (0,), 3, None, None), 
+        _Action(1, 1, 4, _ComputationType.FULL_BACKWARD, (0,), None, None, None),
+        _Action(1, 1, 5, _ComputationType.SEND_B, (0,), 0, None, None),
+         
+        _Action(1, 1, 6, _ComputationType.ALL_REDUCE, None, None, None, None),
+    ]
+    
+    # Rank 2 (Stage 1)
+    rank2_actions = [
+        _Action(1, 2, 0, _ComputationType.RECV_F, (1,), 0, None, None),
+        _Action(1, 2, 1, _ComputationType.FORWARD, (1,), None, None, None),
+        _Action(1, 2, 2, _ComputationType.SEND_F, (1,), 3, None, None),
+        
+        _Action(1, 2, 3, _ComputationType.RECV_B, (1,), 3, None, None), 
+        _Action(1, 2, 4, _ComputationType.FULL_BACKWARD, (1,), None, None, None),
+        _Action(1, 2, 5, _ComputationType.SEND_B, (1,), 0, None, None),
+
+        _Action(1, 2, 6, _ComputationType.ALL_REDUCE, None, None, None, None),
+    ]
+    
+    rank3_actions = [
+        _Action(0, 0, 0, _ComputationType.RECV_F, (0,), 1, None, None),
+        _Action(0, 0, 1, _ComputationType.RECV_F, (1,), 2, None, None), 
+        _Action(0, 0, 2, _ComputationType.FORWARD, (0,1,), None, None, None),
+    
+        _Action(0, 0, 3, _ComputationType.FULL_BACKWARD, (0,1,), None, None, None),    
+        _Action(0, 0, 4, _ComputationType.SEND_B, (0,), 1, None, None),
+        _Action(0, 0, 5, _ComputationType.SEND_B, (1,), 2, None, None),
+    ]
+    
+    return {0: rank0_actions, 1: rank1_actions, 2: rank2_actions, 3: rank3_actions}
+
+
+class Part0(nn.Module):                          # rank 0
     def __init__(self, model):
         super().__init__()
         self.embed_tokens = model.model.embed_tokens
-        # self.layers = nn.ModuleList(model.model.layers[:7])  # 0-6
-        self.layers = nn.ModuleList(model.model.layers[:7])  # 0-6
-        self.rotary_emb = model.model.rotary_emb
+        self.layers = nn.ModuleList(model.model.layers[:9])     # 0-5
+        self.rotary_emb = model.model.rotary_emb                # 共享旋转位置
 
-    def forward(self, input_ids, position_offset=0):
+    def forward(self, input_ids):
         bsz, seqlen = input_ids.shape
         device = input_ids.device
-        
-        # 为微批处理创建带偏移的位置 ID
-        position_ids = torch.arange(
-            position_offset, 
-            position_offset + seqlen, 
-            device=device
-        ).unsqueeze(0).expand(bsz, -1)
-        
+        position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1)
         hidden = self.embed_tokens(input_ids)
-        
-        # 为实际序列长度计算旋转编码
-        cos, sin = self.rotary_emb(hidden, position_ids)
+        pos_emb = self.rotary_emb(hidden, position_ids)
 
         attn_mask = torch.triu(torch.full((seqlen, seqlen), float('-inf'), device=device), 1)
         attn_mask = attn_mask.unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
@@ -54,36 +107,30 @@ class Part1(nn.Module):  # rank 0
             hidden = layer(hidden_states=hidden,
                            attention_mask=attn_mask,
                            position_ids=position_ids,
-                           position_embeddings=(cos,sin),
+                           position_embeddings=pos_emb,
                            output_attentions=False,
                            use_cache=False)[0]
 
         return hidden.contiguous(), attn_mask.contiguous()
 
 
-
-class Part2(nn.Module):  # rank 1
-    def __init__(self, model):
+class _MiddlePart(nn.Module):
+    """公共基类：仅负责若干 transformer layer。"""
+    def __init__(self, model, start, end):
         super().__init__()
-        self.layers = nn.ModuleList(model.model.layers[7:21])  # 7-21
+        self.layers = nn.ModuleList(model.model.layers[start:end])
         self.rotary_emb = model.model.rotary_emb
 
-    def forward(self, hidden, attn_mask, position_offset=0):
+    def forward(self, hidden, attn_mask):
         bsz, seqlen = hidden.shape[:2]
         device = hidden.device
-        
-        # 使用传播的位置偏移
-        position_ids = torch.arange(
-            position_offset,
-            position_offset + seqlen,
-            device=device
-        ).unsqueeze(0).expand(bsz, -1)
-        
-        cos, sin = self.rotary_emb(hidden, position_ids)
+        position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1)
+        pos_emb = self.rotary_emb(hidden, position_ids)
 
-        if attn_mask.dim() == 2:
-            attn_mask = torch.triu(torch.full((seqlen, seqlen), float('-inf'), device=device), 1)
-            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
+        if attn_mask.dim() == 2:                       # 兼容单矩阵传递
+            attn_mask = torch.triu(
+                torch.full((seqlen, seqlen), float('-inf'), device=device), 1
+            ).unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
         elif not attn_mask.is_contiguous():
             attn_mask = attn_mask.contiguous()
 
@@ -91,15 +138,20 @@ class Part2(nn.Module):  # rank 1
             hidden = layer(hidden_states=hidden,
                            attention_mask=attn_mask,
                            position_ids=position_ids,
-                           position_embeddings=(cos, sin),
+                           position_embeddings=pos_emb,
                            output_attentions=False,
                            use_cache=False)[0]
-        return hidden.contiguous(), attn_mask
+        return hidden.contiguous(), attn_mask           # 继续向后传递
 
-class Part3(nn.Module):  # rank 2
+
+class Part1(_MiddlePart):                              
+    def __init__(self, model):
+        super().__init__(model, 19, 20)
+
+class Part2(nn.Module):                                # rank 4：23-27 + norm + lm_head
     def __init__(self, model):
         super().__init__()
-        self.layers = nn.ModuleList(model.model.layers[21:])  # 21-27
+        self.layers = nn.ModuleList(model.model.layers[20:])
         self.norm = model.model.norm
         self.lm_head = model.lm_head
         self.rotary_emb = model.model.rotary_emb
@@ -108,11 +160,12 @@ class Part3(nn.Module):  # rank 2
         bsz, seqlen = hidden.shape[:2]
         device = hidden.device
         position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1)
-        cos, sin = self.rotary_emb(hidden, position_ids)
+        pos_emb = self.rotary_emb(hidden, position_ids)
 
         if attn_mask.dim() == 2:
-            attn_mask = torch.triu(torch.full((seqlen, seqlen), float('-inf'), device=device), 1)
-            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
+            attn_mask = torch.triu(
+                torch.full((seqlen, seqlen), float('-inf'), device=device), 1
+            ).unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
         elif not attn_mask.is_contiguous():
             attn_mask = attn_mask.contiguous()
 
@@ -120,13 +173,12 @@ class Part3(nn.Module):  # rank 2
             hidden = layer(hidden_states=hidden,
                            attention_mask=attn_mask,
                            position_ids=position_ids,
-                           position_embeddings=(cos, sin),
+                           position_embeddings=pos_emb,
                            output_attentions=False,
                            use_cache=False)[0]
 
         hidden = self.norm(hidden)
-        return self.lm_head(hidden)  # logits
-
+        return self.lm_head(hidden)                     # logits
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--train_steps", type=int, default=None,
@@ -155,31 +207,77 @@ def main():
     full = AutoModelForCausalLM.from_pretrained(name, trust_remote_code=True)
 
     if rank == 0:
-        stage_mod = Part1(full)
+        stage_mod = Part0(full)
         stage_mod.to(device)
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=0,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
                             prev_group=None, this_group=[0], next_group=[1,2])
         
-    elif rank == 1:
+    elif rank == 1 or rank == 2:
+        dp_group = dist.new_group(ranks=[1, 2])
+        stage_mod = Part1(full)
+        stage_mod.to(device)
+        
+        #Using DDP as the data parallelism component of our frame
+        stage_mod = DDP(
+            stage_mod,
+            device_ids=None,        # CPU don' use device_ids
+            process_group=dp_group, # Used for local dp
+            find_unused_parameters=False,
+            init_sync = False,
+        )
+        
+        # #A hook for detailed output of allreduce
+        # def timing_hook(state, bucket: dist.GradBucket):
+        #     """
+        #     Put a dict in the state:
+        #         {"pg": dp_group, "use_cuda_event": True/False}
+        #     """
+        #     pg = state["pg"]
+        #     use_evt = bucket.buffer().is_cuda and state.get("use_cuda_event", True)
+        #     if use_evt:                    # GPU, timing with cudaEvent
+        #         start_evt = torch.cuda.Event(enable_timing=True)
+        #         end_evt   = torch.cuda.Event(enable_timing=True)
+        #         start_evt.record()
+        #     else:                          # CPU or not wanting to use Event
+        #         t0 = time.perf_counter()
+        #      # ------- key: specify group=pg ----------
+        #     work = dist.all_reduce(bucket.buffer(), group=pg, async_op=True)
+        #     def _callback(fut):
+        #          # timing
+        #         if use_evt:
+        #             end_evt.record()
+        #             end_evt.synchronize()
+        #             elapsed_ms = start_evt.elapsed_time(end_evt)
+        #         else:
+        #             elapsed_ms = (time.perf_counter() - t0) * 1e3
+        #         print(f"[Rank {dist.get_rank()}] Bucket {bucket.index()} "
+        #             f"all‑reduce took {elapsed_ms:.3f} ms")
+        #         # Be consistent with the default behavior of DDP: take the average
+        #         bucket.buffer().div_(pg.size())
+        #         return bucket.buffer()
+        #      # Return the Future containing _callback
+        #     return work.get_future().then(_callback)
+    
+        # stage_mod.register_comm_hook(state={"pg": dp_group}, hook=timing_hook)
+    
+        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=1,
+                                num_stages=world, device=device,
+                                group=dist.group.WORLD,  # Used for world pp 
+                                prev_group=[0], this_group=[1,2], next_group=[3])
+    else:
         stage_mod = Part2(full)
         stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=1,
+        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=0,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
-                            prev_group=[0], this_group=[1], next_group=[2])
-    else:
-        stage_mod = Part3(full)
-        stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=2,
-                            num_stages=world, device=device,
-                            group=dist.group.WORLD,
-                            prev_group=[1], this_group=[2], next_group=None)
-
+                            prev_group=[1,2], this_group=[3], next_group=None)
+        
+    
     del full                        
     import gc; gc.collect()
-    
+
     raw = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
     block = 128
     def tok_fn(ex): 
@@ -210,18 +308,19 @@ def main():
 
     
     sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=microbatch_num, loss_fn=loss_fn, root_pass=args.sudo_pass)
-    actions = generate_1f1b_pipeline_actions(3,microbatch_num) # 3 stages, 8 microbatchs 
+    actions = create_pipeline_actions()
     sched._load_actions(actions, format="compute_comms")
     
     opt = optim.Adam(stage_mod.parameters(), lr=1e-4)            
     prev_loss = None
+    
+    
     for epoch in range(1):
         if rank == 0:
             if args.train_steps is None:
                 steps_tensor = torch.tensor(len(loader), device=device)
             else:
                 steps_tensor = torch.tensor(args.train_steps, device=device)
-
             dist.broadcast(steps_tensor, 0)
             data_iter = iter(loader)
             print(f"Total training steps: {steps_tensor.item()}")
@@ -280,7 +379,7 @@ def main():
                 prev_loss = cur_loss
             
             
-        
+            
             dist.barrier()
         
         if rank == 0:

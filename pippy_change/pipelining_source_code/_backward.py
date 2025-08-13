@@ -8,6 +8,7 @@ from typing import Any, Optional, Union
 import torch
 from torch.autograd.graph import GradientEdge, Node
 from torch.nn import Parameter
+import torch.distributed as dist
 
 from ._debug import map_debug_info
 
@@ -288,6 +289,9 @@ def stage_backward(
     in the autograd trace) as well as return a list of the gradients for the
     input values
     """
+    # if dist.get_rank() == 0:
+    #     print(f"❤️stage_output:{stage_output}\noutput_grads:{output_grads}\ninput_values:{input_values}")
+    
     if outputs_with_grads_idxs is not None:
         # Deprecated, not used in runtime calls, only exists in compiler
         stage_output = [stage_output[i] for i in outputs_with_grads_idxs]
@@ -388,6 +392,9 @@ def stage_backward(
         """
         raise RuntimeError(exc_msg) from e
 
+    # if dist.get_rank() == 2:
+    #     print(f"✅是否为空{grad_inputs}")
+     
     return tuple(grad_inputs)
 
 

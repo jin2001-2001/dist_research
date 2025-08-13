@@ -31,135 +31,141 @@ from pipelining_source_code.schedules import _Action, _ComputationType
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
 
-def create_pipeline_actions():
+def create_pipeline_actions(upstream: int = None):
 
     # [stage],[rank],[id],[action type],[microbatch],[dest_rank],[upstream],[dependency]
     # Rank 0 (Stage 0)
     rank0_actions = [
-        _Action(0, 0, 0, _ComputationType.FORWARD, (0,1,2,3), None, None, None),
-
-        _Action(0, 0, 1, _ComputationType.SEND_F, (0,), 1, 10000, None),
-        _Action(0, 0, 2, _ComputationType.SEND_F, (2,), 1, 10000, None),
-        _Action(0, 0, 3, _ComputationType.SEND_F, (1,), 2, 10000, None),
-        _Action(0, 0, 4, _ComputationType.SEND_F, (3,), 2, 10000, None),
-        
-        
-        
-        _Action(0, 0, 5, _ComputationType.RECV_B, (0,), 1, None, None),
-        _Action(0, 0, 6, _ComputationType.RECV_B, (1,), 2, None, None),
-        _Action(0, 0, 7, _ComputationType.RECV_B, (2,), 1, None, None),
-        _Action(0, 0, 8, _ComputationType.RECV_B, (3,), 2, None, None),
-        
-        _Action(0, 0, 9, _ComputationType.FULL_BACKWARD, (0,1,2,3), None, None, None),    
+        _Action(0, 0, 0, _ComputationType.FORWARD, (0,), None, None, None),
+        _Action(0, 0, 1, _ComputationType.FULL_BACKWARD, (0,), None, None, None),   
+        _Action(0, 0, 2, _ComputationType.ALL_REDUCE, None, None, upstream, None), 
     ]
     
     # Rank 1 (Stage 1)
     rank1_actions = [
-        _Action(1, 1, 0, _ComputationType.RECV_F, (0,), 0, None, None),
-        _Action(1, 1, 1, _ComputationType.RECV_F, (2,), 0, None, None),
-        _Action(1, 1, 2, _ComputationType.FORWARD, (0,2), None, None, None),
-        _Action(1, 1, 3, _ComputationType.FULL_BACKWARD, (0,2), None, None, None),
-        _Action(1, 1, 4, _ComputationType.SEND_B, (0,), 0, 10000, None),
-        _Action(1, 1, 5, _ComputationType.SEND_B, (2,), 0, 10000, None),
-         
-        _Action(1, 1, 6, _ComputationType.ALL_REDUCE, None, None, None, None),
+        _Action(0, 1, 0, _ComputationType.FORWARD, (1,), None, None, None),
+        _Action(0, 1, 1, _ComputationType.FULL_BACKWARD, (1,), None, None, None),
+        _Action(0, 1, 2, _ComputationType.ALL_REDUCE, None, None, upstream, None),
     ]
     
     # Rank 2 (Stage 1)
     rank2_actions = [
-        _Action(1, 2, 0, _ComputationType.RECV_F, (1,), 0, None, None),
-        _Action(1, 2, 1, _ComputationType.RECV_F, (3,), 0, None, None),
-        _Action(1, 2, 2, _ComputationType.FORWARD, (1,3), None, None, None),
-        _Action(1, 2, 3, _ComputationType.FULL_BACKWARD, (1,3), None, None, None),
-        _Action(1, 2, 4, _ComputationType.SEND_B, (1,), 0, 10000, None),
-        _Action(1, 2, 5, _ComputationType.SEND_B, (3,), 0, 10000, None),
-
-        _Action(1, 2, 6, _ComputationType.ALL_REDUCE, None, None, None, None),
+        _Action(0, 2, 0, _ComputationType.FORWARD, (2,), None, None, None),
+        _Action(0, 2, 1, _ComputationType.FULL_BACKWARD, (2,), None, None, None),
+        _Action(0, 2, 2, _ComputationType.ALL_REDUCE, None, None, upstream, None),
     ]
     
     return {0: rank0_actions, 1: rank1_actions, 2: rank2_actions}
 
-
-class Part1(nn.Module):  # rank 0
-    def __init__(self, model):
+class Qwen3(nn.Module):
+    """
+    Single-module version that merges the previously split Part0/_MiddlePart/Part2.
+    - Supports selecting the number of transformer layers (num_layers) or an explicit set of indices (keep_indices) at init time.
+    - Keeps the same forward API as your split version: manually builds position_ids, pos_emb, and a causal attn_mask, and passes them into each layer.
+    - Returns logits by default (suitable for training). If you need hidden states as well, adapt to return (logits, hidden).
+    """
+    def __init__(self, model, num_layers=None, keep_indices=None, force_tie_weight=True):
+        """
+        Args:
+            model: A loaded Qwen3-0.6B HF model (has .model and .lm_head).
+            num_layers (int|None): Use the first num_layers transformer blocks; if None, use all.
+            keep_indices (List[int]|None): Explicit list of layer indices to keep (takes priority over num_layers).
+            force_tie_weight (bool): If True, enforce lm_head.weight = embed_tokens.weight to keep tied weights.
+        """
         super().__init__()
-        self.embed_tokens = model.model.embed_tokens
-        self.layers = nn.ModuleList(model.model.layers[:14])
-        self.rotary_emb = model.model.rotary_emb
+        base = model.model
 
-    def forward(self, input_ids):
+        self.embed_tokens = base.embed_tokens           # token embedding
+        self.norm = base.norm                           # final RMSNorm
+        self.lm_head = model.lm_head                    # output head
+        self.rotary_emb = base.rotary_emb               # RoPE position embedding (same usage as your split code)
+
+        total_layers = len(base.layers)                 # typically 28
+        if keep_indices is not None:
+            sel = list(keep_indices)
+        elif num_layers is not None:
+            assert 1 <= num_layers <= total_layers, f"num_layers must be in [1, {total_layers}]"
+            sel = list(range(num_layers))
+        else:
+            sel = list(range(total_layers))
+
+        # Directly reference selected blocks (weights and grads preserved)
+        self.layers = nn.ModuleList([base.layers[i] for i in sel])
+
+        # Optionally re-tie lm_head and embeddings (some implementations already tie; this ensures it)
+        if force_tie_weight and hasattr(self.lm_head, "weight") and hasattr(self.embed_tokens, "weight"):
+            try:
+                self.lm_head.weight = self.embed_tokens.weight
+            except Exception:
+                # Some implementations may forbid rebinding; safe to ignore
+                pass
+
+    @torch.no_grad()
+    def _build_causal_mask(self, bsz, seqlen, device, dtype=torch.float32):
+        # Shape (B, 1, T, T). Upper triangle is -inf, elsewhere 0.
+        mask = torch.full((seqlen, seqlen), float("-inf"), device=device, dtype=dtype)
+        mask = torch.triu(mask, diagonal=1)
+        mask = mask.unsqueeze(0).unsqueeze(0).expand(bsz, 1, seqlen, seqlen).contiguous()
+        return mask
+
+    def forward(self, input_ids, attention_mask=None):
+        """
+        Args:
+            input_ids: (B, T) token IDs.
+            attention_mask: None / (T, T) / (B, 1, T, T).
+        Returns:
+            logits: (B, T, vocab_size)
+        """
         bsz, seqlen = input_ids.shape
         device = input_ids.device
-        position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1).contiguous()
+
+        # Build position ids and token embeddings
+        position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1)
         hidden = self.embed_tokens(input_ids)
-        position_embeddings = self.rotary_emb(hidden, position_ids)
-        attention_mask = torch.triu(
-            torch.full((seqlen, seqlen), float('-inf'), device=device),
-            diagonal=1
-        ).unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
+
+        # RoPE position embedding 
+        cos, sin = self.rotary_emb(hidden, position_ids)
+
+        # Attention mask handling
+        if attention_mask is None:
+            attn_mask = self._build_causal_mask(bsz, seqlen, device, dtype=torch.float32)
+        elif attention_mask.dim() == 2:
+            attn_mask = attention_mask.to(device)
+            if attn_mask.dtype != torch.float32:
+                attn_mask = attn_mask.to(torch.float32)
+            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
+        else:
+            attn_mask = attention_mask.to(device)
+            if not attn_mask.is_contiguous():
+                attn_mask = attn_mask.contiguous()
 
         for layer in self.layers:
-            layer_outputs = layer(
+            hidden = layer(
                 hidden_states=hidden,
-                attention_mask=attention_mask,
+                attention_mask=attn_mask,
                 position_ids=position_ids,
-                position_embeddings=position_embeddings,
+                position_embeddings=(cos, sin),
                 output_attentions=False,
-                use_cache=False,
-            )
-            hidden = layer_outputs[0]
+                use_cache=False
+            )[0]
 
-        return hidden.contiguous(), attention_mask.contiguous()
-
-
-class Part2(nn.Module):  # rank 1
-    def __init__(self, model):
-        super().__init__()
-        self.layers = nn.ModuleList(model.model.layers[14:])
-        self.norm = model.model.norm
-        self.lm_head = model.lm_head
-        self.rotary_emb = model.model.rotary_emb
-
-    def forward(self, hidden, attention_mask):
-        bsz, seqlen = hidden.shape[:2]
-        device = hidden.device
-        position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1).contiguous()
-        position_embeddings = self.rotary_emb(hidden, position_ids)
-
-        if attention_mask.dim() == 2:
-            seqlen = attention_mask.shape[-1]
-            attention_mask = torch.triu(
-                torch.full((seqlen, seqlen), float('-inf'), device=device),
-                diagonal=1
-            ).unsqueeze(0).unsqueeze(0).expand(hidden.shape[0], 1, -1, -1).contiguous()
-        elif not attention_mask.is_contiguous():
-            attention_mask = attention_mask.contiguous()
-
-        for layer in self.layers:
-            layer_outputs = layer(
-                hidden_states=hidden,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                position_embeddings=position_embeddings,
-                output_attentions=False,
-                use_cache=False,
-            )
-            hidden = layer_outputs[0]
-
+        # Final normalization and output head
         hidden = self.norm(hidden)
-        return self.lm_head(hidden)
-
+        logits = self.lm_head(hidden)
+        return logits
+    
 parser = argparse.ArgumentParser()
 parser.add_argument("--train_steps", type=int, default=None,
                     help="The total number of steps for training. If omitted, run the entire DataLoader.")
 parser.add_argument("--batch_size", type=int,
                     default=int(os.getenv("BATCH_SIZE", 16)),
-                    help="The batch size of each rank (the environment variable BATCH_SIZE can be overridden)")
-parser.add_argument("--microbatch_num", type=int,
-                    default=int(os.getenv("MICROBATCH_NUM", 4)),
-                    help="Micro-batch number (the environment variable MICROBATCH_NUM can be overridden)")
+                    help="It should be the mutiple of 3. The batch size of each rank (the environment variable BATCH_SIZE can be overridden)")
 parser.add_argument("--sudo_pass", default=os.getenv("SUDO_PASS"),
                     help='Write the password of root')
+parser.add_argument("--middle_layers", type=int, default=6,
+                    help='The number of layers in the middle of the model')
+parser.add_argument("--upstream", type=int, default=None,
+                    help='The upstream bandwidth')
 args = parser.parse_args()
 def main():
 
@@ -174,67 +180,59 @@ def main():
     tok = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
     tok.pad_token = tok.eos_token
     full = AutoModelForCausalLM.from_pretrained(name, trust_remote_code=True)
+    middle_layers = args.middle_layers
 
-    if rank == 0:
-        stage_mod = Part1(full)
-        stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=0,
+    dp_group = dist.new_group(ranks=[0, 1, 2])
+    stage_mod = Qwen3(full,num_layers=middle_layers)
+    stage_mod.to(device)
+    
+    #Using DDP as the data parallelism component of our frame
+    stage_mod = DDP(
+        stage_mod,
+        device_ids=None,        # CPU don' use device_ids
+        process_group=dp_group, # Used for local dp
+        find_unused_parameters=False,
+        init_sync = False,
+    )
+    
+    # #A hook for detailed output of allreduce
+    # def timing_hook(state, bucket: dist.GradBucket):
+    #     """
+    #     Put a dict in the state:
+    #         {"pg": dp_group, "use_cuda_event": True/False}
+    #     """
+    #     pg = state["pg"]
+    #     use_evt = bucket.buffer().is_cuda and state.get("use_cuda_event", True)
+    #     if use_evt:                    # GPU, timing with cudaEvent
+    #         start_evt = torch.cuda.Event(enable_timing=True)
+    #         end_evt   = torch.cuda.Event(enable_timing=True)
+    #         start_evt.record()
+    #     else:                          # CPU or not wanting to use Event
+    #         t0 = time.perf_counter()
+    #      # ------- key: specify group=pg ----------
+    #     work = dist.all_reduce(bucket.buffer(), group=pg, async_op=True)
+    #     def _callback(fut):
+    #          # timing
+    #         if use_evt:
+    #             end_evt.record()
+    #             end_evt.synchronize()
+    #             elapsed_ms = start_evt.elapsed_time(end_evt)
+    #         else:
+    #             elapsed_ms = (time.perf_counter() - t0) * 1e3
+    #         print(f"[Rank {dist.get_rank()}] Bucket {bucket.index()} "
+    #             f"all‑reduce took {elapsed_ms:.3f} ms")
+    #         # Be consistent with the default behavior of DDP: take the average
+    #         bucket.buffer().div_(pg.size())
+    #         return bucket.buffer()
+    #      # Return the Future containing _callback
+    #     return work.get_future().then(_callback)
+
+    # stage_mod.register_comm_hook(state={"pg": dp_group}, hook=timing_hook)
+
+    stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=0,
                             num_stages=world, device=device,
-                            group=dist.group.WORLD,
-                            prev_group=None, this_group=[0], next_group=[1,2])
-        
-    else:
-        dp_group = dist.new_group(ranks=[1, 2])
-        stage_mod = Part2(full)
-        stage_mod.to(device)
-        
-        #Using DDP as the data parallelism component of our frame
-        stage_mod = DDP(
-            stage_mod,
-            device_ids=None,        # CPU don' use device_ids
-            process_group=dp_group, # Used for local dp
-            find_unused_parameters=False,
-            init_sync = False,
-        )
-        
-        # #A hook for detailed output of allreduce
-        # def timing_hook(state, bucket: dist.GradBucket):
-        #     """
-        #     Put a dict in the state:
-        #         {"pg": dp_group, "use_cuda_event": True/False}
-        #     """
-        #     pg = state["pg"]
-        #     use_evt = bucket.buffer().is_cuda and state.get("use_cuda_event", True)
-        #     if use_evt:                    # GPU, timing with cudaEvent
-        #         start_evt = torch.cuda.Event(enable_timing=True)
-        #         end_evt   = torch.cuda.Event(enable_timing=True)
-        #         start_evt.record()
-        #     else:                          # CPU or not wanting to use Event
-        #         t0 = time.perf_counter()
-        #      # ------- key: specify group=pg ----------
-        #     work = dist.all_reduce(bucket.buffer(), group=pg, async_op=True)
-        #     def _callback(fut):
-        #          # timing
-        #         if use_evt:
-        #             end_evt.record()
-        #             end_evt.synchronize()
-        #             elapsed_ms = start_evt.elapsed_time(end_evt)
-        #         else:
-        #             elapsed_ms = (time.perf_counter() - t0) * 1e3
-        #         print(f"[Rank {dist.get_rank()}] Bucket {bucket.index()} "
-        #             f"all‑reduce took {elapsed_ms:.3f} ms")
-        #         # Be consistent with the default behavior of DDP: take the average
-        #         bucket.buffer().div_(pg.size())
-        #         return bucket.buffer()
-        #      # Return the Future containing _callback
-        #     return work.get_future().then(_callback)
-    
-        # stage_mod.register_comm_hook(state={"pg": dp_group}, hook=timing_hook)
-    
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=1,
-                                num_stages=world, device=device,
-                                group=dist.group.WORLD,  # Used for world pp 
-                                prev_group=[0], this_group=[1,2], next_group=None)
+                            group=dist.group.WORLD,  # Used for world pp 
+                            prev_group=None, this_group=[0, 1, 2], next_group=None)
     
     del full                        
     import gc; gc.collect()
@@ -254,7 +252,7 @@ def main():
     ds.set_format("torch", columns=["input_ids", "labels"])
     
     batch_size = args.batch_size
-    microbatch_num = args.microbatch_num
+    microbatch_num = 3
     
     if rank == 0:
         loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
@@ -262,14 +260,26 @@ def main():
     def loss_fn(output, target):
         if output is None or target is None:
             return None
+
         vocab_size = output.size(-1)
-        output = output[:, :-1, :].reshape(-1, vocab_size)
-        target = target[:, 1:].reshape(-1)
+
+        if output.dim() == 3:
+            # output: (B, T, V), target: (B, T)
+            output = output[:, :-1, :].reshape(-1, vocab_size)
+            target = target[:, 1:].reshape(-1)
+        elif output.dim() == 2:
+            # output: (B*T, V), target: (B*T)
+            output = output.reshape(-1, vocab_size)
+            target = target.reshape(-1)
+        else:
+            raise ValueError(f"[loss_fn] Unexpected output shape: {output.shape}")
+
         return F.cross_entropy(output, target)
+
 
     
     sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=microbatch_num, loss_fn=loss_fn, root_pass=args.sudo_pass)
-    actions = create_pipeline_actions()
+    actions = create_pipeline_actions(upstream=args.upstream)
     sched._load_actions(actions, format="compute_comms")
     
     opt = optim.Adam(stage_mod.parameters(), lr=1e-4)            

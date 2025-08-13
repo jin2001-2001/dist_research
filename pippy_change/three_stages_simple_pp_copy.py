@@ -23,110 +23,99 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
 from simple_1F1B_Action import generate_1f1b_pipeline_actions
 
-class Part1(nn.Module):  # rank 0
+# -------- 共用工具 --------
+def build_attn_mask(bsz: int, seqlen: int, device: torch.device) -> torch.Tensor:
+    attn = torch.full((seqlen, seqlen), float("-inf"), device=device)
+    attn = torch.triu(attn, 1)                                 # causal mask
+    return attn.unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
+
+# -------- Part-1 (rank 0)  embedding + layer-0 --------
+class Part1(nn.Module):
     def __init__(self, model):
         super().__init__()
         self.embed_tokens = model.model.embed_tokens
-        # self.layers = nn.ModuleList(model.model.layers[:7])  # 0-6
-        self.layers = nn.ModuleList(model.model.layers[:7])  # 0-6
-        self.rotary_emb = model.model.rotary_emb
+        self.layers       = nn.ModuleList(model.model.layers[:1])
+        self.rotary_emb   = model.model.rotary_emb              # 单实例
 
-    def forward(self, input_ids, position_offset=0):
+    def forward(self, input_ids):
         bsz, seqlen = input_ids.shape
-        device = input_ids.device
-        
-        # 为微批处理创建带偏移的位置 ID
-        position_ids = torch.arange(
-            position_offset, 
-            position_offset + seqlen, 
-            device=device
-        ).unsqueeze(0).expand(bsz, -1)
-        
-        hidden = self.embed_tokens(input_ids)
-        
-        # 为实际序列长度计算旋转编码
-        cos, sin = self.rotary_emb(hidden, position_ids)
+        device      = input_ids.device
+        pos_ids     = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1)
 
-        attn_mask = torch.triu(torch.full((seqlen, seqlen), float('-inf'), device=device), 1)
-        attn_mask = attn_mask.unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
+        hidden      = self.embed_tokens(input_ids)
+        cos, sin    = self.rotary_emb(hidden, pos_ids)          # 128 维
 
+        attn_mask   = build_attn_mask(bsz, seqlen, device)
         for layer in self.layers:
-            hidden = layer(hidden_states=hidden,
-                           attention_mask=attn_mask,
-                           position_ids=position_ids,
-                           position_embeddings=(cos,sin),
-                           output_attentions=False,
-                           use_cache=False)[0]
+            hidden = layer(
+                hidden_states      = hidden,
+                attention_mask     = attn_mask,
+                position_ids       = pos_ids,
+                position_embeddings=(cos, sin),                 # 不截断
+                output_attentions  = False,
+                use_cache          = False,
+            )[0]
 
-        return hidden.contiguous(), attn_mask.contiguous()
+        return hidden.contiguous(), attn_mask.contiguous()      # **不再返回 pos_ids**
 
-
-
-class Part2(nn.Module):  # rank 1
+# -------- Part-2 (rank 1)  layer-20 --------
+class Part2(nn.Module):
     def __init__(self, model):
         super().__init__()
-        self.layers = nn.ModuleList(model.model.layers[7:21])  # 7-21
-        self.rotary_emb = model.model.rotary_emb
-
-    def forward(self, hidden, attn_mask, position_offset=0):
-        bsz, seqlen = hidden.shape[:2]
-        device = hidden.device
-        
-        # 使用传播的位置偏移
-        position_ids = torch.arange(
-            position_offset,
-            position_offset + seqlen,
-            device=device
-        ).unsqueeze(0).expand(bsz, -1)
-        
-        cos, sin = self.rotary_emb(hidden, position_ids)
-
-        if attn_mask.dim() == 2:
-            attn_mask = torch.triu(torch.full((seqlen, seqlen), float('-inf'), device=device), 1)
-            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
-        elif not attn_mask.is_contiguous():
-            attn_mask = attn_mask.contiguous()
-
-        for layer in self.layers:
-            hidden = layer(hidden_states=hidden,
-                           attention_mask=attn_mask,
-                           position_ids=position_ids,
-                           position_embeddings=(cos, sin),
-                           output_attentions=False,
-                           use_cache=False)[0]
-        return hidden.contiguous(), attn_mask
-
-class Part3(nn.Module):  # rank 2
-    def __init__(self, model):
-        super().__init__()
-        self.layers = nn.ModuleList(model.model.layers[21:])  # 21-27
-        self.norm = model.model.norm
-        self.lm_head = model.lm_head
+        self.layers     = nn.ModuleList(model.model.layers[20:21])
         self.rotary_emb = model.model.rotary_emb
 
     def forward(self, hidden, attn_mask):
         bsz, seqlen = hidden.shape[:2]
-        device = hidden.device
-        position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1)
-        cos, sin = self.rotary_emb(hidden, position_ids)
+        device      = hidden.device
+        pos_ids     = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1)
+        cos, sin    = self.rotary_emb(hidden, pos_ids)
 
-        if attn_mask.dim() == 2:
-            attn_mask = torch.triu(torch.full((seqlen, seqlen), float('-inf'), device=device), 1)
-            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
-        elif not attn_mask.is_contiguous():
-            attn_mask = attn_mask.contiguous()
+        if attn_mask.dim() == 2:                                # 兼容上游简化 mask
+            attn_mask = build_attn_mask(bsz, seqlen, device)
 
         for layer in self.layers:
-            hidden = layer(hidden_states=hidden,
-                           attention_mask=attn_mask,
-                           position_ids=position_ids,
-                           position_embeddings=(cos, sin),
-                           output_attentions=False,
-                           use_cache=False)[0]
+            hidden = layer(
+                hidden_states      = hidden,
+                attention_mask     = attn_mask,
+                position_ids       = pos_ids,
+                position_embeddings=(cos, sin),
+                output_attentions  = False,
+                use_cache          = False,
+            )[0]
+
+        return hidden.contiguous(), attn_mask.contiguous()
+
+# -------- Part-3 (rank 2)  layer-26…norm + lm_head --------
+class Part3(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.layers     = nn.ModuleList(model.model.layers[26:])
+        self.norm       = model.model.norm
+        self.lm_head    = model.lm_head
+        self.rotary_emb = model.model.rotary_emb
+
+    def forward(self, hidden, attn_mask):
+        bsz, seqlen = hidden.shape[:2]
+        device      = hidden.device
+        pos_ids     = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1)
+        cos, sin    = self.rotary_emb(hidden, pos_ids)
+
+        if attn_mask.dim() == 2:
+            attn_mask = build_attn_mask(bsz, seqlen, device)
+
+        for layer in self.layers:
+            hidden = layer(
+                hidden_states      = hidden,
+                attention_mask     = attn_mask,
+                position_ids       = pos_ids,
+                position_embeddings=(cos, sin),
+                output_attentions  = False,
+                use_cache          = False,
+            )[0]
 
         hidden = self.norm(hidden)
-        return self.lm_head(hidden)  # logits
-
+        return self.lm_head(hidden)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--train_steps", type=int, default=None,

@@ -885,6 +885,26 @@ class Schedule1F1B(PipelineScheduleSingle):
         # Wait for the last backward send to finish
         _wait_batch_p2p(send_work)
 
+        
+        # === Compute global average loss for this training step ===
+        local_sum = torch.tensor(0.0)
+        local_cnt = torch.tensor(0, dtype=torch.long)
+
+        # 只有“包含最后一段”的 rank 才会在本地累到 loss
+        if self._stage.is_last and len(self._internal_losses) > 0:
+            # _internal_losses: {mb_index -> loss_tensor}
+            vals = [v if torch.is_tensor(v) else torch.tensor(float(v)) for v in self._internal_losses]
+            local_sum = torch.stack(vals).sum().to(torch.float32)
+            local_cnt = torch.tensor(len(vals), dtype=torch.long)
+
+        # 在 WORLD 维度做求和，再统一求均值
+        dist.all_reduce(local_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(local_cnt, op=dist.ReduceOp.SUM)
+
+        self.last_step_loss = (local_sum / local_cnt).item() if local_cnt.item() > 0 else None
+        # === End of loss aggregation ===
+        
+        
         # Return losses if there is a container passed in
         self._update_losses(self._stage, losses)
 
