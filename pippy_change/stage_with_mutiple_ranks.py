@@ -68,53 +68,71 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             kwargs = {}
         assert args is not None
 
-        if self.prev_group is None:  # first stage
-            if self.is_leader:
-                args = tree_map_only(torch.Tensor, lambda x: x.to("meta"), args)
+        # --- Common ---
+        dp_size = dist.get_world_size(self.dp_group)
+        is_multi_dp = dp_size > 1
+
+        # === 1) Handle inputs ===
+        if self.prev_group is None:
+            # First stage (pure DP or "first stage + DP")
+            if is_multi_dp:
+                if self.is_leader:
+                    meta_args = tree_map_only(torch.Tensor, lambda x: x.to("meta"), args)
+                    # Leader must also participate in the same broadcast
+                    dist.broadcast_object_list([meta_args], src=self.leader, group=self.dp_group)
+                    args = meta_args
+                else:
+                    buf = [None]
+                    dist.broadcast_object_list(buf, src=self.leader, group=self.dp_group)
+                    args = buf[0]
             else:
-                obj = [None]
-                dist.broadcast_object_list(obj, src=self.leader,
-                                            group=self.dp_group)
-                args = obj[0]
+                # dp_size == 1, no collectives needed
+                args = tree_map_only(torch.Tensor, lambda x: x.to("meta"), args)
         else:
+            # Non-first stage: receive from previous stage's leader, then DP-broadcast locally
             prev_leader = min(self.prev_group)
             if self.is_leader:
-                obj = [None]
-                dist.recv_object_list(obj, src=prev_leader)
-                args = obj[0]
-                dist.broadcast_object_list([args], src=self.leader,
-                                            group=self.dp_group)
+                buf = [None]
+                dist.recv_object_list(buf, src=prev_leader)  # world group
+                args = buf[0]
+                # Safety: ensure meta in case upstream sent real tensors by mistake
+                args = tree_map_only(torch.Tensor, lambda x: x.to("meta"), args)
+                if is_multi_dp:
+                    dist.broadcast_object_list([args], src=self.leader, group=self.dp_group)
             else:
-                obj = [None]
-                dist.broadcast_object_list(obj, src=self.leader,
-                                            group=self.dp_group)
-                args = obj[0]
+                if is_multi_dp:
+                    buf = [None]
+                    dist.broadcast_object_list(buf, src=self.leader, group=self.dp_group)
+                    args = buf[0]
+                else:
+                    # dp_size == 1 and not leader cannot happen
+                    raise RuntimeError("Unexpected non-leader with dp_size==1")
 
-        # cache & dummy zero tensor
+        # Basic sanity
+        assert isinstance(args, tuple), f"shape-infer args must be tuple, got {type(args)}"
+
+        # === 2) Cache inputs & run a dummy forward on zeros to compute outputs' shapes ===
         self.inputs_meta = args
-        args = tree_map_only(torch.Tensor,
-                             lambda x: torch.zeros_like(x, device=self.device),
-                             args)
+        args = tree_map_only(torch.Tensor, lambda x: torch.zeros_like(x, device=self.device), args)
 
         with torch.no_grad():
             outputs = self.submod(*args, **kwargs)
         if isinstance(outputs, torch.Tensor):
             outputs = [outputs]
-        outputs_meta = tuple(tree_map_only(torch.Tensor,
-                                           lambda x: x.to("meta"),
-                                           outputs))
+        outputs_meta = tuple(tree_map_only(torch.Tensor, lambda x: x.to("meta"), outputs))
         self._configure_outputs_meta(outputs_meta)
 
+        # === 3) Send to next stage (only leader), and DP-broadcast locally for consistency ===
         if self.next_group is not None:
             next_leader = min(self.next_group)
             if self.is_leader:
-                dist.send_object_list([outputs_meta], dst=next_leader)
+                dist.send_object_list([outputs_meta], dst=next_leader)  # world group
 
-        dist.broadcast_object_list([outputs_meta], src=self.leader,
-                                   group=self.dp_group)
+        if is_multi_dp:
+            dist.broadcast_object_list([outputs_meta], src=self.leader, group=self.dp_group)
 
         return outputs_meta
-    
+
     
     
     def _get_recv_ops(
@@ -341,29 +359,65 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         - `kwargs` can be passed to all stages via respective `step` calls.
         """
 
-        if args:
-            # First stage doesn't need to receive anything
-            composite_args = args
+
+        def _is_first_stage_dp(self):
+            try:
+                dp_size = dist.get_world_size(self.dp_group)
+            except Exception:
+                dp_size = 1
+            return (self.prev_group is None) and (dp_size > 1)
+
+        need_rt_bcast = _is_first_stage_dp(self)
+
+        composite_args = None
+
+        if need_rt_bcast:
+            if self.is_leader:
+                if not args or len(args) == 0:
+                    raise RuntimeError(
+                        f"[rank{dist.get_rank()}] First-stage leader got empty args at "
+                        f"fwd_chunk_id={fwd_chunk_id}. Scheduler must pass root inputs to leader."
+                    )
+                dist.broadcast_object_list([args], src=self.leader, group=self.dp_group)
+                composite_args = args
+            else:
+                buf = [None]
+                dist.broadcast_object_list(buf, src=self.leader, group=self.dp_group)
+                composite_args = buf[0]
+
         else:
-            # Receive activations for this chunk
-            # Activations only come in args form
-            composite_args = self._retrieve_recv_activations(fwd_chunk_id)
+            if args:
+                composite_args = args
+            else:
+                composite_args = self._retrieve_recv_activations(fwd_chunk_id)
+
+        if composite_args is None or len(composite_args) == 0:
+            raise RuntimeError(
+                f"[rank{dist.get_rank()}] Empty composite_args after dispatch at "
+                f"stage={self.stage_index}, fwd_chunk_id={fwd_chunk_id}, "
+                f"is_first={self.prev_group is None}."
+            )
+
 
         composite_kwargs = kwargs or {}
 
-        if pack_size > 1 and len(args) and isinstance(args[0], torch.Tensor):
-            mb_bs = args[0].shape[0] // pack_size
+        if (
+            pack_size > 1
+            and composite_args
+            and isinstance(composite_args[0], torch.Tensor)
+        ):
+            mb_bs = composite_args[0].shape[0] // pack_size
             args_for_val = tuple(
-                t[:mb_bs] if isinstance(t, torch.Tensor) else t
-                for t in args
+                (t[:mb_bs] if isinstance(t, torch.Tensor) else t)
+                for t in composite_args
             )
             kwargs_for_val = {
                 k: (v[:mb_bs] if isinstance(v, torch.Tensor) else v)
-                for k, v in kwargs.items()
+                for k, v in composite_kwargs.items()
             }
         else:
-            args_for_val = args
-            kwargs_for_val = kwargs
+            args_for_val = composite_args
+            kwargs_for_val = composite_kwargs
 
         self._validate_fwd_input(args_for_val, kwargs_for_val)
 
@@ -550,8 +604,16 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                 "input_values": input_values,
             }
         else:
-            # Otherwise, receive gradients from next stage
+             # Otherwise, receive gradients from next stage
             grads_output = self._retrieve_recv_grads(bwd_chunk_id)
+
+            # === NEW (Plan B): average upstream grads across the next stage's DP replicas ===
+            # If the next stage has N data-parallel members (len(self.next_group) == N),
+            # each sender contributed a local gradient. To keep "mean loss" semantics,
+            # divide by N on the receiver before autograd.backward.
+            grads_output = self._avg_next_stage_grads(grads_output)
+            # === END NEW ===
+
             # If an input to the pipeline requires gradient,
             # `torch.autograd.backward` will accumulate the gradient into the
             # `.grad` field of such input
@@ -621,15 +683,70 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         logger.debug("%s Backwarded chunk %s", self.log_prefix, bwd_chunk_id)
         
-        # 在 PipelineStage_with_mutiple_ranks 类里补一个简单 wrap
-    # def _retrieve_recv_grads(self, bwd_chunk_id: int):
-    #     grads = super()._retrieve_recv_grads(bwd_chunk_id)
+    
+    def _avg_next_stage_grads(self, grads):
+        """
+        Average upstream gradients received from the *next* stage across its DP replicas.
 
-    #     if grads and isinstance(grads[0], torch.Tensor):
-    #         try:
-    #             print(f"[Rank {dist.get_rank()}] RECV_B {bwd_chunk_id} "
-    #                 f"grad shape {list(grads[0].shape)} "
-    #                 f"(stage_idx={self.stage_index})")
-    #         except Exception:
-    #             pass
-    #     return grads
+        Why:
+        - If the next stage is data-parallel over N ranks (len(self.next_group) == N),
+            each rank sends its *local* gradient dL/d(out). Summing those locally on this stage
+            would implement "sum loss" semantics. To keep the common "mean loss" semantics while
+            keeping LR unchanged, we should divide the received gradients by N before calling
+            autograd.backward on this stage.
+
+        Behavior:
+        - No-op when there is no next stage (last stage) or N <= 1.
+        - Supports Tensor / list / tuple / None (None is passed through).
+        - In-place scaling is used to avoid extra allocations.
+        """
+        import torch
+        import torch.distributed as dist
+
+        fan_in = len(self.next_group) if self.next_group is not None else 1
+        if grads is None or fan_in <= 1:
+            return grads
+
+        # Helper to scale a single item
+        def _scale_one(x):
+            if x is None:
+                return None
+            if isinstance(x, torch.Tensor):
+                # in-place division; safe for gradient tensors
+                return x.div_(fan_in)
+            return x  # for unexpected types we leave as-is
+
+        # Compute a small debug metric before scaling (leader only) 
+        pre_max = None
+        try:
+            if self.is_leader:
+                if isinstance(grads, (list, tuple)) and len(grads) > 0 and isinstance(grads[0], torch.Tensor):
+                    pre_max = grads[0].abs().max().item()
+                elif isinstance(grads, torch.Tensor):
+                    pre_max = grads.abs().max().item()
+        except Exception:
+            pre_max = None
+
+        # Apply scaling to common containers
+        if isinstance(grads, list):
+            out = [_scale_one(g) for g in grads]
+        elif isinstance(grads, tuple):
+            out = tuple(_scale_one(g) for g in grads)
+        else:
+            out = _scale_one(grads)
+
+        # Debug print after scaling (leader only)
+        if self.is_leader and pre_max is not None:
+            try:
+                post_max = (
+                    (out[0].abs().max().item() if isinstance(out, (list, tuple)) else out.abs().max().item())
+                )
+                # print(
+                #     f"[{dist.get_rank()}] AVG upstream grads by 1/{fan_in} "
+                #     f"(stage_idx={self.stage_index}) -> max|g| {pre_max:.6f} -> {post_max:.6f}"
+                # )
+            except Exception:
+                pass
+
+        return out
+

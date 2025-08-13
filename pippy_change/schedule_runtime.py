@@ -232,6 +232,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         self._internal_losses: dict[int, torch.Tensor] = {}
         self.last_backward = False
         self.grad_recv_info_copy = None
+        self.last_step_loss = None
+        
+        self._big_fwd_cache: dict[tuple[int, int], tuple[tuple[torch.Tensor, ...], list[torch.Tensor]]] = {}
         
         global ROOT_PASS
         ROOT_PASS = root_pass
@@ -251,7 +254,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
     def _maybe_get_loss(self, stage, mb_index):
         if stage.is_last and self._has_backward:
             if mb_index in self._internal_losses:
-                return self._internal_losses.pop(mb_index)
+                return self._internal_losses[mb_index]
             else:
                 raise RuntimeError(
                     f"Loss for microbatch {mb_index} is not available. "
@@ -392,7 +395,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         
         current_batch = self._global_batch
         self._global_batch += 1
-
+        
         # record_this_batch = (
         #     self._profile_batch is not None                   
         #     and current_batch == self._profile_batch        
@@ -405,13 +408,13 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         arg_mbs, kwarg_mbs = self._check_inputs(arg_mbs, kwarg_mbs, target_mbs, losses)
         if not self._stages_initialized:
             self._initialize_stages(arg_mbs[0], kwarg_mbs[0])
-
+        
         # Based on the plan in Step 1 created in __init__:
         # 2. Perform communication based on the pipeline_order
         stage_index_to_stage: dict[int, schedule._PipelineStageBase] = {
             stage.stage_index: stage for stage in self._stages
         }
-
+        
         assert self.pipeline_order_with_comms is not None, (
             "Must call _load_actions() before calling _step_microbatches()"
         )
@@ -436,7 +439,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
             assert stage_idx in unsharded_stages, (
                 f"Attempted to compute on sharded {stage_idx=}"
             )
-        
+
         # count either full_backward or backward_weight together, to determine when to sync DP grads
         backward_counter: Counter[int] = Counter()
         for time_step, action in enumerate(self.pipeline_order_with_comms[self.rank]):
@@ -500,14 +503,14 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}")
                     
                     #record time in SEND_F and SEND_B
-                    start_ns = time.time_ns()
+                    #start_ns = time.time_ns()
                     ops = (
                         stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
                         if rank is not None and dest_rank is not None
                         else stage.get_fwd_send_ops(mb_index)
                     )
                     works = schedule._batch_p2p(ops)
-                    self._rec.record_async(current_batch+1,action_id,"SEND_F", stage_idx, mb_index, works, start_ns)
+                    #self._rec.record_async(current_batch+1,action_id,"SEND_F", stage_idx, mb_index, works, start_ns)
                     send_ops.append(works)
 
                 elif comp_type == SEND_B:
@@ -518,14 +521,14 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_B microbatch {mb_index}")
                     
                     #record time in SEND_F and SEND_B
-                    start_ns = time.time_ns()
+                    #start_ns = time.time_ns()
                     ops = (
                         stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
                         if rank is not None and dest_rank is not None
                         else stage.get_bwd_send_ops(mb_index)
                     )
                     works = schedule._batch_p2p(ops)     
-                    self._rec.record_async(current_batch+1,action_id,"SEND_B", stage_idx, mb_index, works, start_ns)
+                    #self._rec.record_async(current_batch+1,action_id,"SEND_B", stage_idx, mb_index, works, start_ns)
                     send_ops.append(works)
 
 
@@ -650,10 +653,16 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         self._pack_groups[g_id] = len(mb_ids)
                         for mid in mb_ids:
                             self._mb_to_group[(stage_idx, mid)] = g_id
+                            
                     
                     with self._rec.record(current_batch+1,action_id,"FORWARD", stage_idx, mb_ids):
                         output = stage.forward_one_chunk(rep_id, cat_args, cat_kwargs, len(mb_ids))
                     
+                    big_key = (stage_idx, rep_id)
+                    big_entry = stage.fwd_cache.get(rep_id)
+                    assert big_entry is not None, f"missing big forward entry for stage {stage_idx}, mb {rep_id}"
+                    self._big_fwd_cache[big_key] = big_entry
+
                     
                     # Split output
                     if isinstance(output, tuple):
@@ -721,51 +730,59 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             outputs, inputs = stage.fwd_cache[mid]
 
                 elif comp_type == FULL_BACKWARD:
-                    mb_ids: Tuple[int, ...] = (mb_field,) if isinstance(mb_field, int) else tuple(mb_field)
+                    mb_ids = (mb_field,) if isinstance(mb_field, int) else tuple(mb_field)
                     rep_id = mb_ids[0]
                     print(f"[{dist.get_rank()}]: batch {current_batch+1} FULL_BACKWARD microbatch {mb_ids}")
+
+                    # ===== 与你现有的一致：检查 pack 组完全一致 =====
+                    # （你的前置 pack 校验逻辑保留，这里略）
 
                     if stage_uses_fsdp:
                         _assert_unsharded(stage_idx)
 
+                    # 如果上游在别的 rank，先等 grad recv
                     if not stage.is_last and not is_next_stage_on_this_rank:
                         for mid in mb_ids:
                             key = (stage_idx, mid)
                             if key in bwd_recv_ops:
                                 schedule._wait_batch_p2p(bwd_recv_ops.pop(key))
 
-                    fwd_out_lst, fwd_in_lst, loss_lst, grad_out_lst = [], [], [], []
+                    # === 关键改动从这里开始 ===
+
+                    # 1) 先把各 mid 的 per-mb fwd_cache 清掉（这里只清 per-mb 的，不动 rep_id）
                     for mid in mb_ids:
-                        out, ins = stage.fwd_cache.pop(mid)
-                        fwd_out_lst.append(out)
-                        fwd_in_lst.append(ins)
-                        if stage.is_last:
-                            loss_lst.append(self._maybe_get_loss(stage, mid))      # 0-dimensional scalar
-                        else:
-                            grad_out_lst.append(stage._retrieve_recv_grads(mid))
+                        stage.fwd_cache.pop(mid, None)
 
-                    cat_fwd_out = _cat_like(fwd_out_lst)
-                    cat_fwd_in  = _cat_like(fwd_in_lst)
-                    cat_loss    = _cat_like(loss_lst).mean() if stage.is_last else None
-                    cat_gradout = _cat_like(grad_out_lst)   if not stage.is_last else None
+                    # 2) 取出“前向真正使用的大条目” big_entry
+                    big_key   = (stage_idx, rep_id)
+                    big_entry = self._big_fwd_cache.pop(big_key, None)
+                    if big_entry is None:
+                        # 兜底：直接从 fwd_cache 里拿 rep_id（正常情况下应该有）
+                        big_entry = stage.fwd_cache.get(rep_id)
+                    assert big_entry is not None, f"big forward entry missing for {big_key}"
 
-                    # Put the "big" forward result back into the cache for backward_one_chunk to read
-                    stage.fwd_cache[rep_id] = (cat_fwd_out, cat_fwd_in)
+                    big_out_tuple, big_flat_inputs = big_entry
 
-                    # pack‑group report
-                    if len(mb_ids) > 1:
-                        g_id = (stage_idx, rep_id)
-                        self._pack_groups[g_id] = len(mb_ids)
-                        for m in mb_ids:
-                            self._mb_to_group[(stage_idx, m)] = g_id
+                    # 3) 取 loss 或下游梯度（非最后一段）
+                    if stage.is_last:
+                        # 你原有逻辑：mb 的 loss 平均/求和等
+                        loss_lst = [ self._maybe_get_loss(stage, mid) for mid in mb_ids ]
+                        cat_loss = _cat_like(loss_lst).mean()
+                        cat_gradout = None
+                    else:
+                        grad_out_lst = [ stage._retrieve_recv_grads(mid) for mid in mb_ids ]
+                        cat_loss = None
+                        cat_gradout = _cat_like(grad_out_lst)
+
+                    # 4) 把“前向大条目”放回 fwd_cache[rep_id]，交给 backward_one_chunk 使用
+                    stage.fwd_cache[rep_id] = (big_out_tuple, big_flat_inputs)
 
                     backward_counter[stage_idx] += 1
                     self.last_backward = backward_counter[stage_idx] == local_bwd_budget[stage_idx]
-
                     if not stage.is_last:
                         stage.set_local_bwd_input(cat_gradout, rep_id)
 
-                    with self._rec.record(current_batch+1,action_id,"FULL_BACKWARD", stage_idx, mb_ids):
+                    with self._rec.record(current_batch+1, action_id, "FULL_BACKWARD", stage_idx, mb_ids):
                         stage.backward_one_chunk(
                             rep_id,
                             loss=cat_loss,
@@ -774,21 +791,16 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             retain_graph_for_packed_mbs=False,
                         )
 
-                    # Split gradient
+                    # 5) 从 bwd_cache 取回“大输入的梯度”，用“前向大输入”的形状/结构补齐 None
                     big_grads_in = stage.bwd_cache.pop(rep_id)
+                    big_grads_in = _fill_grads_like(big_flat_inputs, big_grads_in)  # ← 修改：用 big_flat_inputs，而不是再去 fwd_cache 取
 
-                    # A Recursively complete the None gradients / None → zeros_like
-                    _, ref_inputs = stage.fwd_cache.get(rep_id, (None, None))
-                    if ref_inputs is None and fwd_in_lst:
-                        ref_inputs = fwd_in_lst[0]
-                    big_grads_in = _fill_grads_like(ref_inputs, big_grads_in)
-
-                    # split
+                    # 6) 再把“大输入梯度”按 mb 切回去，放回各 mid
                     split_grads = _chunk_like(big_grads_in, len(mb_ids))
                     for mid, g in zip(mb_ids, split_grads):
                         stage.bwd_cache[mid] = g
 
-                    # If the upstream stage is the same as this rank, the gradient will be directly transmitted locally
+                    # 7) 同 rank 的上游直接本地传递
                     if is_prev_stage_on_this_rank:
                         for mid in mb_ids:
                             stage_index_to_stage[stage_idx - 1].set_local_bwd_input(
@@ -797,7 +809,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
                     if self.last_backward:
                         grad_scale_factor = backward_counter.total() if self.scale_grads else 1
-                        stage.scale_grads(grad_scale_factor)                 
+                        stage.scale_grads(grad_scale_factor)
+                                
                         
                 elif comp_type == BACKWARD_INPUT:
                     if stage_uses_fsdp:
@@ -866,7 +879,29 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
         assert len(unshard_ops) == 0, "Unused unshard operations"
 
+                
+        # === Compute global average loss for this training step ===
+        local_sum = torch.tensor(0.0)
+        local_cnt = torch.tensor(0, dtype=torch.long)
 
+        # 只有“包含最后一段”的 rank 才会在本地累到 loss
+        if any(stage.is_last for stage in self._stages) and len(self._internal_losses) > 0:
+            # _internal_losses: {mb_index -> loss_tensor}
+            vals = [v if torch.is_tensor(v) else torch.tensor(float(v)) for v in self._internal_losses.values()]
+            local_sum = torch.stack(vals).sum().to(torch.float32)
+            local_cnt = torch.tensor(len(vals), dtype=torch.long)
+
+        # 在 WORLD 维度做求和，再统一求均值
+        dist.all_reduce(local_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(local_cnt, op=dist.ReduceOp.SUM)
+
+        self.last_step_loss = (local_sum / local_cnt).item() if local_cnt.item() > 0 else None
+        # === End of loss aggregation ===
+
+        
+        
+        
+        
         self._update_losses(self._stages, losses)
         
         if (
@@ -887,6 +922,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         self._internal_losses.clear()
         self._pack_groups.clear()
         self._mb_to_group.clear()
+        self._big_fwd_cache.clear() 
 
         for stage in self._stages:
             stage.fwd_cache.clear()
