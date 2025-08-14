@@ -42,6 +42,7 @@ python aggregate_capacities.py \
 
 * 输出 `capacities.json` 里是 `capacity[host]`，定义为：**参考机**每层前向时间 / 本机每层前向时间 的中位数。
 * 之后延迟函数会按 `tf_ref/capacity[host]`、`tb_ref/capacity[host]` 进行**纯测量比例缩放**（无估值公式）。
+* `aggregate_capacities.py` 里算出来的 `capacity[host]` 不是论文里的 $v_d$。它是一个**跨机器“速度缩放因子”**，用来把“参考机器的逐层时延曲线”映射到其他机器上，好让 `latency_of_layer(dev, layer, B)` 能在**不重复逐层建模**的前提下给出每台机器的层时延。
 
 ---
 

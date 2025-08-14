@@ -21,203 +21,108 @@ class Device:
     memory_budget: int
     capacity: float
 
-
 def allocate_microbatch_samples(
-    devices: List[Device],
+    group: List["Device"],
     micro_batch_size: int,
-    memory_of: Callable[[Device, int], int],
-    latency_of: Callable[[Device, int], float],
+    mem_of: Callable[["Device", int], int],
+    lat_of: Callable[["Device", int], float],
     block_size: int = 1,
 ) -> Dict[str, int]:
-    """
-    Allocate the samples of one micro-batch across a heterogeneous device group
-    under per-device memory budgets, following Algorithm 1.
-
-    Parameters
-    ----------
-    devices : List[Device]
-        The device group G_s of this execution step. Each device provides
-        its memory budget and capacity v_d.
-    micro_batch_size : int
-        The size B of the (single) micro-batch to be allocated.
-    memory_of : Callable[[Device, int], int]
-        Peak memory function for this step: given a device and the number of
-        samples y allocated to that device, return the peak memory footprint
-        Mem_s(y) on that device. Must be monotonic non-decreasing in y.
-    latency_of : Callable[[Device, int], float]
-        Execution latency function for this step: given a device and the number
-        of samples y allocated to that device, return the FP+BP time on that
-        device (used to detect the straggler).
-    block_size : int, optional (default=1)
-        The unit “block” moved per iteration during straggler offloading.
-        Increase to reduce planning overhead at the cost of coarser balancing.
-
-    Returns
-    -------
-    Dict[str, int]
-        Allocation Y_s as a mapping: device_name -> samples (y_d), with
-        sum(y_d) == micro_batch_size.
-
-    Raises
-    ------
-    ValueError
-        If the micro-batch cannot fit into the group memory budgets (i.e.,
-        sum(max_batch_size_under_budget(d)) < B).
-
-    Notes
-    -----
-    - Phase 1 (MemoryAwareBalancing): proportional to capacity within memory.
-    - Phase 2 (StragglerWorkloadOffloading): iteratively move blocks from the
-      slowest device to the fastest device that still has memory headroom,
-      while the slowest device’s latency improves.
-    """
-    # ---- helpers -------------------------------------------------------------
-
-    def max_batch_size_under_budget(d: Device) -> int:
-        """Binary search the maximum y such that memory_of(d, y) <= d.memory_budget."""
-        lo, hi = 0, micro_batch_size  # never need > B on a single device
+    def max_batch_size_under_budget(d: "Device") -> int:
+        lo, hi = 0, micro_batch_size
         while lo < hi:
             mid = (lo + hi + 1) // 2
-            if memory_of(d, mid) <= d.memory_budget:
+            if mem_of(d, mid) <= d.memory_budget:
                 lo = mid
             else:
                 hi = mid - 1
         return lo
 
-    # Pre-check feasibility: total capacity under memory budgets must hold B
-    if sum(max_batch_size_under_budget(d) for d in devices) < micro_batch_size:
-        raise ValueError("Insufficient memory across devices to place the micro-batch.")
+    def memory_aware_balancing(group: List["Device"], beta: int, y: Dict[str, int]) -> None:
+        remaining = beta
+        while remaining > 0:
+            headroom: Dict[str, int] = {}
+            caps: Dict[str, float] = {}
+            total_cap = 0.0
 
-    # The allocation to build.
-    y: Dict[str, int] = {d.name: 0 for d in devices}
-
-    # For convenience maps
-    dev_by_name = {d.name: d for d in devices}
-
-    # ---- Phase 1: Memory-Aware Balancing -----------------------------------
-    def memory_aware_balancing(group: List[Device], beta: int) -> None:
-        """
-        Recursively distribute 'beta' samples across 'group' by proportional
-        capacity while respecting each device's remaining memory headroom.
-
-        Parameters
-        ----------
-        group : List[Device]
-            Current device subset with remaining memory headroom.
-        beta : int
-            Unallocated sample count to place in this recursion.
-        """
-        if not group and beta > 0:
-            # Exit with Fail (T = +inf in paper). Here we raise to surface it.
-            raise ValueError("No devices left but still have samples to allocate.")
-        if beta == 0:
-            return
-
-        # Compute total capacity only over devices that still can take >0 samples.
-        caps = {}
-        total_cap = 0.0
-        headroom: Dict[str, int] = {}
-        for d in group:
-            bs_total = max_batch_size_under_budget(d)
-            avail = bs_total - y[d.name]
-            if avail > 0:
-                headroom[d.name] = avail
-                caps[d.name] = d.capacity
-                total_cap += d.capacity
-
-        if total_cap == 0.0:
-            # No headroom anywhere but beta > 0 -> impossible
-            raise ValueError("No remaining memory headroom for allocation.")
-
-        # First pass: floor of proportional shares, clipped by headroom
-        allocated_this_round = 0
-        remainders: List[tuple[str, float]] = []
-        for d in group:
-            avail = headroom.get(d.name, 0)
-            if avail <= 0:
-                continue
-            ideal = beta * (caps[d.name] / total_cap)
-            take = min(int(ideal), avail)
-            y[d.name] += take
-            allocated_this_round += take
-            remainders.append((d.name, ideal - int(ideal)))
-
-        # Greedy distribute leftovers by fractional remainder, still respecting headroom
-        leftover = beta - allocated_this_round
-        if leftover > 0:
-            for dname, _rem in sorted(remainders, key=lambda x: x[1], reverse=True):
-                if leftover == 0:
-                    break
-                avail = headroom[dname] - (y[dname] - (max_batch_size_under_budget(dev_by_name[dname]) - headroom[dname]))
-                # Above: compute per-device take in this round as y_now - y_before; re-derive residual headroom
-                # Simpler: recompute headroom fresh:
-                avail = max_batch_size_under_budget(dev_by_name[dname]) - y[dname]
+            for d in group:
+                bs_total = max_batch_size_under_budget(d)
+                avail = bs_total - y[d.name]
                 if avail > 0:
-                    y[dname] += 1
-                    leftover -= 1
+                    headroom[d.name] = avail
+                    v_d = 1.0 / max(1e-9, lat_of(d, micro_batch_size))
+                    caps[d.name] = v_d
+                    total_cap += v_d
 
-        # Recurse with unallocated portion on devices that still have headroom
-        beta_prime = beta - (beta - leftover)
-        if leftover > 0:
-            next_group = [d for d in group if (max_batch_size_under_budget(d) - y[d.name]) > 0]
-            memory_aware_balancing(next_group, leftover)
+            if not headroom:
+                raise ValueError("Micro-batch cannot fit into the group's memory budgets.")
 
-    # Kick off Phase 1
-    memory_aware_balancing(devices, micro_batch_size)
+            alloc_floor: Dict[str, int] = {name: 0 for name in headroom}
+            frac_part: Dict[str, float] = {name: 0.0 for name in headroom}
+            assigned = 0
+            if total_cap > 0.0:
+                for name, v_d in caps.items():
+                    share = remaining * (v_d / total_cap)
+                    base = int(share)  # floor
+                    give = min(base, headroom[name])
+                    alloc_floor[name] = give
+                    frac_part[name] = share - base
+                    assigned += give
 
-    # ---- Phase 2: Straggler Workload Offloading -----------------------------
-    def straggler_workload_offloading() -> None:
-        """
-        Iteratively move 'block_size' samples from the slowest device to the
-        fastest device that still has memory headroom, as long as the slowest
-        device's latency strictly improves after the move.
-        """
-        # initial ordering by current latency with Y_s
-        def dev_latency(d: Device) -> float:
-            return latency_of(d, y[d.name])
+            remaining_after_floor = remaining - assigned
 
-        # Pre-sort (ascending latency: fastest first)
-        group_sorted = sorted(devices, key=dev_latency)
-        if not group_sorted:
-            return
+            if remaining_after_floor > 0:
+                order = sorted(frac_part.items(), key=lambda kv: kv[1], reverse=True)
+                for name, _ in order:
+                    if remaining_after_floor == 0:
+                        break
+                    if alloc_floor[name] < headroom[name]:
+                        alloc_floor[name] += 1
+                        remaining_after_floor -= 1
+
+
+            for name, add in alloc_floor.items():
+                y[name] += add
+
+            remaining = remaining_after_floor
+
+           
+    def straggler_workload_offloading(group: List["Device"], y: Dict[str, int]) -> None:
+        def time_of(d: "Device", yd: int) -> float:
+            return 0.0 if yd <= 0 else lat_of(d, yd)
 
         while True:
-            # Identify current straggler (slowest device) and its latency
-            old_straggler = max(group_sorted, key=dev_latency)
-            old_slowest_latency = dev_latency(old_straggler)
+            times = [(d, time_of(d, y[d.name])) for d in group]
+            times.sort(key=lambda t: t[1], reverse=True)
+            slow_dev, slow_t = times[0]
+            recv_candidates = [t[0] for t in reversed(times) if max_batch_size_under_budget(t[0]) - y[t[0].name] >= block_size]
+            if not recv_candidates or y[slow_dev.name] < block_size:
+                break
+            fast_dev = recv_candidates[0]
 
-            # Pick the fastest device with enough headroom to receive one block
-            recipient = None
-            for cand in group_sorted:  # ascending latency
-                if cand.name == old_straggler.name:
-                    continue
-                if (y[cand.name] + block_size) <= max_batch_size_under_budget(cand):
-                    recipient = cand
-                    break
+            move = min(block_size, y[slow_dev.name], max_batch_size_under_budget(fast_dev) - y[fast_dev.name])
+            if move <= 0:
+                break
+            y[slow_dev.name] -= move
+            y[fast_dev.name] += move
 
-            # No valid recipient or nothing to move
-            if recipient is None or y[old_straggler.name] <= 0:
+
+            new_slow_t = max(time_of(d, y[d.name]) for d in group)
+            if new_slow_t >= slow_t - 1e-12:
+
+                y[slow_dev.name] += move
+                y[fast_dev.name] -= move
                 break
 
-            # Apply the transfer
-            move = min(block_size, y[old_straggler.name])
-            y[old_straggler.name] -= move
-            y[recipient.name] += move
+    if micro_batch_size <= 0:
+        return {d.name: 0 for d in group}
 
-            # Re-order and check improvement
-            group_sorted = sorted(devices, key=dev_latency)
-            new_straggler = max(group_sorted, key=dev_latency)
-            new_slowest_latency = dev_latency(new_straggler)
+    y: Dict[str, int] = {d.name: 0 for d in group}
 
-            # Continue only if slowest improved; otherwise revert and stop
-            if new_slowest_latency >= old_slowest_latency:
-                y[old_straggler.name] += move
-                y[recipient.name] -= move
-                break
+    memory_aware_balancing(group, micro_batch_size, y)
 
-    # Run Phase 2
-    straggler_workload_offloading()
+    straggler_workload_offloading(group, y)
 
-    # Final sanity
-    assert sum(y.values()) == micro_batch_size, "Allocation does not sum to B."
+    assert sum(y.values()) == micro_batch_size, f"Allocation sum {sum(y.values())} != B {micro_batch_size}"
     return y
+
