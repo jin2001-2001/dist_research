@@ -152,6 +152,8 @@ parser.add_argument("--microbatch_num", type=int,
                     help="Micro-batch number (the environment variable MICROBATCH_NUM can be overridden)")
 parser.add_argument("--sudo_pass", default=os.getenv("SUDO_PASS"),
                     help='Write the password of root')
+parser.add_argument("--upstream", default=os.getenv("upstream"),
+                    help='Write the upstream in mbps')
 args = parser.parse_args()
 def main():
 
@@ -244,7 +246,7 @@ def main():
 
     
     sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=microbatch_num, loss_fn=loss_fn, root_pass=args.sudo_pass)
-    actions = generate_1f1b_pipeline_actions(num_stages= 6, num_microbatches= 8, upstream = 50)
+    actions = generate_1f1b_pipeline_actions(num_stages= 6, num_microbatches= 8, upstream = args.upstream)
     sched._load_actions(actions, format="compute_comms")
     
     opt = optim.Adam(stage_mod.parameters(), lr=1e-4)            
