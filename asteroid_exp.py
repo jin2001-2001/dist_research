@@ -178,35 +178,35 @@ def main():
     elif rank == 1:
         stage_mod = Part1(full)
         stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=0,
+        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=1,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
                             prev_group=[0], this_group=[1], next_group=[2])
     elif rank == 2:
         stage_mod = Part2(full)
         stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=0,
+        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=2,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
                             prev_group=[1], this_group=[2], next_group=[3])
     elif rank == 3:
         stage_mod = Part3(full)
         stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=0,
+        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=3,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
                             prev_group=[2], this_group=[3], next_group=[4])
     elif rank == 4:
         stage_mod = Part4(full)
         stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=0,
+        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=4,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
                             prev_group=[3], this_group=[4], next_group=[5])
     elif rank == 5:
         stage_mod = Part5(full)
         stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=0,
+        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=5,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
                             prev_group=[4], this_group=[5], next_group=None)
