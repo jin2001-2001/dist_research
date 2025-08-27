@@ -328,7 +328,7 @@ def main():
                 dist.broadcast(tgt, src=0)
 
                 # 传入流水：把 (input_ids, vision_inputs) 作为 Stage0 的输入
-                sched.step((inp_ids, vis_pv), target=tgt)
+                sched.step(inp_ids, vis_pv, target=tgt)
 
             else:
                 # 其它 rank 只需要 label 的占位与广播
