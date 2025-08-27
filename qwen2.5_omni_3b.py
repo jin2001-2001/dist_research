@@ -72,8 +72,30 @@ class Stage0(nn.Module):
         text_emb = self.embed_tokens(input_ids)
 
         # 可选：音频/视觉编码（如果此时就有对应输入）
-        audio_seq  = self.audio_enc(audio_inputs)  if (self.audio_enc  is not None and audio_inputs  is not None) else None
-        vision_seq = self.vision_enc(vision_inputs) if (self.vision_enc is not None and vision_inputs is not None) else None
+        audio_seq = (self.audio_enc(audio_inputs)
+             if (self.audio_enc is not None and audio_inputs is not None) else None)
+
+        vision_seq = None
+        if self.vision_enc is not None and vision_inputs is not None:
+            if isinstance(vision_inputs, dict):
+                vi = dict(vision_inputs)  # 浅拷贝，便于改键名
+                # 键名兜底：支持 pixel_values/x 与 grid_thw/image_grid_thw
+                if "x" not in vi and "pixel_values" in vi:
+                    vi["x"] = vi.pop("pixel_values")
+                if "grid_thw" not in vi and "image_grid_thw" in vi:
+                    vi["grid_thw"] = vi.pop("image_grid_thw")
+                assert "x" in vi and "grid_thw" in vi, "vision_inputs 需要包含 x 和 grid_thw"
+                # Qwen2_5OmniVisionEncoder 期望形参名为 (x, grid_thw)，用 **vi 解包最稳妥
+                vision_seq = self.vision_enc(**vi)
+
+            elif isinstance(vision_inputs, (list, tuple)):
+                assert len(vision_inputs) == 2, "vision_inputs 期望为 (x, grid_thw)"
+                x, grid_thw = vision_inputs
+                vision_seq = self.vision_enc(x, grid_thw=grid_thw)
+
+            else:
+                raise ValueError("vision_inputs 必须是 dict 或 (x, grid_thw)")
+
         # 它们的输出在官方 config 中会被映射到 2048 维，与你的文本隐向量同域（便于 concat）
 
         # 打包统一序列
@@ -248,12 +270,26 @@ def main():
         labels    = torch.tensor([ex["labels"]    for ex in batch], dtype=torch.long)
         # 图像：用 processor 的 image_processor 转为 [B,C,H,W] 的 pixel_values
         images = [ex["image"] for ex in batch]
-        pixel_values = proc.image_processor(images=images, return_tensors="pt")["pixel_values"]  # [B, C, H, W]
-        if pixel_values.ndim == 4:
-            pixel_values = pixel_values.unsqueeze(2)  # -> [B, C, 1, H, W]
 
-        # 返回字典；Stage0 需从 batch 中取 vision_inputs 并传给 vision encoder
-        return {"input_ids": input_ids, "labels": labels, "vision_inputs": pixel_values}
+        # 让 AutoProcessor 统一预处理（Qwen2.5-Omni 会返回 pixel_values + grid_thw/image_grid_thw）
+        vis_pack = proc(images=images, return_tensors="pt")
+
+        # 标准化键名，统一成 vision_inputs = {"x": ..., "grid_thw": ...}
+        pixel_values = vis_pack.get("pixel_values")
+        grid_thw     = (vis_pack.get("grid_thw")
+                        or vis_pack.get("image_grid_thw"))
+
+        assert pixel_values is not None, "processor 未返回 pixel_values"
+        assert grid_thw is not None,     "processor 未返回 grid_thw（或 image_grid_thw）"
+
+        # 绝大多数情况下，Qwen-Omni 视觉编码器期待 x=[B,C,T,H,W]。若当前为 4D，则补一个 T 维。
+        if pixel_values.ndim == 4:
+            pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
+
+        vision_inputs = {"x": pixel_values, "grid_thw": grid_thw}
+
+        return {"input_ids": input_ids, "labels": labels, "vision_inputs": vision_inputs}
+
 
     batch_size = args.batch_size
     microbatch_num = args.microbatch_num
@@ -322,13 +358,18 @@ def main():
             if rank == 0:
                 batch = next(data_iter)
                 inp_ids = batch["input_ids"].to(device)             # [B, block]
-                vis_pv  = batch["vision_inputs"].to(device)         # [B, C, H, W]
-                tgt     = batch["labels"].to(device)                # [B, block]
+                vis_pack = batch["vision_inputs"]   # 这是一个 dict: {"x": pixel_values, "grid_thw": grid_thw}
+                # 如果你希望这里就搬到 device，可分别搬：
+                vis_pack["x"] = vis_pack["x"].to(device)
+                # grid_thw 可能是 LongTensor 或普通 Python/tuple；若是 tensor 再搬
+                if torch.is_tensor(vis_pack["grid_thw"]):
+                    vis_pack["grid_thw"] = vis_pack["grid_thw"].to(device)
+                tgt = batch["labels"].to(device)                # [B, block]
                 # 广播 label（仅文本部分需要参与 loss）
                 dist.broadcast(tgt, src=0)
 
                 # 传入流水：把 (input_ids, vision_inputs) 作为 Stage0 的输入
-                sched.step(inp_ids, vision_inputs=vis_pv, target=tgt)
+                sched.step(inp_ids, vision_inputs=vis_pack, target=tgt)
 
             else:
                 # 其它 rank 只需要 label 的占位与广播
