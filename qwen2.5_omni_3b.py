@@ -290,34 +290,41 @@ def main():
 
     #     return {"input_ids": input_ids, "labels": labels, "vision_inputs": vision_inputs}
     def collate_fn(batch):
-        # 1) 取出文本与图像
-        texts  = [ex["text"] for ex in batch]     # 如果你的键不是 "text"，改成你的键名
+        texts  = [ex["text"] for ex in batch]    # 保证每个元素是 str
         images = [ex["image"] for ex in batch]
 
-        # 2) 让 Qwen2.5-Omni 的 processor 同时处理 文本+图像
-        pack = proc(text=texts, images=images, return_tensors="pt")
+        pack = proc(
+            text=texts,
+            images=images,
+            return_tensors="pt",
+            text_kwargs={
+                "padding": True,           # pad 到本 batch 最长
+                "truncation": True,        # 超长截断
+                # 如果你有固定上下文长，建议加上：
+                # "max_length":  max_txt_len,
+                "return_attention_mask": True,
+            },
+        )
 
-        # pack 里会包含：
-        # - 文本侧：input_ids, attention_mask（可能还包含其他字段）
-        # - 视觉侧：pixel_values, grid_thw（有时叫 image_grid_thw）
-        input_ids = pack["input_ids"]
-        labels    = input_ids.clone()   # 你如果要做自回归，可以按需构造 labels；这里只给示例
-        # 如果你使用了特殊的 label mask/shift，请按你现有逻辑改这里
+        # 文本侧
+        input_ids = pack["input_ids"]              # [B, L]
+        attn_mask = pack.get("attention_mask", None)
+        labels    = input_ids.clone()              # 你原有的 labels 逻辑可以替换这里
 
-        pixel_values = pack["pixel_values"]
+        # 视觉侧
+        pixel_values = pack["pixel_values"]        # [B, C, H, W]（或已是 [B,C,T,H,W]）
         grid_thw     = pack.get("grid_thw", pack.get("image_grid_thw"))
         assert grid_thw is not None
 
         if pixel_values.ndim == 4:
-            pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
-
+            pixel_values = pixel_values.unsqueeze(2)  # -> [B, C, 1, H, W]
         vision_inputs = {"x": pixel_values, "grid_thw": grid_thw}
 
         return {
             "input_ids": input_ids,
             "labels": labels,
             "vision_inputs": vision_inputs,
-            # 如需： "attention_mask": pack["attention_mask"],
+            # 如需："attention_mask": attn_mask,
         }
 
 
