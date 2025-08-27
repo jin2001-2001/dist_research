@@ -264,31 +264,61 @@ def main():
     # 不要 set_format 只保留某些列，否则 image 会丢失；由 collate_fn 统一打包
 
     # ==== DataLoader（CPU 友好的 collate_fn：把 PIL→pixel_values，并堆叠文本张量）====
+    # def collate_fn(batch):
+    #     # 文本：已在 map 阶段 pad 到相同长度，直接转为张量堆叠
+    #     input_ids = torch.tensor([ex["input_ids"] for ex in batch], dtype=torch.long)
+    #     labels    = torch.tensor([ex["labels"]    for ex in batch], dtype=torch.long)
+    #     # 图像：用 processor 的 image_processor 转为 [B,C,H,W] 的 pixel_values
+    #     images = [ex["image"] for ex in batch]
+
+    #     # 让 AutoProcessor 统一预处理（Qwen2.5-Omni 会返回 pixel_values + grid_thw/image_grid_thw）
+    #     vis_pack = proc(images=images, return_tensors="pt")
+
+    #     # 标准化键名，统一成 vision_inputs = {"x": ..., "grid_thw": ...}
+    #     pixel_values = vis_pack.get("pixel_values")
+    #     grid_thw     = (vis_pack.get("grid_thw")
+    #                     or vis_pack.get("image_grid_thw"))
+
+    #     assert pixel_values is not None, "processor 未返回 pixel_values"
+    #     assert grid_thw is not None,     "processor 未返回 grid_thw（或 image_grid_thw）"
+
+    #     # 绝大多数情况下，Qwen-Omni 视觉编码器期待 x=[B,C,T,H,W]。若当前为 4D，则补一个 T 维。
+    #     if pixel_values.ndim == 4:
+    #         pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
+
+    #     vision_inputs = {"x": pixel_values, "grid_thw": grid_thw}
+
+    #     return {"input_ids": input_ids, "labels": labels, "vision_inputs": vision_inputs}
     def collate_fn(batch):
-        # 文本：已在 map 阶段 pad 到相同长度，直接转为张量堆叠
-        input_ids = torch.tensor([ex["input_ids"] for ex in batch], dtype=torch.long)
-        labels    = torch.tensor([ex["labels"]    for ex in batch], dtype=torch.long)
-        # 图像：用 processor 的 image_processor 转为 [B,C,H,W] 的 pixel_values
+        # 1) 取出文本与图像
+        texts  = [ex["text"] for ex in batch]     # 如果你的键不是 "text"，改成你的键名
         images = [ex["image"] for ex in batch]
 
-        # 让 AutoProcessor 统一预处理（Qwen2.5-Omni 会返回 pixel_values + grid_thw/image_grid_thw）
-        vis_pack = proc(images=images, return_tensors="pt")
+        # 2) 让 Qwen2.5-Omni 的 processor 同时处理 文本+图像
+        pack = proc(text=texts, images=images, return_tensors="pt")
 
-        # 标准化键名，统一成 vision_inputs = {"x": ..., "grid_thw": ...}
-        pixel_values = vis_pack.get("pixel_values")
-        grid_thw     = (vis_pack.get("grid_thw")
-                        or vis_pack.get("image_grid_thw"))
+        # pack 里会包含：
+        # - 文本侧：input_ids, attention_mask（可能还包含其他字段）
+        # - 视觉侧：pixel_values, grid_thw（有时叫 image_grid_thw）
+        input_ids = pack["input_ids"]
+        labels    = input_ids.clone()   # 你如果要做自回归，可以按需构造 labels；这里只给示例
+        # 如果你使用了特殊的 label mask/shift，请按你现有逻辑改这里
 
-        assert pixel_values is not None, "processor 未返回 pixel_values"
-        assert grid_thw is not None,     "processor 未返回 grid_thw（或 image_grid_thw）"
+        pixel_values = pack["pixel_values"]
+        grid_thw     = pack.get("grid_thw", pack.get("image_grid_thw"))
+        assert grid_thw is not None
 
-        # 绝大多数情况下，Qwen-Omni 视觉编码器期待 x=[B,C,T,H,W]。若当前为 4D，则补一个 T 维。
         if pixel_values.ndim == 4:
             pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
 
         vision_inputs = {"x": pixel_values, "grid_thw": grid_thw}
 
-        return {"input_ids": input_ids, "labels": labels, "vision_inputs": vision_inputs}
+        return {
+            "input_ids": input_ids,
+            "labels": labels,
+            "vision_inputs": vision_inputs,
+            # 如需： "attention_mask": pack["attention_mask"],
+        }
 
 
     batch_size = args.batch_size
