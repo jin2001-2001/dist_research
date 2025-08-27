@@ -62,6 +62,11 @@ class Stage0(nn.Module):
         if isinstance(input_ids, (tuple, list)):
             input_ids, vision_inputs = input_ids
         
+        # 解包后兜底：若视觉是 [B,C,H,W]，补成 [B,C,1,H,W]
+        if vision_inputs is not None and isinstance(vision_inputs, torch.Tensor) and vision_inputs.ndim == 4:
+            vision_inputs = vision_inputs.unsqueeze(2)
+
+        
         device   = input_ids.device
         bsz, Ttxt = input_ids.shape
         text_emb = self.embed_tokens(input_ids)
@@ -163,9 +168,9 @@ def main():
     proc = AutoProcessor.from_pretrained(MODEL_ID, min_pixels=128*28*28, max_pixels=512*28*28)
     
     # 便捷访问
-    text_model   = thinker.text_model           # 纯解码器主干（有 embed_tokens / layers / norm）
-    audio_enc    = getattr(thinker, "audio_encoder", None)
-    vision_enc   = getattr(thinker, "vision_encoder", None)
+    text_model   = thinker.model           # 纯解码器主干（有 embed_tokens / layers / norm）
+    audio_enc    = getattr(thinker, "audio_tower", None)
+    vision_enc   = getattr(thinker, "visual", None)
     rotary_emb   = getattr(text_model, "rotary_emb", None)
     vocab_size   = tok.vocab_size
 
@@ -243,7 +248,10 @@ def main():
         labels    = torch.tensor([ex["labels"]    for ex in batch], dtype=torch.long)
         # 图像：用 processor 的 image_processor 转为 [B,C,H,W] 的 pixel_values
         images = [ex["image"] for ex in batch]
-        pixel_values = proc.image_processor(images=images, return_tensors="pt")["pixel_values"]
+        pixel_values = proc.image_processor(images=images, return_tensors="pt")["pixel_values"]  # [B, C, H, W]
+        if pixel_values.ndim == 4:
+            pixel_values = pixel_values.unsqueeze(2)  # -> [B, C, 1, H, W]
+
         # 返回字典；Stage0 需从 batch 中取 vision_inputs 并传给 vision encoder
         return {"input_ids": input_ids, "labels": labels, "vision_inputs": pixel_values}
 
@@ -388,18 +396,18 @@ def main():
         # --- Stage0: embed_tokens / rotary_emb / audio_encoder / vision_encoder ---
         for k, v in part0_state.items():
             if k.startswith("embed_tokens."):
-                newk = "text_model.embed_tokens." + k[len("embed_tokens."):]
+                newk = "model.embed_tokens." + k[len("embed_tokens."):]
                 merged_state[newk] = v
             elif k.startswith("rotary_emb."):
-                newk = "text_model.rotary_emb." + k[len("rotary_emb."):]
+                newk = "model.rotary_emb." + k[len("rotary_emb."):]
                 if newk in merged_state:  # 有的版本可能没有持久化该缓冲
                     merged_state[newk] = v
             elif k.startswith("audio_enc."):
-                newk = "audio_encoder." + k[len("audio_enc."):]
+                newk = "audio_tower." + k[len("audio_enc."):]
                 if newk in merged_state:
                     merged_state[newk] = v
             elif k.startswith("vision_enc."):
-                newk = "vision_encoder." + k[len("vision_enc."):]
+                newk = "visual." + k[len("vision_enc."):]
                 if newk in merged_state:
                     merged_state[newk] = v
             # Stage0 通常不包含 layers.*
@@ -411,7 +419,7 @@ def main():
             assert parts[0] == "layers", f"unexpected key {local_key}"
             li = int(parts[1]) + global_offset
             rest = ".".join(parts[2:])
-            return f"text_model.layers.{li}.{rest}"
+            return f"model.layers.{li}.{rest}"
 
         # --- Stage1: 前 1/3 层（偏移 +0） ---
         for k, v in part1_state.items():
@@ -431,10 +439,10 @@ def main():
                 newk = _map_layer_key(k, L2)
                 merged_state[newk] = v
             elif k == "norm.weight":
-                merged_state["text_model.norm.weight"] = v
+                merged_state["model.norm.weight"] = v
             elif k == "norm.bias":
-                if "text_model.norm.bias" in merged_state:
-                    merged_state["text_model.norm.bias"] = v
+                if "model.norm.bias" in merged_state:
+                    merged_state["model.norm.bias"] = v
             elif k == "lm_head.weight":
                 merged_state["lm_head.weight"] = v
             elif k == "lm_head.bias":
