@@ -73,7 +73,7 @@ class Stage0(nn.Module):
 
         # 可选：音频/视觉编码（如果此时就有对应输入）
         audio_seq  = self.audio_enc(audio_inputs)  if (self.audio_enc  is not None and audio_inputs  is not None) else None
-        vision_seq = self.vision_enc(pixel_values=vision_inputs) if (self.vision_enc is not None and vision_inputs is not None) else None
+        vision_seq = self.vision_enc(vision_inputs) if (self.vision_enc is not None and vision_inputs is not None) else None
         # 它们的输出在官方 config 中会被映射到 2048 维，与你的文本隐向量同域（便于 concat）
 
         # 打包统一序列
