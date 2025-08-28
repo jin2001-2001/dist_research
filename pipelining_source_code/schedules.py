@@ -1352,6 +1352,10 @@ class PipelineScheduleMulti(_PipelineSchedule):
         else:
             targets_split = None
 
+        print(f"after split args {args_split}")
+        print(f"after split kwargs {kwargs_split}")
+        print(f'after split target {targets_split}')
+        
         # Run microbatches
         self._step_microbatches(args_split, kwargs_split, targets_split, losses)
 
