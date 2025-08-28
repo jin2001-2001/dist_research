@@ -227,6 +227,18 @@ def main():
     rotary_emb   = getattr(text_model, "rotary_emb", None)
     vocab_size   = tok.vocab_size
 
+    # 视觉编码器的关键超参（不要硬编码 14 / 2 / 112）
+    if vision_enc is not None:
+        vit_cfg = getattr(vision_enc, "config", None)
+        PATCH = int(getattr(vit_cfg, "patch_size", 14))
+        SMS   = int(getattr(vit_cfg, "spatial_merge_size", 2))   # spatial_merge_unit = SMS*SMS (通常=4)
+        WIN   = int(getattr(vit_cfg, "window_size", 112))        # ViT 的窗口（像素）
+        # 为了让 (H/patch) 能被窗口网格整除，令 patch 网格的窗口步长：
+        VIT_MERGE = WIN // (PATCH * SMS)  # 通常是 4（112 / (14*2)）
+    else:
+        PATCH, SMS, VIT_MERGE = 14, 2, 4
+
+    
     # 自动切分点
     L  = len(text_model.layers)
     L1 = L // 3
@@ -292,151 +304,97 @@ def main():
 
     ds = raw.map(tok_fn, batched=True)
 
-    from PIL import Image, ImageOps
-    import numpy as np
-
-    def _round_to_multiple(x: int, m: int) -> int:
-        return ((x + m - 1) // m) * m
-
-    def _pad_to_multiple_of_56(img: Image.Image) -> Image.Image:
-        # 不形变，只在右/下补 0；56 = 14(patch) * 4(merge unit)
-        img = ImageOps.exif_transpose(img)
-        w, h = img.size
-        new_w = _round_to_multiple(w, 56)
-        new_h = _round_to_multiple(h, 56)
-        if (new_w, new_h) == (w, h):
-            return img
-        return ImageOps.expand(img, border=(0, 0, new_w - w, new_h - h), fill=0)
-
-    def _pil_to_tensor_chw(img: Image.Image) -> torch.Tensor:
-        arr = np.array(img, dtype=np.uint8)
-        if arr.ndim == 2:                      # 灰度图→3通道
-            arr = np.stack([arr, arr, arr], axis=-1)
-        t = torch.from_numpy(arr).to(torch.float32) / 255.0  # [H,W,C] in [0,1]
-        return t.permute(2, 0, 1).contiguous()               # [C,H,W]
-
-    def _normalize_3c(t: torch.Tensor, mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
-        if mean.ndim == 1: mean = mean.view(-1, 1, 1)
-        if std.ndim == 1:  std  = std.view(-1, 1, 1)
-        return (t - mean) / std
-
-
     def collate_fn(batch):
-        """
-        - 文本：用 processor 的 tokenizer 做 padding/truncation，labels=输入副本
-        - 图像：自行处理，不走 processor 的图像管线
-            1) EXIF 矫正 + pad 到 56 的倍数（56=14*4，满足视觉塔 merge=4 的约束）
-            2) PIL -> [C,H,W] float32 in [0,1]，用 processor 的 mean/std 归一化（无则退回 0.5）
-            3) 批内统一目标大小 H_target×W_target（各自对齐到 56 倍数后取最大）
-            4) 堆叠为 [B,C,1,H,W]（T=1）
-            5) 自行构建 grid_thw=[T,H/14,W/14]，保证 H'/W' 均为 4 的倍数
-        返回键：
-            - input_ids: [B, L]
-            - labels:    [B, L]
-            - vision_inputs: {"pixel_values": [B,C,1,H,W], "grid_thw": [B,3]}
-        """
-        import numpy as np
-        from PIL import ImageOps
-
-        # --------- 工具函数 ---------
-        def _round_to_multiple(x: int, m: int) -> int:
-            return ((x + m - 1) // m) * m
-
-        def _pad_to_multiple_of_56(img):
-            # 不形变，只在右/下补 0；56 = 14(patch) * 4(merge unit)
-            img = ImageOps.exif_transpose(img)
-            w, h = img.size
-            new_w = _round_to_multiple(w, 56)
-            new_h = _round_to_multiple(h, 56)
-            if (new_w, new_h) == (w, h):
-                return img
-            return ImageOps.expand(img, border=(0, 0, new_w - w, new_h - h), fill=0)
-
-        def _pil_to_tensor_chw(img):
-            arr = np.array(img, dtype=np.uint8)          # [H,W,C] or [H,W]
-            if arr.ndim == 2:                            # 灰度 -> 3 通道
-                arr = np.stack([arr, arr, arr], axis=-1)
-            t = torch.from_numpy(arr).to(torch.float32) / 255.0
-            return t.permute(2, 0, 1).contiguous()       # [C,H,W]
-
-        def _normalize_3c(t: torch.Tensor, mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
-            if mean.ndim == 1: mean = mean.view(-1, 1, 1)
-            if std.ndim == 1:  std  = std.view(-1, 1, 1)
-            return (t - mean) / std
-
-        # --------- 文本处理（processor 只用于文本） ---------
-        texts = [ex.get("text", "") for ex in batch]
-        pack_txt = proc(
-            text=texts,
+        # ---- 文本：用 tokenizer 统一 padding/truncation ----
+        texts = [ex["text"] for ex in batch]
+        tok_out = tok(
+            texts,
+            padding="max_length",      # 或者 True；你已有 block=128 可继续用 max_length=block
+            truncation=True,
+            max_length=128,
+            return_attention_mask=True,
             return_tensors="pt",
-            text_kwargs={
-                "padding": True,
-                "truncation": True,
-                "return_attention_mask": True,
-            },
         )
-        input_ids = pack_txt["input_ids"]          # [B, L]
-        labels    = input_ids.clone()              # LM 目标（左移在 loss 内部做）
+        input_ids = tok_out["input_ids"]
+        labels = input_ids.clone()
 
-        # --------- 图像处理（完全自管） ---------
-        images = [_pad_to_multiple_of_56(ex["image"]) for ex in batch]
+        # ---- 图像：逐张对齐到 (patch, window) 友好的网格，并在 batch 内对齐到同一尺寸 ----
+        from PIL import Image, ImageOps
+        import numpy as np
+        to_tensor = lambda img: torch.from_numpy(np.array(img, dtype="float32").transpose(2,0,1)) / 255.0
 
-        # 归一化参数：优先用 processor 的 mean/std；无则退回 0.5
-        try:
-            mean = torch.tensor(proc.image_processor.image_mean, dtype=torch.float32)
-            std  = torch.tensor(proc.image_processor.image_std,  dtype=torch.float32)
-        except Exception:
-            mean = torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32)
-            std  = torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32)
+        # 逐张：算出“对齐后”的目标 patch 网格（先对齐到 patch，再对齐到窗口网格）
+        per_img = []
+        for ex in batch:
+            img: Image.Image = ex["image"].convert("RGB")
+            H0, W0 = img.height, img.width
 
-        # 1) 逐图：PIL->Tensor、归一化，并记录对齐到 56 倍数的尺寸
-        per_img = []  # (tensor_CHW, H, W, H_aligned, W_aligned)
-        H_aligned_list, W_aligned_list = [], []
-        for img in images:
-            t = _pil_to_tensor_chw(img)         # [C,H,W]
-            t = _normalize_3c(t, mean, std)
-            _, H, W = t.shape
-            H_a = _round_to_multiple(H, 56)
-            W_a = _round_to_multiple(W, 56)
-            per_img.append((t, H, W, H_a, W_a))
-            H_aligned_list.append(H_a)
-            W_aligned_list.append(W_a)
+            # 先对齐到 patch：ceil 到能被 PATCH 整除
+            Hp = ( (H0 + PATCH - 1) // PATCH )
+            Wp = ( (W0 + PATCH - 1) // PATCH )
 
-        # 2) 批内统一目标尺寸（仍为 56 的倍数）
-        H_target = max(H_aligned_list)
-        W_target = max(W_aligned_list)
+            # 再让 patch 网格能被 VIT_MERGE 整除（窗口网格大小，通常=4）
+            if VIT_MERGE > 1:
+                Hp = ((Hp + VIT_MERGE - 1) // VIT_MERGE) * VIT_MERGE
+                Wp = ((Wp + VIT_MERGE - 1) // VIT_MERGE) * VIT_MERGE
 
-        # 3) pad 到统一尺寸并堆叠 -> [B,C,1,H,W]
-        tensors = []
-        for t, H, W, H_a, W_a in per_img:
-            # 先 pad 到各自对齐尺寸
-            if H_a != H or W_a != W:
-                t = F.pad(t, (0, W_a - W, 0, H_a - H), value=0.0)  # (W_left, W_right, H_top, H_bottom)
-                H, W = H_a, W_a
-            # 再 pad 到批内共同最大尺寸
-            if H_target != H or W_target != W:
-                t = F.pad(t, (0, W_target - W, 0, H_target - H), value=0.0)
-            tensors.append(t)
+            Ha, Wa = Hp * PATCH, Wp * PATCH  # 该图“自有对齐尺寸”
 
-        pixel_values = torch.stack(tensors, dim=0).unsqueeze(2)  # [B,C,1,H_target,W_target]
+            img_resized = img.resize((Wa, Ha), Image.BICUBIC)  # 保证可被 PATCH 整除
+            per_img.append((img_resized, Ha, Wa, Hp, Wp))
 
-        # 4) 构建 grid_thw，确保 H'/W' 为 4 的倍数（merge_unit=4）
-        patch = 14
-        Hp = H_target // patch
-        Wp = W_target // patch
-        if (Hp % 4 != 0) or (Wp % 4 != 0):
-            # 理论不会发生；若发生，说明上面 pad 非 56 倍数
-            raise ValueError(f"H'/W' must be multiples of 4; got Hp={Hp}, Wp={Wp}, H_target={H_target}, W_target={W_target}")
-        B = pixel_values.size(0)
-        grid_thw = torch.tensor([[1, Hp, Wp]] * B, dtype=torch.long)  # T=1
+        # 这批次的统一尺寸：取各自对齐尺寸的 max（避免再二次缩放导致 token 不一致）
+        Ht = max(Ha for _, Ha, _, _, _ in per_img)
+        Wt = max(Wa for _, _, Wa, _, _ in per_img)
 
-        vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
+        # 逐张：pad 到 (Ht, Wt)，转 tensor，并做与处理器一致的归一化
+        # 从 AutoProcessor 里拿 mean/std，避免手抄
+        image_mean = getattr(getattr(proc, "image_processor", proc), "image_mean", [0.5, 0.5, 0.5])
+        image_std  = getattr(getattr(proc, "image_processor", proc), "image_std",  [0.5, 0.5, 0.5])
+        mean = torch.tensor(image_mean).view(3,1,1)
+        std  = torch.tensor(image_std).view(3,1,1)
 
+        pixel_list = []
+        for img_resized, Ha, Wa, _, _ in per_img:
+            if (Ha, Wa) != (Ht, Wt):
+                # 左上对齐的 letterbox（不改变已对齐好的 patch 网格）
+                canvas = Image.new("RGB", (Wt, Ht), (0,0,0))
+                canvas.paste(img_resized, (0,0))
+                img_final = canvas
+            else:
+                img_final = img_resized
+
+            px = to_tensor(img_final)                # [3,Ht,Wt], 0..1
+            px = (px - mean) / std                   # 标准化
+            pixel_list.append(px)
+
+        # 堆叠为 [B, C, T=1, Ht, Wt]
+        pixel_values = torch.stack(pixel_list, dim=0).unsqueeze(2)
+
+        # ---- 关键：用“实际的 H/W”计算 grid_thw，确保 seq_len == T*grid_h*grid_w ----
+        B, C, T, H, W = pixel_values.shape
+        assert T == 1, "当前示例是静态图像，T 应为 1；如为视频请按帧数设置。"
+
+        # 断言 H/W 一定是 PATCH 的整数倍（否则上面流程有误）
+        assert H % PATCH == 0 and W % PATCH == 0, f"H/W 需可被 PATCH={PATCH} 整除，got {(H,W)}"
+        Hp_tar, Wp_tar = H // PATCH, W // PATCH
+
+        # grid_h/grid_w = 2 * (H/patch), 2 * (W/patch)  —— 这是 Qwen2.5 的约定
+        grid_h = SMS * Hp_tar
+        grid_w = SMS * Wp_tar
+
+        # 为“整批统一尺寸”，每个样本的 grid_thw 完全相同
+        grid_row = torch.tensor([1, grid_h, grid_w], dtype=torch.long)
+        grid_thw = grid_row.unsqueeze(0).repeat(B, 1)
+
+        # 最后打包
+        vision_inputs = {"x": pixel_values, "grid_thw": grid_thw}
         return {
             "input_ids": input_ids,
             "labels": labels,
             "vision_inputs": vision_inputs,
         }
+
 
 
 
