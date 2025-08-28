@@ -376,6 +376,7 @@ def main():
         pixel_values = pack["pixel_values"]  # [B,C,H,W] 或 [B,C,T,H,W]
         if pixel_values.ndim == 4:
             pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
+        print(f"✅✅✅{pixel_values.ndim}")
         assert pixel_values.ndim == 5, f"Unexpected pixel_values shape: {pixel_values.shape}"
         B, C, T, H, W = pixel_values.shape
 
