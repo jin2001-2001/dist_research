@@ -45,9 +45,15 @@ def build_causal(mask_len, device):
                 .unsqueeze(0).unsqueeze(0)  # [1,1,T,T]
 
 def pack_modalities(text_embeds, audio_seq=None, vision_seq=None):
-    """把三路序列拼成 [B, T_total, 2048]；你也可改成交错（按时间戳）。"""
-    seqs = [x for x in [text_embeds, audio_seq, vision_seq] if x is not None]
+    """把三路序列拼成 [B, T_total, D]；若某一路是 [T, D] 则兜底补 batch 维"""
+    def _ensure_3d(x):
+        if x is None:
+            return None
+        return x if x.dim() == 3 else x.unsqueeze(0)
+
+    seqs = [_ensure_3d(x) for x in [text_embeds, audio_seq, vision_seq] if x is not None]
     return torch.cat(seqs, dim=1) if len(seqs) > 1 else seqs[0]
+
 
 class Stage0(nn.Module):
     """0a: Text embed  | 0b: Audio encoder → 2048 | 0c: Vision encoder → 2048"""
@@ -58,76 +64,62 @@ class Stage0(nn.Module):
         self.vision_enc   = vision_enc
         self.rotary_emb   = rotary_emb
 
-    def forward(self, input_ids, audio_inputs=None, vision_inputs=None):
-        if isinstance(input_ids, (tuple, list)):
-            input_ids, vision_inputs = input_ids
-        
-        # 解包后兜底：若视觉是 [B,C,H,W]，补成 [B,C,1,H,W]
-        if vision_inputs is not None and isinstance(vision_inputs, torch.Tensor) and vision_inputs.ndim == 4:
-            vision_inputs = vision_inputs.unsqueeze(2)
+    def forward(self, input_ids, attention_mask=None, vision_inputs=None, audio_inputs=None, **kwargs):
+        """
+        期望返回三模态拼好的 [B, T_total, D] 送入后续 LLM
+        """
+        B = input_ids.size(0)
 
-        
-        device   = input_ids.device
-        bsz, Ttxt = input_ids.shape
-        text_emb = self.embed_tokens(input_ids)
+        # ===== 文本侧（示例） =====
+        text_emb = self.embed_tokens(input_ids)  # [B, T_text, D]
+        # 其它文本预处理...
 
-        # 可选：音频/视觉编码（如果此时就有对应输入）
-        audio_seq = (self.audio_enc(audio_inputs)
-             if (self.audio_enc is not None and audio_inputs is not None) else None)
-
+        # ===== 视觉侧 =====
         vision_seq = None
-        if self.vision_enc is not None and vision_inputs is not None:
-            if isinstance(vision_inputs, dict):
-                vi = dict(vision_inputs)  # 浅拷贝，避免原地改
-                # 兜底取图像张量
-                # 在 vision_inputs 是 dict 的分支里，替换你现在的取值语句
-                x = vi.get("pixel_values", None)
-                if x is None:
-                    x = vi.get("x", None)
-                if x is None:
-                    x = vi.get("images", None)
-                if x is None:
-                    x = vi.get("video", None)
+        if vision_inputs is not None:
+            x = vision_inputs["pixel_values"]  # [B,C,T,H,W]
+            grid = vision_inputs["grid_thw"]   # [B,3] with (T, H_patch, W_patch)
 
-                grid = vi.get("grid_thw", None)
-                if grid is None:
-                    grid = vi.get("image_grid_thw", None)
-                if grid is None:
-                    grid = vi.get("thw", None)
+            # 编码器内部会把 [B,C,T,H,W] 展平为 token 序列 [B*Tv, D] 或 [Tv, D]
+            # 注意：你的 self.vision_enc 接口若不同，请按实际调整
+            vision_seq = self.vision_enc(x, grid)  # 常见返回: [Tv_total, D] 或 [B, Tv, D]
 
-                assert x is not None,    "vision_inputs 缺少图像张量（pixel_values/x/images/video 任一）"
-                assert grid is not None, "vision_inputs 缺少 grid_thw（或 image_grid_thw/thw）"
+            # 统一为 [B, Tv, D]
+            if isinstance(grid, torch.Tensor):
+                smu = 4  # spatial_merge_unit = 4
+                Tv_per = (grid[:, 0] * grid[:, 1] * grid[:, 2]) * smu  # [B]
+                Tv0 = int(Tv_per[0].item())
+                assert torch.all(Tv_per == Tv0), \
+                    f"Visual token count per sample not equal in batch: {Tv_per.tolist()}"
 
-                if x.ndim == 4:
-                    x = x.unsqueeze(2)  # -> [B,C,1,H,W]
-
-                vision_seq = self.vision_enc(x, grid)  # 用位置实参调用
-
-
-            elif isinstance(vision_inputs, (list, tuple)):
-                assert len(vision_inputs) == 2, "vision_inputs 期望为 (x, grid_thw)"
-                x, grid = vision_inputs
-                if isinstance(x, torch.Tensor) and x.ndim == 4:
-                    x = x.unsqueeze(2)
-                vision_seq = self.vision_enc(x, grid)
-
+                if vision_seq.dim() == 2:  # [Tv_total, D] 或 [Tv, D]
+                    D = vision_seq.size(-1)
+                    total = vision_seq.size(0)
+                    if total == Tv0 * B:
+                        vision_seq = vision_seq.view(B, Tv0, D)
+                    elif total == Tv0 and B == 1:
+                        vision_seq = vision_seq.view(1, Tv0, D)
+                    else:
+                        raise ValueError(f"Cannot reshape vision_seq {vision_seq.shape} with B={B}, Tv={Tv0}")
+                elif vision_seq.dim() == 3:
+                    pass  # 已是 [B, Tv, D]
+                else:
+                    raise ValueError(f"Unexpected vision_seq shape: {vision_seq.shape}")
             else:
-                raise ValueError("vision_inputs 必须是 dict 或 (x, grid_thw)")
+                # 没有 grid（不推荐），兜底把 2D 序列加 batch 维
+                if vision_seq.dim() == 2:
+                    vision_seq = vision_seq.unsqueeze(0)
 
+        # ===== 音频侧（如需；确保为 [B, T_audio, D]） =====
+        audio_seq = None
+        if audio_inputs is not None:
+            audio_seq = self.audio_enc(audio_inputs)  # [B, T_audio, D]
+            if audio_seq.dim() == 2:
+                audio_seq = audio_seq.unsqueeze(0)
 
-        # 它们的输出在官方 config 中会被映射到 2048 维，与你的文本隐向量同域（便于 concat）
-
-        # 打包统一序列
-        hidden = pack_modalities(text_emb, audio_seq, vision_seq)    # [B, T_total, 2048]
-        B, T = hidden.shape[:2]
-
-        # 位置与掩码（后续 stage 直接复用）
-        position_ids = torch.arange(T, device=device).unsqueeze(0).expand(B, -1).contiguous()  # [B,T]
-        attn_mask = build_causal(T, device).expand(B, 1, -1, -1).contiguous()                 # [B,1,T,T]
-
-        # 可选：提前计算 RoPE tables（如果下游层需要传入）
-        pos_emb = self.rotary_emb(hidden, position_ids) if self.rotary_emb is not None else None
-        return hidden.contiguous(), attn_mask, position_ids, pos_emb
+        # ===== 三模态拼接 =====
+        hidden = pack_modalities(text_emb, audio_seq, vision_seq)  # -> [B, T_total, D]
+        return hidden
 
 class Stage1(nn.Module):
     def __init__(self, text_model, L1, rotary_emb=None):
@@ -337,76 +329,65 @@ def main():
 
     def collate_fn(batch):
         """
-        数据批处理函数 - 使用processor的默认设置
-        让processor自己处理图像大小，避免手动padding导致的不兼容
+        batch: List[dict]，每个样本里至少包含文本与图像/视频的原始输入。
+        这里假设你在外层已经用 AutoProcessor 做了基础处理，或你能在这里拿到像素张量。
+        输出:
+        input_ids, attention_mask, vision_inputs = {"pixel_values": [B,C,T,H,W], "grid_thw": [B,3]}
+        其它字段按你现有逻辑返回
         """
-        texts = [ex["text"] for ex in batch]
-        images = [ex["image"] for ex in batch]
-        
-        # 让processor使用默认设置处理图像
-        # 这会自动调整图像大小到模型期望的尺寸
-        pack = proc(
-            text=texts,
-            images=images,
-            return_tensors="pt",
-            text_kwargs={
-                "padding": True,
-                "truncation": True,
-                "return_attention_mask": True,
-            },
-            # 使用默认的图像处理设置，让processor自动处理
-            # 不设置 do_resize=False，让它自动调整
-        )
-        
-        # 文本侧
-        input_ids = pack["input_ids"]
-        labels = input_ids.clone()
-        
-        # 视觉侧
-        pixel_values = pack["pixel_values"]  # [B,C,H,W] 或 [B,C,T,H,W]
-        grid_thw = pack.get("grid_thw", pack.get("image_grid_thw"))
-        
-        if grid_thw is None:
-            # 如果没有grid_thw，尝试从pixel_values推断
-            if pixel_values.ndim == 4:
-                B, C, H, W = pixel_values.shape
-            elif pixel_values.ndim == 5:
-                B, C, T, H, W = pixel_values.shape
+        # ===== 文本侧（示例，你可沿用自己原有实现） =====
+        input_ids_list = [item["input_ids"] for item in batch]
+        attention_mask_list = [item["attention_mask"] for item in batch]
+        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids_list, batch_first=True, padding_value=0)
+        attention_mask = torch.nn.utils.rnn.pad_sequence(attention_mask_list, batch_first=True, padding_value=0)
+
+        # ===== 视觉侧：统一 pixel_values 与 grid_thw 语义 =====
+        # 假设每个 item["pixel_values"] 是 [C,H,W]（图像）或 [C,T,H,W]（视频/多帧）
+        pixels = []
+        for item in batch:
+            pv = item["pixel_values"]
+            if pv.ndim == 3:           # [C,H,W] -> [C,1,H,W]
+                pv = pv.unsqueeze(1)
+            elif pv.ndim == 4:         # [C,T,H,W]
+                pass
             else:
-                raise ValueError(f"Unexpected pixel_values shape: {pixel_values.shape}")
-                
-            # 创建默认的grid_thw
-            # T=1 for images, H和W是patch grid dimensions
-            grid_h = H // 14  # assuming patch_size=14
-            grid_w = W // 14
-            grid_thw = torch.tensor([[1, grid_h, grid_w]] * B, dtype=torch.long)
-        
-        # 若是 4D，补充 T 维度
-        if pixel_values.ndim == 4:
-            pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
-        
-        #调试信息 - 取消注释以查看实际处理的维度
-        if pixel_values.ndim == 5:
-            B, C, T, H, W = pixel_values.shape
-            print(f"Batch pixel_values: [B={B}, C={C}, T={T}, H={H}, W={W}]")
-            print(f"Grid thw: {grid_thw}")
-            
-            # 验证grid维度与实际尺寸的关系
-            for i in range(B):
-                t, h, w = grid_thw[i].tolist()
-                expected_h = h * 14
-                expected_w = w * 14
-                if expected_h != H or expected_w != W:
-                    print(f"Warning: Image {i} dimension mismatch!")
-                    print(f"  Grid suggests {expected_h}x{expected_w}, but got {H}x{W}")
-        
+                raise ValueError(f"Unexpected pixel_values shape: {pv.shape}")
+            pixels.append(pv)
+
+        # pad/stack 到 [B,C,T,H,W]（要求同 H,W；若不一致，请在前处理统一 resize/pad）
+        C = pixels[0].size(0)
+        T = pixels[0].size(1)
+        H = pixels[0].size(2)
+        W = pixels[0].size(3)
+        for pv in pixels:
+            assert pv.size(0) == C and pv.size(2) == H and pv.size(3) == W, \
+                f"All samples must have the same C,H,W; got {pv.shape} vs ({C},{H},{W})"
+        pixel_values = torch.stack(pixels, dim=0)  # -> [B,C,T,H,W]
+        B = pixel_values.size(0)
+
+        # 以 Qwen2.5-Omni 约定：patch_size=14，spatial_merge_unit=4（2x2 融合）
+        grid_h = H // 14
+        grid_w = W // 14
+        # 2×2 merge 要求 H_patch、W_patch 都为偶数
+        assert (grid_h % 2 == 0) and (grid_w % 2 == 0), \
+            f"H,W after 14x14 patching must be even: grid_h={grid_h}, grid_w={grid_w} (H={H}, W={W})"
+
+        # 统一构造标准语义的 grid_thw: (T, H_patch, W_patch)（每样本相同）
+        grid_thw = torch.tensor([[T, grid_h, grid_w]] * B, dtype=torch.long)
+
+        print(f"[collate] pixel_values [B={B},C={C},T={T},H={H},W={W}] -> grid_thw[0]={grid_thw[0].tolist()}")
+
         vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
-        
-        return {
+
+        # ===== 其它你已有的字段按需返回 =====
+        batch_out = {
             "input_ids": input_ids,
-            "labels": labels,
+            "attention_mask": attention_mask,
             "vision_inputs": vision_inputs,
+            # 例如 labels/targets 等...
         }
+        return batch_out
+
 
     batch_size = args.batch_size
     microbatch_num = args.microbatch_num
