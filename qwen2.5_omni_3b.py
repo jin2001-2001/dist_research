@@ -110,7 +110,7 @@ class Stage0(nn.Module):
                 # 需要利用“标准语义”的 grid_thw 推回每样本 Tv
                 assert isinstance(grid, torch.Tensor) and grid.dim() == 2 and grid.size(1) == 3, \
                     f"Expect grid_thw [B,3], got {type(grid)} {getattr(grid,'shape',None)}"
-                smu  = 4  # spatial_merge_unit = 2x2 merge
+                smu = int(getattr(self.vision_enc, "spatial_merge_unit", 4))  # spatial_merge_unit = 2x2 merge
                 Tv_per = (grid[:, 0] * grid[:, 1] * grid[:, 2]) * smu   # [B]
                 Tv0 = int(Tv_per[0].item())
                 # 要求本 batch 的 Tv 一致（如不一致需在 collate_fn 做 pad 对齐）
@@ -354,6 +354,7 @@ def main():
         """
         texts  = [ex["text"]  for ex in batch]
         images = [ex["image"] for ex in batch]
+        images = [ _pad_to_valid_size(img) for img in images ]
 
         # 让 AutoProcessor 处理文本与图像张量（像素大小让它自己做）
         pack = proc(
