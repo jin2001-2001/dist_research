@@ -371,28 +371,9 @@ def main():
         # 文本侧
         input_ids = pack["input_ids"]
         labels    = input_ids.clone()
-        print(f"✅✅✅{pack}")
-        # 视觉侧：像素张量统一为 [B,C,T,H,W]
-        pixel_values = pack["pixel_values"]  # [B,C,H,W] 或 [B,C,T,H,W]
-        if pixel_values.ndim == 4:
-            pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
-        print(f"✅✅✅{pixel_values.ndim}")
-        assert pixel_values.ndim == 5, f"Unexpected pixel_values shape: {pixel_values.shape}"
-        B, C, T, H, W = pixel_values.shape
-
-        # 关键：强制用“patch 网格”语义构造 grid_thw
-        grid_h = H // 14
-        grid_w = W // 14
-
-        # 为了确保 2×2 merge（spatial_merge_unit=4）可行，网格维必须是 4 的倍数
-        assert (grid_h % 4 == 0) and (grid_w % 4 == 0), \
-            f"grid_h={grid_h}, grid_w={grid_w} must both be multiples of 4 (H={H}, W={W})"
-
-        # 每个样本的 T/H_patch/W_patch 一致（本任务图像：T=1；视频：T>1）
-        grid_thw = torch.tensor([[T, grid_h, grid_w]] * B, dtype=torch.long)
-
-        # 调试（可保留到跑稳）：打印像素与网格
-        print(f"[collate] pixel_values [B={B},C={C},T={T},H={H},W={W}] -> grid_thw[0]={grid_thw[0].tolist()}")
+        # === 视觉侧（按 Omni 的返回直接用）===
+        pixel_values = pack["pixel_values"]  # 形状通常是 [sum_i Tv_i, D]，例如 [14616, 1176]
+        grid_thw     = torch.as_tensor(pack["image_grid_thw"], dtype=torch.long)  # [B, 3]，每张图的 [T,H_grid,W_grid]
 
         vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
 
@@ -401,6 +382,7 @@ def main():
             "labels": labels,
             "vision_inputs": vision_inputs,
         }
+
 
 
 
