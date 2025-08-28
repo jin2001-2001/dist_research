@@ -151,11 +151,15 @@ def _shard_dict_of_args(
 
         chunk_spec = args_chunk_spec[arg_key]
         assert chunk_spec is not None  # Should have been set by caller
-        chunk_spec_flat, _ = tree_flatten(chunk_spec)
+
+        # 新增：将规格广播成与 arg 同构的“规格树”，以兼容 dict/list/tuple 的嵌套值
+        expanded_chunk_spec = _expand_chunk_spec_for_value(arg, chunk_spec)
+
+        chunk_spec_flat, _ = tree_flatten(expanded_chunk_spec)
         if len(flat) != len(chunk_spec_flat):
             raise ValueError(
                 f"Argument value {arg} did not have the same number of "
-                f"values as as chunk spec {chunk_spec}"
+                f"values as chunk spec {expanded_chunk_spec}"
             )
 
         sharded_arg_flat = []
@@ -393,7 +397,9 @@ def merge_chunks(
 
     # Preliminary: flatten the chunk spec
     if chunk_spec is not None:
-        spec_flattened, flatten_spec = tree_flatten(chunk_spec)
+        value_like = chunks[0]
+        expanded_chunk_spec = _expand_chunk_spec_for_value(value_like, chunk_spec)
+        spec_flattened, flatten_spec = tree_flatten(expanded_chunk_spec)
     else:
         # If chunk_spec is not provided, we will merge chunks along the default dimension (0), for all output fields
         # We obtain the output structure by flattening chunk 0 and generate the chunk_spec
@@ -467,3 +473,65 @@ def merge_chunks(
 
     # Stage 4: Unflatten combined args
     return tree_unflatten(args_flattened, flatten_spec)
+
+def _is_container(x):
+    # pytree 支持三种基础容器：dict / list / tuple（本文件也用 tree_flatten）
+    return isinstance(x, (dict, list, tuple))
+
+
+def _expand_chunk_spec_for_value(value, spec):
+    """
+    将单一 spec（TensorChunkSpec 或 _Replicate）广播成与 value 同构的“规格树”；
+    若 spec 已经是树（结构与 value 对齐），则原样返回。
+
+    规则：
+      - 若 spec 是 TensorChunkSpec(dim)：
+          * 对于张量叶子：使用该 TensorChunkSpec(dim)
+          * 对于非张量叶子（int/float/None/str/…）：使用 _Replicate
+      - 若 spec 是 _Replicate：所有叶子都 _Replicate
+      - 若 spec 已经是容器（dict/list/tuple）：递归对其子项分别 expand
+      - 若 spec 为 None：返回 None（沿用原逻辑，通常不会传 None）
+
+    注意：字典保持相同键集；list/tuple 保持相同长度与类型。
+    """
+    from torch import Tensor
+
+    # 已是树：直接按结构对齐递归展开
+    if _is_container(spec):
+        if isinstance(value, dict) and isinstance(spec, dict):
+            # 键必须对得上（与当前实现一致：值/规格树需同构）
+            return {k: _expand_chunk_spec_for_value(value[k], spec[k]) for k in spec.keys()}
+        elif isinstance(value, list) and isinstance(spec, list):
+            return [_expand_chunk_spec_for_value(v, s) for v, s in zip(value, spec)]
+        elif isinstance(value, tuple) and isinstance(spec, tuple):
+            return tuple(_expand_chunk_spec_for_value(v, s) for v, s in zip(value, spec))
+        else:
+            # 结构不匹配：保持原行为，交由后续 flatten 后长度检查报错
+            return spec
+
+    # spec 为单个叶子（TensorChunkSpec 或 _Replicate 或 None）
+    if isinstance(spec, TensorChunkSpec):
+        # 将该 spec 应用到所有 “张量叶子”，其他叶子使用 _Replicate
+        if isinstance(value, dict):
+            return {k: _expand_chunk_spec_for_value(v, spec) for k, v in value.items()}
+        elif isinstance(value, list):
+            return [_expand_chunk_spec_for_value(v, spec) for v in value]
+        elif isinstance(value, tuple):
+            return tuple(_expand_chunk_spec_for_value(v, spec) for v in value)
+        else:
+            # 叶子：张量 -> spec；非张量 -> _Replicate
+            return spec if isinstance(value, Tensor) else _Replicate
+
+    if spec is _Replicate:
+        # 所有叶子都复制（不切分）
+        if isinstance(value, dict):
+            return {k: _expand_chunk_spec_for_value(v, _Replicate) for k, v in value.items()}
+        elif isinstance(value, list):
+            return [_expand_chunk_spec_for_value(v, _Replicate) for v in value]
+        elif isinstance(value, tuple):
+            return tuple(_expand_chunk_spec_for_value(v, _Replicate) for v in value)
+        else:
+            return _Replicate
+
+    # 其他情况（None 或未知类型）：原样返回，保持旧行为
+    return spec
