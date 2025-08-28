@@ -369,50 +369,49 @@ def main():
         labels = input_ids.clone()
         
         # 视觉侧
-        pixel_values = pack["pixel_values"]  # [B,C,H,W] 或 [B,C,T,H,W]
-        grid_thw = pack.get("grid_thw", pack.get("image_grid_thw"))
-        
-        if grid_thw is None:
-            # 如果没有grid_thw，尝试从pixel_values推断
+                # —— pack 之后，忽略 pack 自带的 grid_thw，统一用张量尺寸重建 —— 
+        pixel_values = pack["pixel_values"]  # 期望 [B,C,H,W]
+        if pixel_values.ndim == 5:
+            # 如是视频，保证维度为 [B,C,T,H,W]；Flickr8k 是图像，通常不会走到这里
+            B, C, T, H, W = pixel_values.shape
+        elif pixel_values.ndim == 4:
+            B, C, H, W = pixel_values.shape
+            T = 1
+        else:
+            raise ValueError(f"Unexpected pixel_values shape: {pixel_values.shape}")
+
+        # 关键：把 H、W pad 到 56 的倍数（patch_size=14，merge_unit=4）
+        def _pad_to_multiple(x, m): 
+            return ((x + m - 1) // m) * m
+
+        H_pad = _pad_to_multiple(H, 56)
+        W_pad = _pad_to_multiple(W, 56)
+
+        if (H_pad != H) or (W_pad != W):
+            # F.pad 的顺序是 (W_left, W_right, H_top, H_bottom)；我们只在右/下补零
             if pixel_values.ndim == 4:
-                B, C, H, W = pixel_values.shape
-            elif pixel_values.ndim == 5:
-                B, C, T, H, W = pixel_values.shape
-            else:
-                raise ValueError(f"Unexpected pixel_values shape: {pixel_values.shape}")
-                
-            # 创建默认的grid_thw
-            # T=1 for images, H和W是patch grid dimensions
-            grid_h = H // 14  # assuming patch_size=14
-            grid_w = W // 14
-            grid_thw = torch.tensor([[1, grid_h, grid_w]] * B, dtype=torch.long)
-        
-        # 若是 4D，补充 T 维度
+                pixel_values = F.pad(pixel_values, (0, W_pad - W, 0, H_pad - H), value=0.0)
+            else:  # [B,C,T,H,W]：按最后两个维度 pad
+                pixel_values = F.pad(pixel_values, (0, W_pad - W, 0, H_pad - H, 0, 0), value=0.0)
+
+        # 补 T 维到 5D（视觉塔习惯 [B,C,T,H,W]）
         if pixel_values.ndim == 4:
-            pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
-        
-        #调试信息 - 取消注释以查看实际处理的维度
-        # if pixel_values.ndim == 5:
-        #     B, C, T, H, W = pixel_values.shape
-        #     print(f"Batch pixel_values: [B={B}, C={C}, T={T}, H={H}, W={W}]")
-        #     print(f"Grid thw: {grid_thw}")
-            
-        #     # 验证grid维度与实际尺寸的关系
-        #     for i in range(B):
-        #         t, h, w = grid_thw[i].tolist()
-        #         expected_h = h * 14
-        #         expected_w = w * 14
-        #         if expected_h != H or expected_w != W:
-        #             print(f"Warning: Image {i} dimension mismatch!")
-        #             print(f"  Grid suggests {expected_h}x{expected_w}, but got {H}x{W}")
-        
+            pixel_values = pixel_values.unsqueeze(2)  # [B,C,1,H,W]
+
+        # 以“pad 后的尺寸”重建 grid_thw（严格对齐视觉塔内部 patchify）
+        Hp = H_pad // 14
+        Wp = W_pad // 14
+        assert Hp % 4 == 0 and Wp % 4 == 0, f"Hp/Wp must be multiples of 4, got Hp={Hp}, Wp={Wp}"
+        grid_thw = torch.tensor([[T, Hp, Wp]] * B, dtype=torch.long)
+
         vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
-        
+
         return {
             "input_ids": input_ids,
             "labels": labels,
             "vision_inputs": vision_inputs,
         }
+
 
     batch_size = args.batch_size
     microbatch_num = args.microbatch_num
