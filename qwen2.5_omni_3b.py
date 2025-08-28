@@ -206,7 +206,7 @@ def main():
     tok = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
     cfg = AutoConfig.from_pretrained(MODEL_ID, trust_remote_code=True)
     thinker = Qwen2_5OmniThinkerForConditionalGeneration.from_pretrained(MODEL_ID, trust_remote_code=True)
-    proc = AutoProcessor.from_pretrained(MODEL_ID, min_pixels=128*28*28, max_pixels=512*28*28)
+    proc = AutoProcessor.from_pretrained(MODEL_ID)
     
     # 便捷访问
     text_model   = thinker.model           # 纯解码器主干（有 embed_tokens / layers / norm）
@@ -283,29 +283,24 @@ def main():
     from PIL import Image, ImageOps
 
     def _round_to_multiple(x: int, m: int) -> int:
-        # 四舍五入到 m 的倍数；最小不低于 m
         return max(m, int(round(x / m) * m))
 
-    def _resize_to_multiple_of_28(img: Image.Image) -> Image.Image:
-        """
-        将 PIL 图像的宽高同时对齐到 28 的倍数（保持近似比例，允许轻微形变）。
-        如不希望形变，可用下方“padding 版本”替换。
-        """
-        # 处理 EXIF 方向，避免有的图“看起来”是横图但实际尺寸是竖图
-        img = ImageOps.exif_transpose(img)
-
+    def _pad_to_multiple_of_28(img: Image.Image) -> Image.Image:
+        img = ImageOps.exif_transpose(img)   # 处理EXIF方向
         w, h = img.size
         new_w = _round_to_multiple(w, 28)
         new_h = _round_to_multiple(h, 28)
-        if (new_w, new_h) == (w, h):
+        pad_right  = new_w - w
+        pad_bottom = new_h - h
+        if pad_right == 0 and pad_bottom == 0:
             return img
-        # CPU 训练下，PIL 的双三次插值质量/速度较平衡
-        return img.resize((new_w, new_h), resample=Image.BICUBIC)
+        # 右、下两边补0（不形变，保持比例）
+        return ImageOps.expand(img, border=(0, 0, pad_right, pad_bottom), fill=0)
+
 
     def collate_fn(batch):
-        texts  = [ex["text"] for ex in batch]    # 保证每个元素是 str
         texts  = [ex["text"] for ex in batch]
-        images = [_resize_to_multiple_of_28(ex["image"]) for ex in batch]
+        images = [_pad_to_multiple_of_28(ex["image"]) for ex in batch]
 
         pack = proc(
             text=texts,
@@ -316,27 +311,38 @@ def main():
                 "truncation": True,
                 "return_attention_mask": True,
             },
+            # 关键：让图像预处理“就地转换为张量/归一化”，不再改大小
+            image_kwargs={
+                "do_resize": False,
+                "do_center_crop": False,
+                # 其他保持默认：do_rescale/do_normalize 通常 True 即可
+            },
         )
 
         # 文本侧
-        input_ids = pack["input_ids"]              # [B, L]
-        attn_mask = pack.get("attention_mask", None)
-        labels    = input_ids.clone()              # 你原有的 labels 逻辑可以替换这里
+        input_ids = pack["input_ids"]
+        labels    = input_ids.clone()
 
         # 视觉侧
-        pixel_values = pack["pixel_values"]        # [B, C, H, W]（或已是 [B,C,T,H,W]）
+        pixel_values = pack["pixel_values"]        # [B,C,H,W] 或 [B,C,T,H,W]
         grid_thw     = pack.get("grid_thw", pack.get("image_grid_thw"))
         assert grid_thw is not None
 
+        # 若还是 4D，补 T 维
         if pixel_values.ndim == 4:
-            pixel_values = pixel_values.unsqueeze(2)  # -> [B, C, 1, H, W]
+            pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
+
+        # ★ 断言保证 H'、W' 均为偶数（否则立即暴露）
+        H_ = grid_thw[:, 1]
+        W_ = grid_thw[:, 2]
+        assert (H_ % 2 == 0).all() and (W_ % 2 == 0).all(), f"grid_thw has odd H'/W': {grid_thw}"
+
         vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
 
         return {
             "input_ids": input_ids,
             "labels": labels,
             "vision_inputs": vision_inputs,
-            # 如需："attention_mask": attn_mask,
         }
 
 
