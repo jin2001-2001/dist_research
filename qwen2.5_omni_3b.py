@@ -80,22 +80,29 @@ class Stage0(nn.Module):
             if isinstance(vision_inputs, dict):
                 vi = dict(vision_inputs)  # 浅拷贝，避免原地改
                 # 兜底取图像张量
-                x = (vi.get("pixel_values") or
-                     vi.get("x") or
-                     vi.get("images") or
-                     vi.get("video"))
-                # 兜底取网格
-                grid = (vi.get("grid_thw") or
-                        vi.get("image_grid_thw") or
-                        vi.get("thw"))
+                # 在 vision_inputs 是 dict 的分支里，替换你现在的取值语句
+                x = vi.get("pixel_values", None)
+                if x is None:
+                    x = vi.get("x", None)
+                if x is None:
+                    x = vi.get("images", None)
+                if x is None:
+                    x = vi.get("video", None)
+
+                grid = vi.get("grid_thw", None)
+                if grid is None:
+                    grid = vi.get("image_grid_thw", None)
+                if grid is None:
+                    grid = vi.get("thw", None)
+
                 assert x is not None,    "vision_inputs 缺少图像张量（pixel_values/x/images/video 任一）"
                 assert grid is not None, "vision_inputs 缺少 grid_thw（或 image_grid_thw/thw）"
 
-                # 保证 5D 形状 [B,C,T,H,W]
                 if x.ndim == 4:
-                    x = x.unsqueeze(2)
+                    x = x.unsqueeze(2)  # -> [B,C,1,H,W]
 
-                vision_seq = self.vision_enc(x, grid)
+                vision_seq = self.vision_enc(x, grid)  # 用位置实参调用
+
 
             elif isinstance(vision_inputs, (list, tuple)):
                 assert len(vision_inputs) == 2, "vision_inputs 期望为 (x, grid_thw)"
