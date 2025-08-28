@@ -356,20 +356,24 @@ def main():
         grid_thw     = pack.get("grid_thw", pack.get("image_grid_thw"))
         assert grid_thw is not None
 
+        # 调试：打印原始形状
+        # print(f"Initial pixel_values shape: {pixel_values.shape}")
+        # print(f"grid_thw: {grid_thw}")
+
         # 若还是 4D，补 T 维
         if pixel_values.ndim == 4:
             pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
 
+        # 断言保证 H'、W' 均为偶数
         H_ = grid_thw[:, 1]
         W_ = grid_thw[:, 2]
         assert (H_ % 2 == 0).all() and (W_ % 2 == 0).all(), f"grid_thw has odd H'/W': {grid_thw}"
         
-        # 添加额外的调试信息
-        if torch.any(H_ * W_ * 4 != pixel_values.shape[2] * pixel_values.shape[3] * pixel_values.shape[4] // (14 * 14)):
-            print(f"Warning: Dimension mismatch detected!")
-            print(f"  pixel_values shape: {pixel_values.shape}")
-            print(f"  grid_thw: {grid_thw}")
-            print(f"  Expected spatial dims: H={H_.tolist()}, W={W_.tolist()}")
+        # 验证维度匹配（可选的调试代码）
+        # if pixel_values.ndim == 5:
+        #     B, C, T, H, W = pixel_values.shape
+        #     print(f"Final pixel_values shape: [B={B}, C={C}, T={T}, H={H}, W={W}]")
+        #     print(f"Grid dims: H={H_.tolist()}, W={W_.tolist()}")
 
         vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
 
