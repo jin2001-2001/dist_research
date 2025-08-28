@@ -100,13 +100,7 @@ class Stage0(nn.Module):
 
                 if x.ndim == 4:
                     x = x.unsqueeze(2)  # -> [B,C,1,H,W]
-                if isinstance(vision_inputs, dict):
-                    grid = vision_inputs.get("grid_thw")
-                    if torch.is_tensor(grid):
-                        seq = grid[:, 0] * grid[:, 1] * grid[:, 2]
-                        assert (seq % 4 == 0).all(), f"Visual seq must be divisible by 4, got grid={grid}"
 
-                
                 vision_seq = self.vision_enc(x, grid)  # 用位置实参调用
 
 
@@ -115,12 +109,6 @@ class Stage0(nn.Module):
                 x, grid = vision_inputs
                 if isinstance(x, torch.Tensor) and x.ndim == 4:
                     x = x.unsqueeze(2)
-                if isinstance(vision_inputs, dict):
-                    grid = vision_inputs.get("grid_thw")
-                    if torch.is_tensor(grid):
-                        seq = grid[:, 0] * grid[:, 1] * grid[:, 2]
-                        assert (seq % 4 == 0).all(), f"Visual seq must be divisible by 4, got grid={grid}"
-
                 vision_seq = self.vision_enc(x, grid)
 
             else:
@@ -227,18 +215,6 @@ def main():
     rotary_emb   = getattr(text_model, "rotary_emb", None)
     vocab_size   = tok.vocab_size
 
-    # 视觉编码器的关键超参（不要硬编码 14 / 2 / 112）
-    if vision_enc is not None:
-        vit_cfg = getattr(vision_enc, "config", None)
-        PATCH = int(getattr(vit_cfg, "patch_size", 14))
-        SMS   = int(getattr(vit_cfg, "spatial_merge_size", 2))   # spatial_merge_unit = SMS*SMS (通常=4)
-        WIN   = int(getattr(vit_cfg, "window_size", 112))        # ViT 的窗口（像素）
-        # 为了让 (H/patch) 能被窗口网格整除，令 patch 网格的窗口步长：
-        VIT_MERGE = WIN // (PATCH * SMS)  # 通常是 4（112 / (14*2)）
-    else:
-        PATCH, SMS, VIT_MERGE = 14, 2, 4
-
-    
     # 自动切分点
     L  = len(text_model.layers)
     L1 = L // 3
@@ -304,83 +280,133 @@ def main():
 
     ds = raw.map(tok_fn, batched=True)
 
+    from PIL import Image, ImageOps
+
+    def _round_to_multiple(x: int, m: int) -> int:
+        """将数字向上取整到m的倍数"""
+        return max(m, int(math.ceil(x / m) * m))
+
+    def _pad_to_valid_size(img: Image.Image) -> Image.Image:
+        """
+        将图像填充到符合 Qwen2.5-Omni 视觉编码器要求的尺寸。
+        
+        Qwen2.5-Omni 的要求：
+        - patch_size = 14
+        - spatial_merge_size = 2  
+        - spatial_merge_unit = 4
+        - 最终 (H/14) 和 (W/14) 必须是 4 的倍数
+        """
+        img = ImageOps.exif_transpose(img)
+        w, h = img.size
+        
+        # 计算需要的最小尺寸
+        # 1. 必须是 14 的倍数（patch_size）
+        # 2. H/14 和 W/14 必须是 4 的倍数（spatial_merge_unit）
+        # 这意味着 H 和 W 必须是 56 (14*4) 的倍数
+        
+        # 直接填充到 56 的倍数
+        new_w = _round_to_multiple(w, 56)
+        new_h = _round_to_multiple(h, 56)
+        
+        # 进一步确保 grid 维度是 4 的倍数
+        grid_h = new_h // 14
+        grid_w = new_w // 14
+        
+        # 如果 grid 维度不是 4 的倍数，继续增加
+        while grid_h % 4 != 0:
+            new_h += 56
+            grid_h = new_h // 14
+        
+        while grid_w % 4 != 0:
+            new_w += 56
+            grid_w = new_w // 14
+        
+        # 为了额外的安全性，确保最终尺寸至少是 112x112
+        # （这确保有足够的 patches 进行 spatial merging）
+        new_w = max(new_w, 112)
+        new_h = max(new_h, 112)
+        
+        pad_right = new_w - w
+        pad_bottom = new_h - h
+        
+        if pad_right == 0 and pad_bottom == 0:
+            return img
+        
+        # 填充图像（右边和下边）
+        return ImageOps.expand(img, border=(0, 0, pad_right, pad_bottom), fill=0)
+
     def collate_fn(batch):
-        # 1) 取出原始的“视频帧”或“图像序列”
-        # 假设每个样本里有 key: "frames"  (形状可能是 torch.Tensor [C,T,H,W] 或 [T,H,W,C]，也可能是 PIL 列表)
-        videos = []
-        for ex in batch:
-            v = ex.get("frames", None) or ex.get("video", None) or ex.get("images", None)
-            if v is None:
-                raise ValueError("Sample missing 'frames'/'video'/'images' key.")
-
-            # 统一成 numpy 的 [T, H, W, C]（processor 的通用视频入口）
-            if isinstance(v, list):
-                # 可能是 PIL.Image 列表或 numpy 列表：processor 能直接吃 list（每帧）
-                videos.append(v)
-            elif hasattr(v, "shape"):  # torch.Tensor 或 numpy.ndarray
-                import numpy as np
-                import torch
-                if isinstance(v, torch.Tensor):
-                    t = v
-                    if t.dim() != 4:
-                        raise ValueError(f"Unexpected tensor dim: {t.shape}")
-                    # 常见两种： [C,T,H,W] 或 [T,H,W,C]
-                    if t.shape[0] in (1, 3):     # [C,T,H,W] -> [T,H,W,C]
-                        t = t.permute(1, 2, 3, 0).contiguous()
-                    elif t.shape[-1] in (1, 3):  # [T,H,W,C] 保持
-                        pass
-                    else:
-                        raise ValueError(f"Ambiguous video tensor shape: {t.shape}")
-                    v_np = t.detach().cpu().numpy()
-                else:
-                    v_np = np.asarray(v)
-                videos.append(v_np)
-            else:
-                # 其他类型（如单个视频文件路径）这里不处理；如有需要你可以在上游把它解帧
-                raise ValueError("Unsupported video type in sample.")
-
-        # 2) 走官方 Processor（关键一步）
-        # 只处理视觉，文本/音频你仍走原有管线
-        proc_out = processor(videos=videos, return_tensors="pt")
-
-        pixel_values = proc_out["pixel_values"]     # 常见为 [B, T, C, H, W] 或 [B, C, T, H, W]（随具体模型版本）
-        grid_thw     = proc_out.get("grid_thw", None)
+        """
+        数据批处理函数 - 使用processor的默认设置
+        让processor自己处理图像大小，避免手动padding导致的不兼容
+        """
+        texts = [ex["text"] for ex in batch]
+        images = [ex["image"] for ex in batch]
+        
+        # 让processor使用默认设置处理图像
+        # 这会自动调整图像大小到模型期望的尺寸
+        pack = proc(
+            text=texts,
+            images=images,
+            return_tensors="pt",
+            text_kwargs={
+                "padding": True,
+                "truncation": True,
+                "return_attention_mask": True,
+            },
+            # 使用默认的图像处理设置，让processor自动处理
+            # 不设置 do_resize=False，让它自动调整
+        )
+        
+        # 文本侧
+        input_ids = pack["input_ids"]
+        labels = input_ids.clone()
+        
+        # 视觉侧
+        pixel_values = pack["pixel_values"]  # [B,C,H,W] 或 [B,C,T,H,W]
+        grid_thw = pack.get("grid_thw", pack.get("image_grid_thw"))
+        
         if grid_thw is None:
-            # 某些版本可能叫别的字段；如果真遇到这种情况，再把 proc_out 打印出来看看 key
-            raise ValueError(f"Processor output keys: {list(proc_out.keys())}, missing 'grid_thw'")
-
-        # 3) 统一到你原先的形状约定：B, C, T, H, W   （你之前代码里是这样取的）
-        if pixel_values.dim() != 5:
-            raise ValueError(f"Unexpected pixel_values rank: {pixel_values.shape}")
-
-        # 判定是否需要从 [B, T, C, H, W] 转到 [B, C, T, H, W]
-        if pixel_values.shape[1] in (1, 3):
-            # 已是 [B, C, T, H, W]
-            pass
-        elif pixel_values.shape[2] in (1, 3):
-            # 是 [B, T, C, H, W] -> 置换成 [B, C, T, H, W]
-            pixel_values = pixel_values.permute(0, 2, 1, 3, 4).contiguous()
-        else:
-            raise ValueError(f"Cannot infer channel dim in pixel_values: {pixel_values.shape}")
-
-        vision_inputs = {
-            "pixel_values": pixel_values,  # [B, C, T, H, W]
-            "grid_thw": grid_thw.long(),   # [B, 3]，来自官方；与模型内部窗口划分一致
-        }
-
-        # 4) 组装你原先的其它返回（文本 ids / labels 等），这里示例：
-        input_ids = torch.stack([ex["input_ids"] for ex in batch], dim=0)
-        targets   = torch.stack([ex["labels"]    for ex in batch], dim=0)
-
+            # 如果没有grid_thw，尝试从pixel_values推断
+            if pixel_values.ndim == 4:
+                B, C, H, W = pixel_values.shape
+            elif pixel_values.ndim == 5:
+                B, C, T, H, W = pixel_values.shape
+            else:
+                raise ValueError(f"Unexpected pixel_values shape: {pixel_values.shape}")
+                
+            # 创建默认的grid_thw
+            # T=1 for images, H和W是patch grid dimensions
+            grid_h = H // 14  # assuming patch_size=14
+            grid_w = W // 14
+            grid_thw = torch.tensor([[1, grid_h, grid_w]] * B, dtype=torch.long)
+        
+        # 若是 4D，补充 T 维度
+        if pixel_values.ndim == 4:
+            pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
+        
+        #调试信息 - 取消注释以查看实际处理的维度
+        if pixel_values.ndim == 5:
+            B, C, T, H, W = pixel_values.shape
+            print(f"Batch pixel_values: [B={B}, C={C}, T={T}, H={H}, W={W}]")
+            print(f"Grid thw: {grid_thw}")
+            
+            # 验证grid维度与实际尺寸的关系
+            for i in range(B):
+                t, h, w = grid_thw[i].tolist()
+                expected_h = h * 14
+                expected_w = w * 14
+                if expected_h != H or expected_w != W:
+                    print(f"Warning: Image {i} dimension mismatch!")
+                    print(f"  Grid suggests {expected_h}x{expected_w}, but got {H}x{W}")
+        
+        vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
+        
         return {
             "input_ids": input_ids,
+            "labels": labels,
             "vision_inputs": vision_inputs,
-            "targets": targets,
         }
-
-
-
-
 
     batch_size = args.batch_size
     microbatch_num = args.microbatch_num
