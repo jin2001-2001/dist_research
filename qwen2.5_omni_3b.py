@@ -388,7 +388,7 @@ def main():
         grid_thw = grid_row.unsqueeze(0).repeat(B, 1)
 
         # 最后打包
-        vision_inputs = {"x": pixel_values, "grid_thw": grid_thw}
+        vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
         return {
             "input_ids": input_ids,
             "labels": labels,
