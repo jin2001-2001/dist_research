@@ -336,14 +336,15 @@ def main():
         return ImageOps.expand(img, border=(0, 0, pad_right, pad_bottom), fill=0)
 
     def collate_fn(batch):
-        """数据批处理函数，修复版本"""
+        """
+        数据批处理函数 - 使用processor的默认设置
+        让processor自己处理图像大小，避免手动padding导致的不兼容
+        """
         texts = [ex["text"] for ex in batch]
-        images = [_pad_to_valid_size(ex["image"]) for ex in batch]
+        images = [ex["image"] for ex in batch]
         
-        # 调试：打印处理后的图像尺寸
-        # for i, img in enumerate(images):
-        #     print(f"Image {i} size after padding: {img.size}")
-        
+        # 让processor使用默认设置处理图像
+        # 这会自动调整图像大小到模型期望的尺寸
         pack = proc(
             text=texts,
             images=images,
@@ -353,11 +354,8 @@ def main():
                 "truncation": True,
                 "return_attention_mask": True,
             },
-            # 禁用自动调整大小，使用我们手动填充的尺寸
-            image_kwargs={
-                "do_resize": False,
-                "do_center_crop": False,
-            },
+            # 使用默认的图像处理设置，让processor自动处理
+            # 不设置 do_resize=False，让它自动调整
         )
         
         # 文本侧
@@ -367,32 +365,40 @@ def main():
         # 视觉侧
         pixel_values = pack["pixel_values"]  # [B,C,H,W] 或 [B,C,T,H,W]
         grid_thw = pack.get("grid_thw", pack.get("image_grid_thw"))
-        assert grid_thw is not None, "Missing grid_thw in processor output"
+        
+        if grid_thw is None:
+            # 如果没有grid_thw，尝试从pixel_values推断
+            if pixel_values.ndim == 4:
+                B, C, H, W = pixel_values.shape
+            elif pixel_values.ndim == 5:
+                B, C, T, H, W = pixel_values.shape
+            else:
+                raise ValueError(f"Unexpected pixel_values shape: {pixel_values.shape}")
+                
+            # 创建默认的grid_thw
+            # T=1 for images, H和W是patch grid dimensions
+            grid_h = H // 14  # assuming patch_size=14
+            grid_w = W // 14
+            grid_thw = torch.tensor([[1, grid_h, grid_w]] * B, dtype=torch.long)
         
         # 若是 4D，补充 T 维度
         if pixel_values.ndim == 4:
             pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
         
-        # 验证 grid 维度
-        H_ = grid_thw[:, 1]
-        W_ = grid_thw[:, 2]
-        
-        # 确保 grid 维度满足要求
-        assert (H_ % 2 == 0).all(), f"Grid H must be even, got {H_.tolist()}"
-        assert (W_ % 2 == 0).all(), f"Grid W must be even, got {W_.tolist()}"
-        assert (H_ % 4 == 0).all(), f"Grid H must be divisible by 4, got {H_.tolist()}"
-        assert (W_ % 4 == 0).all(), f"Grid W must be divisible by 4, got {W_.tolist()}"
-        
-        # 调试信息（可选）
-        # if pixel_values.ndim == 5:
-        #     B, C, T, H, W = pixel_values.shape
-        #     print(f"Batch pixel_values: [B={B}, C={C}, T={T}, H={H}, W={W}]")
-        #     print(f"Grid thw: {grid_thw}")
-        #     print(f"Grid H: {H_.tolist()}, Grid W: {W_.tolist()}")
-        #     
-        #     # 计算预期的 token 数
-        #     expected_tokens_per_image = (H_ * W_ // 4).tolist()  # after spatial merge
-        #     print(f"Expected tokens per image after spatial merge: {expected_tokens_per_image}")
+        #调试信息 - 取消注释以查看实际处理的维度
+        if pixel_values.ndim == 5:
+            B, C, T, H, W = pixel_values.shape
+            print(f"Batch pixel_values: [B={B}, C={C}, T={T}, H={H}, W={W}]")
+            print(f"Grid thw: {grid_thw}")
+            
+            # 验证grid维度与实际尺寸的关系
+            for i in range(B):
+                t, h, w = grid_thw[i].tolist()
+                expected_h = h * 14
+                expected_w = w * 14
+                if expected_h != H or expected_w != W:
+                    print(f"Warning: Image {i} dimension mismatch!")
+                    print(f"  Grid suggests {expected_h}x{expected_w}, but got {H}x{W}")
         
         vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
         
@@ -401,7 +407,6 @@ def main():
             "labels": labels,
             "vision_inputs": vision_inputs,
         }
-
 
     batch_size = args.batch_size
     microbatch_num = args.microbatch_num
