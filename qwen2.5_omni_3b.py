@@ -371,7 +371,7 @@ def main():
         # 文本侧
         input_ids = pack["input_ids"]
         labels    = input_ids.clone()
-
+        print(f"✅✅✅{pack}")
         # 视觉侧：像素张量统一为 [B,C,T,H,W]
         pixel_values = pack["pixel_values"]  # [B,C,H,W] 或 [B,C,T,H,W]
         if pixel_values.ndim == 4:
