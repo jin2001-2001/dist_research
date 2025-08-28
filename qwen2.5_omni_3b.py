@@ -484,6 +484,7 @@ def main():
                 batch = next(data_iter)
                 print(f"✅✅✅{batch}")
                 inp_ids = batch["input_ids"].to(device)             # [B, block]
+                attn    = batch["attention_mask"].to(device)
                 vis_pack = batch["vision_inputs"]
                 if vis_pack is not None:
                     if "pixel_values_list" in vis_pack:
@@ -499,7 +500,7 @@ def main():
                 dist.broadcast(tgt, src=0)
 
                 # 传入流水：把 (input_ids, vision_inputs) 作为 Stage0 的输入
-                sched.step(inp_ids, vision_inputs=vis_pack, target=tgt)
+                sched.step(inp_ids,attention_mask=attn , vision_inputs=vis_pack, target=tgt)
 
             else:
                 # 其它 rank 只需要 label 的占位与广播
