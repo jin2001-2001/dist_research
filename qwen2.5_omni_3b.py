@@ -76,24 +76,35 @@ class Stage0(nn.Module):
 
         # 2) 视觉侧：如有图像则经视觉塔得到 image_embeds（2D 或 [B, Tv, D]）
         if vision_inputs is not None and self.vision_enc is not None:
-            x = vision_inputs.get("pixel_values", None)
             grid = vision_inputs.get("grid_thw", None)  # [B,3]
-            assert x is not None and grid is not None, "vision_inputs 需要包含 pixel_values 与 grid_thw"
+            x = None
+            if "pixel_values_list" in vision_inputs and isinstance(vision_inputs["pixel_values_list"], list):
+                # microbatch 内部把逐样本列表拼回 2D
+                x = torch.cat([t.to(device) for t in vision_inputs["pixel_values_list"]], dim=0)
+            else:
+                x = vision_inputs.get("pixel_values", None)
+                if x is not None:
+                    x = x.to(device)
+            assert x is not None and grid is not None, "vision_inputs 需要包含 pixel_values(_list) 与 grid_thw"
+
+            # 调试与兜底：检查长度与 2x2 merge 的整除关系
+            smu = int(getattr(self.vision_enc, "spatial_merge_unit", 4))
+            exp = int((grid[:, 0] * grid[:, 1] * grid[:, 2]).sum().item() * smu)
+            if x.size(0) != exp or (x.size(0) % smu) != 0:
+                raise ValueError(f"[chk] seq_len={x.size(0)}, expected={exp}, seq_len%{smu}={x.size(0)%smu}")
 
             # HF 的视觉塔接受 2D patch 序列： [N_total_patches, C_feat]
             image_embeds = self.vision_enc(x, grid_thw=grid)   # 通常返回 [N_total_patches, D]
 
             # 3) 计算图像占位符掩码，并核对“占位符个数 == 特征条数”
-            img_token_id = getattr(self.embed_tokens.weight, "image_token_id", None)
-            if img_token_id is None:
-                img_token_id = getattr(self.vision_enc, "image_token_id", None)
-            if img_token_id is None:
-                img_token_id = getattr(self, "image_token_id", None)
-            if img_token_id is None:
-                img_token_id = getattr(self.embed_tokens, "config", cfg).image_token_id
+            # 优先从模型/配置中获取 image_token_id
+            img_token_id = (
+                getattr(getattr(self, "config", object()), "image_token_id", None) or
+                getattr(self.vision_enc, "image_token_id", None)
+            )
+            assert img_token_id is not None, "未找到 image_token_id（请从模型 config 或视觉塔读取）"
 
             image_mask = (input_ids == img_token_id).unsqueeze(-1).expand_as(inputs_embeds)  # [B,T,D]
-
             n_tokens = image_mask.sum().item() // inputs_embeds.size(-1)  # 图像占位符个数
             n_feats  = image_embeds.shape[0]                              # 视觉特征条数
             if n_tokens != n_feats:
@@ -106,15 +117,18 @@ class Stage0(nn.Module):
         # 5) 注意力 mask / 位置 id（后续 Stage 沿用）
         if attention_mask is None:
             attention_mask = torch.ones((B, T), dtype=torch.long, device=device)
-        # causal mask: [B,1,T,T]
-        attn_mask = torch.triu(torch.full((T, T), float("-inf"), device=device), diagonal=1).unsqueeze(0).unsqueeze(0)
-        attn_mask = attn_mask.expand(B, 1, -1, -1).contiguous()
+
+        # 你原逻辑里使用的是 4D causal mask；保持一致
+        attn_mask = torch.triu(
+            torch.full((T, T), float("-inf"), device=device), diagonal=1
+        ).unsqueeze(0).unsqueeze(0).expand(B, 1, -1, -1).contiguous()
 
         position_ids = torch.arange(T, device=device).unsqueeze(0).expand(B, -1).contiguous()
         pos_emb = self.rotary_emb(inputs_embeds, position_ids) if self.rotary_emb is not None else None
 
-        # 与你原流水线对齐：返回 fused hidden + mask/pos
+        # 返回与原流水线一致的四元组
         return inputs_embeds.contiguous(), attn_mask, position_ids, pos_emb
+
 
 
 class Stage1(nn.Module):
@@ -328,7 +342,7 @@ def main():
         使用官方推荐路径：
         - 逐样本构造会话，image 放在 content 里，caption 作为 user 的 text
         - 用 processor.apply_chat_template 生成带图像占位符的 input_ids/attention_mask
-        - 直接使用 processor 返回的 pixel_values (2D) 与 image_grid_thw (B,3)
+        - 拆解 processor 返回的拼接 2D pixel_values 为“逐样本列表”，并保留 image_grid_thw (B,3)
         - 构造 labels：仅对文本 token 计算 loss，图像占位符与特殊符号置为 -100
         """
         conversations = []
@@ -345,7 +359,6 @@ def main():
                 }
             ])
 
-        # 注意：这里要把 padding/truncation 等传给 processor；并返回张量
         pack = proc.apply_chat_template(
             conversations,
             add_generation_prompt=False,
@@ -355,16 +368,13 @@ def main():
             padding=True
         )
 
-        input_ids     = pack["input_ids"]            # [B, T]
-        attention_mask= pack["attention_mask"]       # [B, T]
-        pixel_values  = pack.get("pixel_values", None)         # [N_patches, C_feat] 例如 [2940, 1176]
-        image_grid_thw= torch.as_tensor(pack.get("image_grid_thw", []), dtype=torch.long)  # [B, 3]
+        input_ids      = pack["input_ids"]            # [B, T]
+        attention_mask = pack["attention_mask"]       # [B, T]
+        labels         = input_ids.clone()
 
-        # === 构造 labels：仅文本 token 参与 loss ===
-        labels = input_ids.clone()
         # 忽略图像占位符、特殊 token
         special_ids = set([
-            tok.pad_token_id, tok.eos_token_id, tok.bos_token_id,  # 可能有的保留符
+            tok.pad_token_id, getattr(tok, "eos_token_id", None), getattr(tok, "bos_token_id", None),
             getattr(cfg, "image_token_id", None),
             getattr(cfg, "video_token_id", None),
             getattr(cfg, "audio_token_id", None),
@@ -373,18 +383,31 @@ def main():
         for sid in special_ids:
             labels[labels == sid] = -100
 
-        vision_inputs = {}
-        if pixel_values is not None:
-            vision_inputs["pixel_values"] = pixel_values
-        if image_grid_thw is not None and image_grid_thw.numel() > 0:
-            vision_inputs["grid_thw"] = image_grid_thw  # 模型侧名字通常用 grid_thw
+        # === 关键：把拼接后的 2D pixel_values 按样本切回列表 ===
+        vision_inputs = None
+        pixel_values   = pack.get("pixel_values", None)  # [sum_i N_i, C_feat] 例如 [2940, 1176]
+        image_grid_thw = torch.as_tensor(pack.get("image_grid_thw", []), dtype=torch.long)  # [B, 3]
+        if pixel_values is not None and image_grid_thw.numel() > 0:
+            smu = int(getattr(vision_enc, "spatial_merge_unit", 4))  # 2x2 merge -> 4
+            counts = (image_grid_thw[:, 0] * image_grid_thw[:, 1] * image_grid_thw[:, 2]) * smu
+            slices, off = [], 0
+            for n in counts.tolist():
+                slices.append(pixel_values[off: off + n])
+                off += n
+            assert off == pixel_values.size(0), f"visual tokens mismatch: {off} != {pixel_values.size(0)}"
+
+            vision_inputs = {
+                "pixel_values_list": slices,   # ★ 逐样本列表
+                "grid_thw": image_grid_thw,    # [B,3]
+            }
 
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
-            "vision_inputs": vision_inputs if len(vision_inputs) > 0 else None,
+            "vision_inputs": vision_inputs,
         }
+
 
 
 
@@ -461,9 +484,14 @@ def main():
                 batch = next(data_iter)
                 inp_ids = batch["input_ids"].to(device)             # [B, block]
                 vis_pack = batch["vision_inputs"]
-                vis_pack["pixel_values"] = vis_pack["pixel_values"].to(device)
-                if torch.is_tensor(vis_pack["grid_thw"]):
-                    vis_pack["grid_thw"] = vis_pack["grid_thw"].to(device)
+                if vis_pack is not None:
+                    if "pixel_values_list" in vis_pack:
+                        vis_pack["pixel_values_list"] = [t.to(device) for t in vis_pack["pixel_values_list"]]
+                    elif "pixel_values" in vis_pack:  # 兼容意外情况
+                        vis_pack["pixel_values"] = vis_pack["pixel_values"].to(device)
+                    if torch.is_tensor(vis_pack.get("grid_thw", None)):
+                        vis_pack["grid_thw"] = vis_pack["grid_thw"].to(device)
+
 
                 tgt = batch["labels"].to(device)                # [B, block]
                 # 广播 label（仅文本部分需要参与 loss）
