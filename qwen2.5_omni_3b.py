@@ -63,83 +63,59 @@ class Stage0(nn.Module):
         self.vision_enc   = vision_enc
         self.rotary_emb   = rotary_emb
 
-    def forward(self, input_ids, audio_inputs=None, vision_inputs=None):
-        # 解包：有的流水会把 (input_ids, vision_inputs) 打包在一起传入
+    def forward(self, input_ids, attention_mask=None, vision_inputs=None, audio_inputs=None):
+        # 兼容你原本可能传 (input_ids, vision_inputs)
         if isinstance(input_ids, (tuple, list)):
             input_ids, vision_inputs = input_ids
 
-        # 兜底：若视觉是 [B,C,H,W]，补成 [B,C,1,H,W]
-        if vision_inputs is not None and isinstance(vision_inputs, torch.Tensor) and vision_inputs.ndim == 4:
-            vision_inputs = vision_inputs.unsqueeze(2)
+        device = input_ids.device
+        B, T = input_ids.shape
 
-        device   = input_ids.device
-        B, Ttxt  = input_ids.shape
-        text_emb = self.embed_tokens(input_ids)   # [B, Ttxt, D_txt]
+        # 1) 文本嵌入
+        inputs_embeds = self.embed_tokens(input_ids)      # [B, T, D]
 
-        # 可选：音频
-        audio_seq = (self.audio_enc(audio_inputs)
-             if (self.audio_enc is not None and audio_inputs is not None) else None)
+        # 2) 视觉侧：如有图像则经视觉塔得到 image_embeds（2D 或 [B, Tv, D]）
+        if vision_inputs is not None and self.vision_enc is not None:
+            x = vision_inputs.get("pixel_values", None)
+            grid = vision_inputs.get("grid_thw", None)  # [B,3]
+            assert x is not None and grid is not None, "vision_inputs 需要包含 pixel_values 与 grid_thw"
 
-        # 视觉
-        vision_seq = None
-        grid       = None
-        if self.vision_enc is not None and vision_inputs is not None:
-            if isinstance(vision_inputs, dict):
-                vi = dict(vision_inputs)  # 浅拷贝，避免原地改
-                x   = vi.get("pixel_values", vi.get("x", vi.get("images", vi.get("video", None))))
-                grid = vi.get("grid_thw", vi.get("image_grid_thw", vi.get("thw", None)))
-                assert x is not None,    "vision_inputs 缺少图像张量（pixel_values/x/images/video 任一）"
-                assert grid is not None, "vision_inputs 缺少 grid_thw（或 image_grid_thw/thw）"
-                if isinstance(x, torch.Tensor) and x.ndim == 4:
-                    x = x.unsqueeze(2)  # -> [B,C,1,H,W]
-                vision_seq = self.vision_enc(x, grid)   # 可能返回 [Tv, D] 或 [B,Tv,D]
+            # HF 的视觉塔接受 2D patch 序列： [N_total_patches, C_feat]
+            image_embeds = self.vision_enc(x, grid_thw=grid)   # 通常返回 [N_total_patches, D]
 
-            elif isinstance(vision_inputs, (list, tuple)):
-                assert len(vision_inputs) == 2, "vision_inputs 期望为 (x, grid_thw)"
-                x, grid = vision_inputs
-                if isinstance(x, torch.Tensor) and x.ndim == 4:
-                    x = x.unsqueeze(2)
-                vision_seq = self.vision_enc(x, grid)
+            # 3) 计算图像占位符掩码，并核对“占位符个数 == 特征条数”
+            img_token_id = getattr(self.embed_tokens.weight, "image_token_id", None)
+            if img_token_id is None:
+                img_token_id = getattr(self.vision_enc, "image_token_id", None)
+            if img_token_id is None:
+                img_token_id = getattr(self, "image_token_id", None)
+            if img_token_id is None:
+                img_token_id = getattr(self.embed_tokens, "config", cfg).image_token_id
 
-            else:
-                raise ValueError("vision_inputs 必须是 dict 或 (x, grid_thw)")
+            image_mask = (input_ids == img_token_id).unsqueeze(-1).expand_as(inputs_embeds)  # [B,T,D]
 
-        # === 统一视觉序列形状到 [B, Tv, D] ===
-        if vision_seq is not None:
-            if vision_seq.dim() == 2:
-                # 需要利用“标准语义”的 grid_thw 推回每样本 Tv
-                assert isinstance(grid, torch.Tensor) and grid.dim() == 2 and grid.size(1) == 3, \
-                    f"Expect grid_thw [B,3], got {type(grid)} {getattr(grid,'shape',None)}"
-                smu = 4
-                # smu = int(getattr(self.vision_enc, "spatial_merge_unit", 4))  # spatial_merge_unit = 2x2 merge
-                Tv_per = (grid[:, 0] * grid[:, 1] * grid[:, 2]) * smu   # [B]
-                Tv0 = int(Tv_per[0].item())
-                # 要求本 batch 的 Tv 一致（如不一致需在 collate_fn 做 pad 对齐）
-                assert torch.all(Tv_per == Tv0), f"Visual token count per sample not equal: {Tv_per.tolist()}"
-                D = vision_seq.size(-1)
-                total = vision_seq.size(0)
-                if total == Tv0 * B:
-                    vision_seq = vision_seq.view(B, Tv0, D)
-                elif total == Tv0 and B == 1:
-                    vision_seq = vision_seq.view(1, Tv0, D)
-                else:
-                    raise ValueError(f"Cannot reshape vision_seq {vision_seq.shape} with B={B}, Tv={Tv0}")
-            elif vision_seq.dim() == 3:
-                pass
-            else:
-                raise ValueError(f"Unexpected vision_seq shape: {vision_seq.shape}")
+            n_tokens = image_mask.sum().item() // inputs_embeds.size(-1)  # 图像占位符个数
+            n_feats  = image_embeds.shape[0]                              # 视觉特征条数
+            if n_tokens != n_feats:
+                raise ValueError(f"Image features and image tokens do not match: tokens={n_tokens}, features={n_feats}")
 
-        # === 打包三路序列 ===
-        hidden = pack_modalities(text_emb, audio_seq, vision_seq)   # [B, T_total, D]
-        B, T = hidden.shape[:2]
+            # 4) 注入：把占位符位置的嵌入换成视觉特征
+            image_embeds = image_embeds.to(inputs_embeds.device, dtype=inputs_embeds.dtype)
+            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
-        # 位置与掩码
-        position_ids = torch.arange(T, device=device).unsqueeze(0).expand(B, -1).contiguous()  # [B,T]
-        attn_mask    = build_causal(T, device).expand(B, 1, -1, -1).contiguous()              # [B,1,T,T]
+        # 5) 注意力 mask / 位置 id（后续 Stage 沿用）
+        if attention_mask is None:
+            attention_mask = torch.ones((B, T), dtype=torch.long, device=device)
+        # causal mask: [B,1,T,T]
+        attn_mask = torch.triu(torch.full((T, T), float("-inf"), device=device), diagonal=1).unsqueeze(0).unsqueeze(0)
+        attn_mask = attn_mask.expand(B, 1, -1, -1).contiguous()
 
-        # 可选：提前计算 RoPE tables
-        pos_emb = self.rotary_emb(hidden, position_ids) if self.rotary_emb is not None else None
-        return hidden.contiguous(), attn_mask, position_ids, pos_emb
+        position_ids = torch.arange(T, device=device).unsqueeze(0).expand(B, -1).contiguous()
+        pos_emb = self.rotary_emb(inputs_embeds, position_ids) if self.rotary_emb is not None else None
+
+        # 与你原流水线对齐：返回 fused hidden + mask/pos
+        return inputs_embeds.contiguous(), attn_mask, position_ids, pos_emb
+
 
 class Stage1(nn.Module):
     def __init__(self, text_model, L1, rotary_emb=None):
@@ -349,41 +325,67 @@ def main():
 
     def collate_fn(batch):
         """
-        数据批处理函数
-        统一：grid_thw 使用标准“patch 网格”语义 (T, H_patch, W_patch)
-        并把像素张量统一到 [B,C,T,H,W]
+        使用官方推荐路径：
+        - 逐样本构造会话，image 放在 content 里，caption 作为 user 的 text
+        - 用 processor.apply_chat_template 生成带图像占位符的 input_ids/attention_mask
+        - 直接使用 processor 返回的 pixel_values (2D) 与 image_grid_thw (B,3)
+        - 构造 labels：仅对文本 token 计算 loss，图像占位符与特殊符号置为 -100
         """
-        texts  = [ex["text"]  for ex in batch]
-        images = [ex["image"] for ex in batch]
-        images = [ _pad_to_valid_size(img) for img in images ]
+        conversations = []
+        for ex in batch:
+            img = ex["image"]
+            txt = ex["text"] if isinstance(ex["text"], str) else ""
+            conversations.append([
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": img},
+                        {"type": "text",  "text": txt}
+                    ],
+                }
+            ])
 
-        # 让 AutoProcessor 处理文本与图像张量（像素大小让它自己做）
-        pack = proc(
-            text=texts,
-            images=images,
+        # 注意：这里要把 padding/truncation 等传给 processor；并返回张量
+        pack = proc.apply_chat_template(
+            conversations,
+            add_generation_prompt=False,
+            tokenize=True,
             return_tensors="pt",
-            text_kwargs={
-                "padding": True,
-                "truncation": True,
-                "return_attention_mask": True,
-            },
-            # 图像端保持默认 resize/pad
+            return_dict=True,
+            padding=True
         )
 
-        # 文本侧
-        input_ids = pack["input_ids"]
-        labels    = input_ids.clone()
-        # === 视觉侧（按 Omni 的返回直接用）===
-        pixel_values = pack["pixel_values"]  # 形状通常是 [sum_i Tv_i, D]，例如 [14616, 1176]
-        grid_thw     = torch.as_tensor(pack["image_grid_thw"], dtype=torch.long)  # [B, 3]，每张图的 [T,H_grid,W_grid]
+        input_ids     = pack["input_ids"]            # [B, T]
+        attention_mask= pack["attention_mask"]       # [B, T]
+        pixel_values  = pack.get("pixel_values", None)         # [N_patches, C_feat] 例如 [2940, 1176]
+        image_grid_thw= torch.as_tensor(pack.get("image_grid_thw", []), dtype=torch.long)  # [B, 3]
 
-        vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
+        # === 构造 labels：仅文本 token 参与 loss ===
+        labels = input_ids.clone()
+        # 忽略图像占位符、特殊 token
+        special_ids = set([
+            tok.pad_token_id, tok.eos_token_id, tok.bos_token_id,  # 可能有的保留符
+            getattr(cfg, "image_token_id", None),
+            getattr(cfg, "video_token_id", None),
+            getattr(cfg, "audio_token_id", None),
+        ])
+        special_ids = {i for i in special_ids if i is not None}
+        for sid in special_ids:
+            labels[labels == sid] = -100
+
+        vision_inputs = {}
+        if pixel_values is not None:
+            vision_inputs["pixel_values"] = pixel_values
+        if image_grid_thw is not None and image_grid_thw.numel() > 0:
+            vision_inputs["grid_thw"] = image_grid_thw  # 模型侧名字通常用 grid_thw
 
         return {
             "input_ids": input_ids,
+            "attention_mask": attention_mask,
             "labels": labels,
-            "vision_inputs": vision_inputs,
+            "vision_inputs": vision_inputs if len(vision_inputs) > 0 else None,
         }
+
 
 
 
@@ -406,11 +408,14 @@ def main():
         if output is None or target is None:
             return None
         vocab_size = output.size(-1)
-        Ttxt = target.size(1)
-        output = output[:, :Ttxt, :]          # <-- 新增
-        output = output[:, :-1, :].reshape(-1, vocab_size)
-        target = target[:, 1:].reshape(-1)
-        return F.cross_entropy(output, target)
+
+        # output: [B, T, V]; target: [B, T]，其中非文本位置已在 collate_fn 置 -100
+        # 做常规左移
+        logits = output[:, :-1, :].reshape(-1, vocab_size)
+        labels = target[:, 1:].reshape(-1)
+
+        return F.cross_entropy(logits, labels, ignore_index=-100)
+
 
 
     # ==== 调度与动作表（保持你现有逻辑）====
