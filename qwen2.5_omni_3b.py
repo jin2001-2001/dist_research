@@ -22,7 +22,7 @@ import torch.distributed as dist
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from datasets import load_dataset
 from tqdm import tqdm
-import time
+import time, math
 
 from stage_with_mutiple_ranks import PipelineStage_with_mutiple_ranks
 from schedule_runtime import PipelineScheduleRuntimeWithDirection
@@ -283,24 +283,52 @@ def main():
     from PIL import Image, ImageOps
 
     def _round_to_multiple(x: int, m: int) -> int:
-        return max(m, int(round(x / m) * m))
+        """将数字向上取整到m的倍数"""
+        return max(m, int(math.ceil(x / m) * m))  # 使用 ceil 而不是 round
 
-    def _pad_to_multiple_of_28(img: Image.Image) -> Image.Image:
+    def _pad_to_valid_size(img: Image.Image) -> Image.Image:
+        """
+        将图像填充到符合 Qwen2.5-Omni 视觉编码器要求的尺寸。
+        
+        关键要求：
+        1. 尺寸必须是 28 的倍数（patch_size = 14, merge_size = 2）
+        2. 进一步确保能被 spatial_merge_unit (4) 整除
+        3. 最终的 grid 维度也要是偶数
+        """
         img = ImageOps.exif_transpose(img)   # 处理EXIF方向
         w, h = img.size
+        
+        # 首先确保是 28 的倍数
         new_w = _round_to_multiple(w, 28)
         new_h = _round_to_multiple(h, 28)
+        
+        # 进一步确保 (H/14) 和 (W/14) 都是偶数
+        # 因为 patch_size=14，所以 grid_h = new_h/14, grid_w = new_w/14
+        # 这些值需要是偶数
+        while (new_h // 14) % 2 != 0:
+            new_h += 28
+        while (new_w // 14) % 2 != 0:
+            new_w += 28
+        
+        # 添加额外检查：确保能被 56 整除（28*2）
+        # 这样可以确保后续的所有除法操作都能得到整数
+        new_w = _round_to_multiple(new_w, 56)
+        new_h = _round_to_multiple(new_h, 56)
+        
         pad_right  = new_w - w
         pad_bottom = new_h - h
+        
         if pad_right == 0 and pad_bottom == 0:
             return img
-        # 右、下两边补0（不形变，保持比例）
+            
+        # 右、下两边补0（保持原始内容在左上角）
         return ImageOps.expand(img, border=(0, 0, pad_right, pad_bottom), fill=0)
 
-
     def collate_fn(batch):
+        """数据批处理函数，修复版本"""
         texts  = [ex["text"] for ex in batch]
-        images = [_pad_to_multiple_of_28(ex["image"]) for ex in batch]
+        # 使用新的填充函数
+        images = [_pad_to_valid_size(ex["image"]) for ex in batch]
 
         pack = proc(
             text=texts,
@@ -311,7 +339,7 @@ def main():
                 "truncation": True,
                 "return_attention_mask": True,
             },
-            # 关键：让图像预处理“就地转换为张量/归一化”，不再改大小
+            # 关键：让图像预处理"就地转换为张量/归一化"，不再改大小
             image_kwargs={
                 "do_resize": False,
                 "do_center_crop": False,
@@ -332,10 +360,16 @@ def main():
         if pixel_values.ndim == 4:
             pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
 
-        # ★ 断言保证 H'、W' 均为偶数（否则立即暴露）
         H_ = grid_thw[:, 1]
         W_ = grid_thw[:, 2]
         assert (H_ % 2 == 0).all() and (W_ % 2 == 0).all(), f"grid_thw has odd H'/W': {grid_thw}"
+        
+        # 添加额外的调试信息
+        if torch.any(H_ * W_ * 4 != pixel_values.shape[2] * pixel_values.shape[3] * pixel_values.shape[4] // (14 * 14)):
+            print(f"Warning: Dimension mismatch detected!")
+            print(f"  pixel_values shape: {pixel_values.shape}")
+            print(f"  grid_thw: {grid_thw}")
+            print(f"  Expected spatial dims: H={H_.tolist()}, W={W_.tolist()}")
 
         vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
 
