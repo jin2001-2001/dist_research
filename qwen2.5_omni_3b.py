@@ -284,52 +284,66 @@ def main():
 
     def _round_to_multiple(x: int, m: int) -> int:
         """将数字向上取整到m的倍数"""
-        return max(m, int(math.ceil(x / m) * m))  # 使用 ceil 而不是 round
+        return max(m, int(math.ceil(x / m) * m))
 
     def _pad_to_valid_size(img: Image.Image) -> Image.Image:
         """
         将图像填充到符合 Qwen2.5-Omni 视觉编码器要求的尺寸。
         
-        关键要求：
-        1. 尺寸必须是 28 的倍数（patch_size = 14, merge_size = 2）
-        2. 进一步确保能被 spatial_merge_unit (4) 整除
-        3. 最终的 grid 维度也要是偶数
+        Qwen2.5-Omni 的要求：
+        - patch_size = 14
+        - spatial_merge_size = 2  
+        - spatial_merge_unit = 4
+        - 最终 (H/14) 和 (W/14) 必须是 4 的倍数
         """
-        img = ImageOps.exif_transpose(img)   # 处理EXIF方向
+        img = ImageOps.exif_transpose(img)
         w, h = img.size
         
-        # 首先确保是 28 的倍数
-        new_w = _round_to_multiple(w, 28)
-        new_h = _round_to_multiple(h, 28)
+        # 计算需要的最小尺寸
+        # 1. 必须是 14 的倍数（patch_size）
+        # 2. H/14 和 W/14 必须是 4 的倍数（spatial_merge_unit）
+        # 这意味着 H 和 W 必须是 56 (14*4) 的倍数
         
-        # 进一步确保 (H/14) 和 (W/14) 都是偶数
-        # 因为 patch_size=14，所以 grid_h = new_h/14, grid_w = new_w/14
-        # 这些值需要是偶数
-        while (new_h // 14) % 2 != 0:
-            new_h += 28
-        while (new_w // 14) % 2 != 0:
-            new_w += 28
+        # 直接填充到 56 的倍数
+        new_w = _round_to_multiple(w, 56)
+        new_h = _round_to_multiple(h, 56)
         
-        # 添加额外检查：确保能被 56 整除（28*2）
-        # 这样可以确保后续的所有除法操作都能得到整数
-        new_w = _round_to_multiple(new_w, 56)
-        new_h = _round_to_multiple(new_h, 56)
+        # 进一步确保 grid 维度是 4 的倍数
+        grid_h = new_h // 14
+        grid_w = new_w // 14
         
-        pad_right  = new_w - w
+        # 如果 grid 维度不是 4 的倍数，继续增加
+        while grid_h % 4 != 0:
+            new_h += 56
+            grid_h = new_h // 14
+        
+        while grid_w % 4 != 0:
+            new_w += 56
+            grid_w = new_w // 14
+        
+        # 为了额外的安全性，确保最终尺寸至少是 112x112
+        # （这确保有足够的 patches 进行 spatial merging）
+        new_w = max(new_w, 112)
+        new_h = max(new_h, 112)
+        
+        pad_right = new_w - w
         pad_bottom = new_h - h
         
         if pad_right == 0 and pad_bottom == 0:
             return img
-            
-        # 右、下两边补0（保持原始内容在左上角）
+        
+        # 填充图像（右边和下边）
         return ImageOps.expand(img, border=(0, 0, pad_right, pad_bottom), fill=0)
 
     def collate_fn(batch):
         """数据批处理函数，修复版本"""
-        texts  = [ex["text"] for ex in batch]
-        # 使用新的填充函数
+        texts = [ex["text"] for ex in batch]
         images = [_pad_to_valid_size(ex["image"]) for ex in batch]
-
+        
+        # 调试：打印处理后的图像尺寸
+        # for i, img in enumerate(images):
+        #     print(f"Image {i} size after padding: {img.size}")
+        
         pack = proc(
             text=texts,
             images=images,
@@ -339,44 +353,49 @@ def main():
                 "truncation": True,
                 "return_attention_mask": True,
             },
-            # 关键：让图像预处理"就地转换为张量/归一化"，不再改大小
+            # 禁用自动调整大小，使用我们手动填充的尺寸
             image_kwargs={
                 "do_resize": False,
                 "do_center_crop": False,
-                # 其他保持默认：do_rescale/do_normalize 通常 True 即可
             },
         )
-
+        
         # 文本侧
         input_ids = pack["input_ids"]
-        labels    = input_ids.clone()
-
+        labels = input_ids.clone()
+        
         # 视觉侧
-        pixel_values = pack["pixel_values"]        # [B,C,H,W] 或 [B,C,T,H,W]
-        grid_thw     = pack.get("grid_thw", pack.get("image_grid_thw"))
-        assert grid_thw is not None
-
-        # 调试：打印原始形状
-        # print(f"Initial pixel_values shape: {pixel_values.shape}")
-        # print(f"grid_thw: {grid_thw}")
-
-        # 若还是 4D，补 T 维
+        pixel_values = pack["pixel_values"]  # [B,C,H,W] 或 [B,C,T,H,W]
+        grid_thw = pack.get("grid_thw", pack.get("image_grid_thw"))
+        assert grid_thw is not None, "Missing grid_thw in processor output"
+        
+        # 若是 4D，补充 T 维度
         if pixel_values.ndim == 4:
             pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
-
-        # 断言保证 H'、W' 均为偶数
+        
+        # 验证 grid 维度
         H_ = grid_thw[:, 1]
         W_ = grid_thw[:, 2]
-        assert (H_ % 2 == 0).all() and (W_ % 2 == 0).all(), f"grid_thw has odd H'/W': {grid_thw}"
         
-        # 验证维度匹配（可选的调试代码）
+        # 确保 grid 维度满足要求
+        assert (H_ % 2 == 0).all(), f"Grid H must be even, got {H_.tolist()}"
+        assert (W_ % 2 == 0).all(), f"Grid W must be even, got {W_.tolist()}"
+        assert (H_ % 4 == 0).all(), f"Grid H must be divisible by 4, got {H_.tolist()}"
+        assert (W_ % 4 == 0).all(), f"Grid W must be divisible by 4, got {W_.tolist()}"
+        
+        # 调试信息（可选）
         # if pixel_values.ndim == 5:
         #     B, C, T, H, W = pixel_values.shape
-        #     print(f"Final pixel_values shape: [B={B}, C={C}, T={T}, H={H}, W={W}]")
-        #     print(f"Grid dims: H={H_.tolist()}, W={W_.tolist()}")
-
+        #     print(f"Batch pixel_values: [B={B}, C={C}, T={T}, H={H}, W={W}]")
+        #     print(f"Grid thw: {grid_thw}")
+        #     print(f"Grid H: {H_.tolist()}, Grid W: {W_.tolist()}")
+        #     
+        #     # 计算预期的 token 数
+        #     expected_tokens_per_image = (H_ * W_ // 4).tolist()  # after spatial merge
+        #     print(f"Expected tokens per image after spatial merge: {expected_tokens_per_image}")
+        
         vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
-
+        
         return {
             "input_ids": input_ids,
             "labels": labels,
