@@ -86,7 +86,8 @@ class Stage0(nn.Module):
                     vi["grid_thw"] = vi.pop("image_grid_thw")
                 assert "x" in vi and "grid_thw" in vi, "vision_inputs 需要包含 x 和 grid_thw"
                 # Qwen2_5OmniVisionEncoder 期望形参名为 (x, grid_thw)，用 **vi 解包最稳妥
-                vision_seq = self.vision_enc(**vi)
+                vision_seq = self.vision_enc(vi["pixel_values"], grid_thw=vi["grid_thw"])
+
 
             elif isinstance(vision_inputs, (list, tuple)):
                 assert len(vision_inputs) == 2, "vision_inputs 期望为 (x, grid_thw)"
