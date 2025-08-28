@@ -305,95 +305,79 @@ def main():
     ds = raw.map(tok_fn, batched=True)
 
     def collate_fn(batch):
-        # ---- 文本：用 tokenizer 统一 padding/truncation ----
-        texts = [ex["text"] for ex in batch]
-        tok_out = tok(
-            texts,
-            padding="max_length",      # 或者 True；你已有 block=128 可继续用 max_length=block
-            truncation=True,
-            max_length=128,
-            return_attention_mask=True,
-            return_tensors="pt",
-        )
-        input_ids = tok_out["input_ids"]
-        labels = input_ids.clone()
-
-        # ---- 图像：逐张对齐到 (patch, window) 友好的网格，并在 batch 内对齐到同一尺寸 ----
-        from PIL import Image, ImageOps
-        import numpy as np
-        to_tensor = lambda img: torch.from_numpy(np.array(img, dtype="float32").transpose(2,0,1)) / 255.0
-
-        # 逐张：算出“对齐后”的目标 patch 网格（先对齐到 patch，再对齐到窗口网格）
-        per_img = []
+        # 1) 取出原始的“视频帧”或“图像序列”
+        # 假设每个样本里有 key: "frames"  (形状可能是 torch.Tensor [C,T,H,W] 或 [T,H,W,C]，也可能是 PIL 列表)
+        videos = []
         for ex in batch:
-            img: Image.Image = ex["image"].convert("RGB")
-            H0, W0 = img.height, img.width
+            v = ex.get("frames", None) or ex.get("video", None) or ex.get("images", None)
+            if v is None:
+                raise ValueError("Sample missing 'frames'/'video'/'images' key.")
 
-            # 先对齐到 patch：ceil 到能被 PATCH 整除
-            Hp = ( (H0 + PATCH - 1) // PATCH )
-            Wp = ( (W0 + PATCH - 1) // PATCH )
-
-            # 再让 patch 网格能被 VIT_MERGE 整除（窗口网格大小，通常=4）
-            if VIT_MERGE > 1:
-                Hp = ((Hp + VIT_MERGE - 1) // VIT_MERGE) * VIT_MERGE
-                Wp = ((Wp + VIT_MERGE - 1) // VIT_MERGE) * VIT_MERGE
-
-            Ha, Wa = Hp * PATCH, Wp * PATCH  # 该图“自有对齐尺寸”
-
-            img_resized = img.resize((Wa, Ha), Image.BICUBIC)  # 保证可被 PATCH 整除
-            per_img.append((img_resized, Ha, Wa, Hp, Wp))
-
-        # 这批次的统一尺寸：取各自对齐尺寸的 max（避免再二次缩放导致 token 不一致）
-        Ht = max(Ha for _, Ha, _, _, _ in per_img)
-        Wt = max(Wa for _, _, Wa, _, _ in per_img)
-
-        # 逐张：pad 到 (Ht, Wt)，转 tensor，并做与处理器一致的归一化
-        # 从 AutoProcessor 里拿 mean/std，避免手抄
-        image_mean = getattr(getattr(proc, "image_processor", proc), "image_mean", [0.5, 0.5, 0.5])
-        image_std  = getattr(getattr(proc, "image_processor", proc), "image_std",  [0.5, 0.5, 0.5])
-        mean = torch.tensor(image_mean).view(3,1,1)
-        std  = torch.tensor(image_std).view(3,1,1)
-
-        pixel_list = []
-        for img_resized, Ha, Wa, _, _ in per_img:
-            if (Ha, Wa) != (Ht, Wt):
-                # 左上对齐的 letterbox（不改变已对齐好的 patch 网格）
-                canvas = Image.new("RGB", (Wt, Ht), (0,0,0))
-                canvas.paste(img_resized, (0,0))
-                img_final = canvas
+            # 统一成 numpy 的 [T, H, W, C]（processor 的通用视频入口）
+            if isinstance(v, list):
+                # 可能是 PIL.Image 列表或 numpy 列表：processor 能直接吃 list（每帧）
+                videos.append(v)
+            elif hasattr(v, "shape"):  # torch.Tensor 或 numpy.ndarray
+                import numpy as np
+                import torch
+                if isinstance(v, torch.Tensor):
+                    t = v
+                    if t.dim() != 4:
+                        raise ValueError(f"Unexpected tensor dim: {t.shape}")
+                    # 常见两种： [C,T,H,W] 或 [T,H,W,C]
+                    if t.shape[0] in (1, 3):     # [C,T,H,W] -> [T,H,W,C]
+                        t = t.permute(1, 2, 3, 0).contiguous()
+                    elif t.shape[-1] in (1, 3):  # [T,H,W,C] 保持
+                        pass
+                    else:
+                        raise ValueError(f"Ambiguous video tensor shape: {t.shape}")
+                    v_np = t.detach().cpu().numpy()
+                else:
+                    v_np = np.asarray(v)
+                videos.append(v_np)
             else:
-                img_final = img_resized
+                # 其他类型（如单个视频文件路径）这里不处理；如有需要你可以在上游把它解帧
+                raise ValueError("Unsupported video type in sample.")
 
-            px = to_tensor(img_final)                # [3,Ht,Wt], 0..1
-            px = (px - mean) / std                   # 标准化
-            pixel_list.append(px)
+        # 2) 走官方 Processor（关键一步）
+        # 只处理视觉，文本/音频你仍走原有管线
+        proc_out = processor(videos=videos, return_tensors="pt")
 
-        # 堆叠为 [B, C, T=1, Ht, Wt]
-        pixel_values = torch.stack(pixel_list, dim=0).unsqueeze(2)
+        pixel_values = proc_out["pixel_values"]     # 常见为 [B, T, C, H, W] 或 [B, C, T, H, W]（随具体模型版本）
+        grid_thw     = proc_out.get("grid_thw", None)
+        if grid_thw is None:
+            # 某些版本可能叫别的字段；如果真遇到这种情况，再把 proc_out 打印出来看看 key
+            raise ValueError(f"Processor output keys: {list(proc_out.keys())}, missing 'grid_thw'")
 
-        # ---- 关键：用“实际的 H/W”计算 grid_thw，确保 seq_len == T*grid_h*grid_w ----
-        B, C, T, H, W = pixel_values.shape
-        assert T == 1, "当前示例是静态图像，T 应为 1；如为视频请按帧数设置。"
+        # 3) 统一到你原先的形状约定：B, C, T, H, W   （你之前代码里是这样取的）
+        if pixel_values.dim() != 5:
+            raise ValueError(f"Unexpected pixel_values rank: {pixel_values.shape}")
 
-        # 断言 H/W 一定是 PATCH 的整数倍（否则上面流程有误）
-        assert H % PATCH == 0 and W % PATCH == 0, f"H/W 需可被 PATCH={PATCH} 整除，got {(H,W)}"
-        Hp_tar, Wp_tar = H // PATCH, W // PATCH
+        # 判定是否需要从 [B, T, C, H, W] 转到 [B, C, T, H, W]
+        if pixel_values.shape[1] in (1, 3):
+            # 已是 [B, C, T, H, W]
+            pass
+        elif pixel_values.shape[2] in (1, 3):
+            # 是 [B, T, C, H, W] -> 置换成 [B, C, T, H, W]
+            pixel_values = pixel_values.permute(0, 2, 1, 3, 4).contiguous()
+        else:
+            raise ValueError(f"Cannot infer channel dim in pixel_values: {pixel_values.shape}")
 
-        # grid_h/grid_w = 2 * (H/patch), 2 * (W/patch)  —— 这是 Qwen2.5 的约定
-        grid_h = Hp_tar
-        grid_w = Wp_tar
+        vision_inputs = {
+            "pixel_values": pixel_values,  # [B, C, T, H, W]
+            "grid_thw": grid_thw.long(),   # [B, 3]，来自官方；与模型内部窗口划分一致
+        }
 
-        # 为“整批统一尺寸”，每个样本的 grid_thw 完全相同
-        grid_row = torch.tensor([1, grid_h, grid_w], dtype=torch.long)
-        grid_thw = grid_row.unsqueeze(0).repeat(B, 1)
+        # 4) 组装你原先的其它返回（文本 ids / labels 等），这里示例：
+        input_ids = torch.stack([ex["input_ids"] for ex in batch], dim=0)
+        targets   = torch.stack([ex["labels"]    for ex in batch], dim=0)
 
-        # 最后打包
-        vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
         return {
             "input_ids": input_ids,
-            "labels": labels,
             "vision_inputs": vision_inputs,
+            "targets": targets,
         }
+
 
 
 
