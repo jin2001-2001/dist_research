@@ -348,6 +348,10 @@ def split_args_kwargs_into_chunks(
         for chunk_args in args_split_dict
     ]
 
+    # 返回之前，修正按样本对齐的 list 字段（例如 vision_inputs.pixel_values_list）
+    if kwargs is not None and len(kwargs_split) > 0:
+        _postfix_slice_listlike_by_samples(kwargs, kwargs_split)
+    
     return args_split, kwargs_split
 
 
@@ -535,3 +539,83 @@ def _expand_chunk_spec_for_value(value, spec):
 
     # 其他情况（None 或未知类型）：原样返回，保持旧行为
     return spec
+
+def _infer_mb_sizes_from_kwargs_split(kwargs_split: list[dict]) -> list[int]:
+    """
+    从每个 microbatch 的 kwargs 中推断样本数。
+    优先顺序：input_ids / labels / attention_mask / 任意 [B, ...] 张量。
+    """
+    sizes = []
+    for i, kw in enumerate(kwargs_split):
+        mb_size = None
+        for key in ("input_ids", "labels", "attention_mask"):
+            v = kw.get(key, None)
+            if torch.is_tensor(v) and v.dim() >= 1:
+                mb_size = int(v.size(0))
+                break
+        if mb_size is None:
+            # 兜底：找任意 [B, ...] 张量
+            for v in kw.values():
+                if torch.is_tensor(v) and v.dim() >= 1:
+                    mb_size = int(v.size(0))
+                    break
+        if mb_size is None:
+            raise RuntimeError(f"Cannot infer microbatch size for kwargs_split[{i}]")
+        sizes.append(mb_size)
+    return sizes
+
+
+def _postfix_slice_listlike_by_samples(
+    full_kwargs: dict,
+    kwargs_split: list[dict],
+    key_paths: tuple[tuple[str, ...], ...] = (("vision_inputs", "pixel_values_list"),),
+):
+    """
+    将复制到各 microbatch 的“按样本对齐的列表值”（例如 vision_inputs.pixel_values_list）
+    从“整列表复制”改为“按样本维做列表切片”。
+
+    参数
+    - full_kwargs: 分割前的 kwargs（含完整 list）
+    - kwargs_split: 分割后的各 microbatch kwargs（其中目前是复制的列表）
+    - key_paths: 需要纠偏的键路径集合，例如:
+        (("vision_inputs","pixel_values_list"), ...)
+    """
+    # 计算每个 microbatch 的样本数
+    mb_sizes = _infer_mb_sizes_from_kwargs_split(kwargs_split)
+    total = sum(mb_sizes)
+
+    for path in key_paths:
+        # 取分割前的完整列表
+        cursor = full_kwargs
+        ok = True
+        for k in path:
+            if not (isinstance(cursor, dict) and k in cursor):
+                ok = False
+                break
+            cursor = cursor[k]
+        if not ok:
+            continue  # 分割前无该字段，跳过
+
+        full_list = cursor
+        if not isinstance(full_list, list):
+            continue  # 不是列表，跳过
+
+        if len(full_list) != total:
+            # 不是按样本对齐的列表，跳过
+            continue
+
+        # 按 mb_sizes 切片，塞回各个 microbatch
+        st = 0
+        for i, mb in enumerate(kwargs_split):
+            ed = st + mb_sizes[i]
+            # 找到 microbatch 中对应的嵌套 dict，若不存在则创建
+            dst = mb
+            for k in path[:-1]:
+                nxt = dst.get(k, None)
+                if not isinstance(nxt, dict):
+                    nxt = {} if nxt is None else dict(nxt)
+                dst[k] = nxt
+                dst = nxt
+            dst[path[-1]] = full_list[st:ed]
+            st = ed
+        assert st == total, "List slicing mismatch: consumed != total"
