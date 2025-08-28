@@ -482,6 +482,7 @@ def main():
 
             if rank == 0:
                 batch = next(data_iter)
+                print(f"✅✅✅{batch}")
                 inp_ids = batch["input_ids"].to(device)             # [B, block]
                 vis_pack = batch["vision_inputs"]
                 if vis_pack is not None:
