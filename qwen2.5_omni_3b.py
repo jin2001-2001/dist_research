@@ -354,9 +354,15 @@ def main():
                 "truncation": True,
                 "return_attention_mask": True,
             },
-            # 使用默认的图像处理设置，让processor自动处理
-            # 不设置 do_resize=False，让它自动调整
+            images_kwargs={                # ← 关键信息在这里
+                "min_pixels": 128 * 28 * 28,
+                "max_pixels": 512 * 28 * 28,   # 如仍报错可再调低
+                "patch_size": 14,              # 视具体视觉塔配置而定
+                "temporal_patch_size": 1,      # 单帧图像通常为 1
+                "merge_size": 4,               # 与视觉编码器的 spatial_merge_unit 对齐
+            },
         )
+
         
         # 文本侧
         input_ids = pack["input_ids"]
@@ -386,19 +392,19 @@ def main():
             pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
         
         #调试信息 - 取消注释以查看实际处理的维度
-        if pixel_values.ndim == 5:
-            B, C, T, H, W = pixel_values.shape
-            print(f"Batch pixel_values: [B={B}, C={C}, T={T}, H={H}, W={W}]")
-            print(f"Grid thw: {grid_thw}")
+        # if pixel_values.ndim == 5:
+        #     B, C, T, H, W = pixel_values.shape
+        #     print(f"Batch pixel_values: [B={B}, C={C}, T={T}, H={H}, W={W}]")
+        #     print(f"Grid thw: {grid_thw}")
             
-            # 验证grid维度与实际尺寸的关系
-            for i in range(B):
-                t, h, w = grid_thw[i].tolist()
-                expected_h = h * 14
-                expected_w = w * 14
-                if expected_h != H or expected_w != W:
-                    print(f"Warning: Image {i} dimension mismatch!")
-                    print(f"  Grid suggests {expected_h}x{expected_w}, but got {H}x{W}")
+        #     # 验证grid维度与实际尺寸的关系
+        #     for i in range(B):
+        #         t, h, w = grid_thw[i].tolist()
+        #         expected_h = h * 14
+        #         expected_w = w * 14
+        #         if expected_h != H or expected_w != W:
+        #             print(f"Warning: Image {i} dimension mismatch!")
+        #             print(f"  Grid suggests {expected_h}x{expected_w}, but got {H}x{W}")
         
         vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
         
