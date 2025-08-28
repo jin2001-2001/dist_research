@@ -380,8 +380,8 @@ def main():
         Hp_tar, Wp_tar = H // PATCH, W // PATCH
 
         # grid_h/grid_w = 2 * (H/patch), 2 * (W/patch)  —— 这是 Qwen2.5 的约定
-        grid_h = SMS * Hp_tar
-        grid_w = SMS * Wp_tar
+        grid_h = Hp_tar
+        grid_w = Wp_tar
 
         # 为“整批统一尺寸”，每个样本的 grid_thw 完全相同
         grid_row = torch.tensor([1, grid_h, grid_w], dtype=torch.long)
