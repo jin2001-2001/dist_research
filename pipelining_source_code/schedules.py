@@ -1340,7 +1340,9 @@ class PipelineScheduleMulti(_PipelineSchedule):
         # Clean per iteration
         for stage in self._stages:
             stage.clear_runtime_states()
-
+        print(f"before split args {args}")
+        print(f"before split kwargs {kwargs}")
+        print(f'before split target {target}')
         # Split inputs into microbatches
         args_split, kwargs_split = self._split_inputs(args, kwargs)
 
