@@ -322,8 +322,50 @@ def main():
 
 
     def collate_fn(batch):
-        # ===== 文本：仍然用 processor 的 tokenizer（也可以用 tok，一样的）
-        texts = [ex["text"] for ex in batch]
+        """
+        - 文本：用 processor 的 tokenizer 做 padding/truncation，labels=输入副本
+        - 图像：自行处理，不走 processor 的图像管线
+            1) EXIF 矫正 + pad 到 56 的倍数（56=14*4，满足视觉塔 merge=4 的约束）
+            2) PIL -> [C,H,W] float32 in [0,1]，用 processor 的 mean/std 归一化（无则退回 0.5）
+            3) 批内统一目标大小 H_target×W_target（各自对齐到 56 倍数后取最大）
+            4) 堆叠为 [B,C,1,H,W]（T=1）
+            5) 自行构建 grid_thw=[T,H/14,W/14]，保证 H'/W' 均为 4 的倍数
+        返回键：
+            - input_ids: [B, L]
+            - labels:    [B, L]
+            - vision_inputs: {"pixel_values": [B,C,1,H,W], "grid_thw": [B,3]}
+        """
+        import numpy as np
+        from PIL import ImageOps
+
+        # --------- 工具函数 ---------
+        def _round_to_multiple(x: int, m: int) -> int:
+            return ((x + m - 1) // m) * m
+
+        def _pad_to_multiple_of_56(img):
+            # 不形变，只在右/下补 0；56 = 14(patch) * 4(merge unit)
+            img = ImageOps.exif_transpose(img)
+            w, h = img.size
+            new_w = _round_to_multiple(w, 56)
+            new_h = _round_to_multiple(h, 56)
+            if (new_w, new_h) == (w, h):
+                return img
+            return ImageOps.expand(img, border=(0, 0, new_w - w, new_h - h), fill=0)
+
+        def _pil_to_tensor_chw(img):
+            arr = np.array(img, dtype=np.uint8)          # [H,W,C] or [H,W]
+            if arr.ndim == 2:                            # 灰度 -> 3 通道
+                arr = np.stack([arr, arr, arr], axis=-1)
+            t = torch.from_numpy(arr).to(torch.float32) / 255.0
+            return t.permute(2, 0, 1).contiguous()       # [C,H,W]
+
+        def _normalize_3c(t: torch.Tensor, mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
+            if mean.ndim == 1: mean = mean.view(-1, 1, 1)
+            if std.ndim == 1:  std  = std.view(-1, 1, 1)
+            return (t - mean) / std
+
+        # --------- 文本处理（processor 只用于文本） ---------
+        texts = [ex.get("text", "") for ex in batch]
         pack_txt = proc(
             text=texts,
             return_tensors="pt",
@@ -334,12 +376,12 @@ def main():
             },
         )
         input_ids = pack_txt["input_ids"]          # [B, L]
-        labels    = input_ids.clone()
+        labels    = input_ids.clone()              # LM 目标（左移在 loss 内部做）
 
-        # ===== 图像：完全自行处理，确保进入视觉塔的尺寸满足 merge=4 的约束
+        # --------- 图像处理（完全自管） ---------
         images = [_pad_to_multiple_of_56(ex["image"]) for ex in batch]
 
-        # 归一化参数：优先取 processor 的 image mean/std
+        # 归一化参数：优先用 processor 的 mean/std；无则退回 0.5
         try:
             mean = torch.tensor(proc.image_processor.image_mean, dtype=torch.float32)
             std  = torch.tensor(proc.image_processor.image_std,  dtype=torch.float32)
@@ -347,32 +389,46 @@ def main():
             mean = torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32)
             std  = torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32)
 
-        pixels = []
-        Hs, Ws = [], []
+        # 1) 逐图：PIL->Tensor、归一化，并记录对齐到 56 倍数的尺寸
+        per_img = []  # (tensor_CHW, H, W, H_aligned, W_aligned)
+        H_aligned_list, W_aligned_list = [], []
         for img in images:
-            t = _pil_to_tensor_chw(img)           # [C,H,W] in [0,1]
-            t = _normalize_3c(t, mean, std)       # 归一化
-            C, H, W = t.shape
-            # 再来一道兜底（理论上已是 56 倍数，这里只是保险）
-            H_pad = _round_to_multiple(H, 56)
-            W_pad = _round_to_multiple(W, 56)
-            if H_pad != H or W_pad != W:
-                t = F.pad(t, (0, W_pad - W, 0, H_pad - H), value=0.0)
-                H, W = H_pad, W_pad
-            pixels.append(t)
-            Hs.append(H); Ws.append(W)
+            t = _pil_to_tensor_chw(img)         # [C,H,W]
+            t = _normalize_3c(t, mean, std)
+            _, H, W = t.shape
+            H_a = _round_to_multiple(H, 56)
+            W_a = _round_to_multiple(W, 56)
+            per_img.append((t, H, W, H_a, W_a))
+            H_aligned_list.append(H_a)
+            W_aligned_list.append(W_a)
 
-        # 堆 batch：→ [B,C,1,H,W]（T=1）
-        pixel_values = torch.stack(pixels, dim=0).unsqueeze(2)
+        # 2) 批内统一目标尺寸（仍为 56 的倍数）
+        H_target = max(H_aligned_list)
+        W_target = max(W_aligned_list)
 
-        # grid_thw：patch_size 固定 14（Qwen2.5-Omni 视觉塔）
+        # 3) pad 到统一尺寸并堆叠 -> [B,C,1,H,W]
+        tensors = []
+        for t, H, W, H_a, W_a in per_img:
+            # 先 pad 到各自对齐尺寸
+            if H_a != H or W_a != W:
+                t = F.pad(t, (0, W_a - W, 0, H_a - H), value=0.0)  # (W_left, W_right, H_top, H_bottom)
+                H, W = H_a, W_a
+            # 再 pad 到批内共同最大尺寸
+            if H_target != H or W_target != W:
+                t = F.pad(t, (0, W_target - W, 0, H_target - H), value=0.0)
+            tensors.append(t)
+
+        pixel_values = torch.stack(tensors, dim=0).unsqueeze(2)  # [B,C,1,H_target,W_target]
+
+        # 4) 构建 grid_thw，确保 H'/W' 为 4 的倍数（merge_unit=4）
         patch = 14
-        Hp = torch.tensor([h // patch for h in Hs], dtype=torch.long)
-        Wp = torch.tensor([w // patch for w in Ws], dtype=torch.long)
-        # 必须是 4 的倍数
-        assert (Hp % 4 == 0).all() and (Wp % 4 == 0).all(), f"Hp/Wp must be multiples of 4, got Hp={Hp}, Wp={Wp}"
-        T  = torch.ones_like(Hp)
-        grid_thw = torch.stack([T, Hp, Wp], dim=1)      # [B,3] = [T,H',W']
+        Hp = H_target // patch
+        Wp = W_target // patch
+        if (Hp % 4 != 0) or (Wp % 4 != 0):
+            # 理论不会发生；若发生，说明上面 pad 非 56 倍数
+            raise ValueError(f"H'/W' must be multiples of 4; got Hp={Hp}, Wp={Wp}, H_target={H_target}, W_target={W_target}")
+        B = pixel_values.size(0)
+        grid_thw = torch.tensor([[1, Hp, Wp]] * B, dtype=torch.long)  # T=1
 
         vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
 
@@ -381,6 +437,7 @@ def main():
             "labels": labels,
             "vision_inputs": vision_inputs,
         }
+
 
 
     batch_size = args.batch_size
