@@ -159,22 +159,39 @@ def _sudo(cmd: list[str]):
 
 
 
-def _cat_like(items: List[Any]) -> Any:
+def _cat_like(items: list[Any]) -> Any:
     """
-    Support recursive concatenation of tensors/tuples/lists/None.
-    Use torch.stack for 0-dimensional tensors; For other tensors, use torch.cat(dim=0).
+    递归拼接：支持 Tensor / 标量0维Tensor / tuple / list / dict / None。
+    Tensor 默认按 dim=0 cat；0维用 stack。
+    容器按键或下标对齐后递归调用本函数。
     """
     first = items[0]
+    # --- 新增：dict 支持 ---
+    if isinstance(first, dict):
+        out = {}
+        keys = first.keys()
+        # 断言所有字典 key 集合一致（或做一次交集/并集按需处理）
+        for it in items[1:]:
+            assert isinstance(it, dict) and it.keys() == keys, "kwargs dict keys mismatch across microbatches"
+        for k in keys:
+            out[k] = _cat_like([it[k] for it in items])
+        return out
+
+    # 原有逻辑
     if torch.is_tensor(first):
         if first.dim() == 0:
-            return torch.stack(items, dim=0)    
+            return torch.stack(items, dim=0)
         else:
             return torch.cat(items, dim=0)
     elif isinstance(first, (tuple, list)):
         pieces = [_cat_like([itm[i] for itm in items]) for i in range(len(first))]
         return type(first)(pieces)
     else:
+        # 非张量非容器：取第一个（要求各 MB 一致）
+        for it in items[1:]:
+            assert it == first, "non-tensor kwarg values must be identical across packed MBs"
         return first
+
 
 # Safely split the tensor into n parts in the batch dimension; If the number of blocks is less than n, the last block is copied to make up for it
 def _safe_chunk(t: torch.Tensor, n: int) -> List[torch.Tensor]:
@@ -610,11 +627,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             cat_kwargs: dict[str, Any] = {}
                             for k in kwarg_mbs[rep_id]:
                                 vals = [kwarg_mbs[mid][k] for mid in mb_ids]
-                                v0 = vals[0]
-                                if isinstance(v0, torch.Tensor):
-                                    cat_kwargs[k] = torch.cat(vals, dim=0)
-                                else:
-                                    cat_kwargs[k] = v0
+                                # ★ 无论是 Tensor、dict（如 vision_inputs）、还是 list/tuple，都交给 _cat_like 递归处理
+                                cat_kwargs[k] = _cat_like(vals)
+
                         else:
                             cat_kwargs = {}
                             
