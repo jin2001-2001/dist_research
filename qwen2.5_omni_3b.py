@@ -421,7 +421,7 @@ def main():
         loader = torch.utils.data.DataLoader(
             ds,
             batch_size=batch_size,
-            shuffle=True,
+            #shuffle=True,
             drop_last=True,
             collate_fn=collate_fn
         )
