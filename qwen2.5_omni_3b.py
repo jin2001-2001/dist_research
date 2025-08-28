@@ -88,8 +88,8 @@ class Stage0(nn.Module):
             assert x is not None and grid is not None, "vision_inputs 需要包含 pixel_values(_list) 与 grid_thw"
 
             # 调试与兜底：检查长度与 2x2 merge 的整除关系
-            smu = int(getattr(self.vision_enc, "spatial_merge_unit", 4))
-            exp = int((grid[:, 0] * grid[:, 1] * grid[:, 2]).sum().item() * smu)
+            smu = int(getattr(self.vision_enc, "spatial_merge_unit", 4))  # 仍保留，用于整除性检查
+            exp = int((grid[:,0]*grid[:,1]*grid[:,2]).sum().item())       # ★ 不再乘 4
             if x.size(0) != exp or (x.size(0) % smu) != 0:
                 raise ValueError(f"[chk] seq_len={x.size(0)}, expected={exp}, seq_len%{smu}={x.size(0)%smu}")
 
@@ -389,7 +389,7 @@ def main():
         image_grid_thw = torch.as_tensor(pack.get("image_grid_thw", []), dtype=torch.long)  # [B, 3]
         if pixel_values is not None and image_grid_thw.numel() > 0:
             smu = int(getattr(vision_enc, "spatial_merge_unit", 4))  # 2x2 merge -> 4
-            counts = (image_grid_thw[:, 0] * image_grid_thw[:, 1] * image_grid_thw[:, 2]) * smu
+            counts = (image_grid_thw[:, 0] * image_grid_thw[:, 1] * image_grid_thw[:, 2])
             slices, off = [], 0
             for n in counts.tolist():
                 slices.append(pixel_values[off: off + n])
