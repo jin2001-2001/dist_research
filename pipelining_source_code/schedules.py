@@ -1503,6 +1503,42 @@ class PipelineScheduleMulti(_PipelineSchedule):
                         assert not wrong_mask.any(), "发现文本 token 被误标为 -100"
 
             return True
+        def debug_split_vision_list(pv0, pv_rec):
+            print(f"[DEBUG] pixel_values_list mismatch: 原始 {len(pv0)} vs 拼回 {len(pv_rec)}")
+            min_len = min(len(pv0), len(pv_rec))
+            for i in range(min_len):
+                if pv0[i].shape != pv_rec[i].shape:
+                    print(f"  样本 {i}: 原始 {pv0[i].shape}, 拼回 {pv_rec[i].shape}")
+            if len(pv_rec) > len(pv0):
+                print(f"  拼回多出来 {len(pv_rec)-len(pv0)} 个元素")
+                extra_shapes = [p.shape for p in pv_rec[len(pv0):]]
+                print(f"  这些额外元素的形状: {extra_shapes}")
+
+        def check_split_correctness_verbose(
+            args, kwargs, target,
+            args_split, kwargs_split, targets_split
+        ):
+            # === 拼回 vision_inputs ===
+            vis0 = kwargs.get("vision_inputs", None)
+            grid_rec, pv_rec = _kw_collect_vision(kwargs_split)
+            if vis0 is not None:
+                pv0 = vis0.get("pixel_values_list", None)
+                grid0 = vis0.get("grid_thw", None)
+
+                if pv0 is not None:
+                    if len(pv0) != len(pv_rec):
+                        debug_split_vision_list(pv0, pv_rec)
+                    else:
+                        for i, (a, b) in enumerate(zip(pv0, pv_rec)):
+                            if a.shape != b.shape:
+                                print(f"[DEBUG] 样本 {i} 形状不一致: {a.shape} vs {b.shape}")
+                    # grid 检查
+                    if grid0 is not None and grid_rec is not None:
+                        if not torch.equal(grid0, grid_rec):
+                            print("[DEBUG] grid_thw 拼回后和原始不一致")
+                            print(f"原始 grid:\n{grid0}")
+                            print(f"拼回 grid:\n{grid_rec}")
+            print("[DEBUG] check_split_correctness_verbose 执行完毕")
 
 
 
@@ -1529,6 +1565,11 @@ class PipelineScheduleMulti(_PipelineSchedule):
         # print(f"after split args {args_split}")
         # print(f"after split kwargs {kwargs_split}")
         # print(f'after split target {targets_split}')
+        _ = check_split_correctness_verbose(
+            args, kwargs, target,
+            args_split, kwargs_split, targets_split
+        )
+        
         _ = check_split_correctness(
             args=args,
             kwargs=kwargs,
