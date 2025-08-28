@@ -280,47 +280,40 @@ def main():
 
     ds = raw.map(tok_fn, batched=True)
 
-    # 不要 set_format 只保留某些列，否则 image 会丢失；由 collate_fn 统一打包
+    from PIL import Image, ImageOps
 
-    # ==== DataLoader（CPU 友好的 collate_fn：把 PIL→pixel_values，并堆叠文本张量）====
-    # def collate_fn(batch):
-    #     # 文本：已在 map 阶段 pad 到相同长度，直接转为张量堆叠
-    #     input_ids = torch.tensor([ex["input_ids"] for ex in batch], dtype=torch.long)
-    #     labels    = torch.tensor([ex["labels"]    for ex in batch], dtype=torch.long)
-    #     # 图像：用 processor 的 image_processor 转为 [B,C,H,W] 的 pixel_values
-    #     images = [ex["image"] for ex in batch]
+    def _round_to_multiple(x: int, m: int) -> int:
+        # 四舍五入到 m 的倍数；最小不低于 m
+        return max(m, int(round(x / m) * m))
 
-    #     # 让 AutoProcessor 统一预处理（Qwen2.5-Omni 会返回 pixel_values + grid_thw/image_grid_thw）
-    #     vis_pack = proc(images=images, return_tensors="pt")
+    def _resize_to_multiple_of_28(img: Image.Image) -> Image.Image:
+        """
+        将 PIL 图像的宽高同时对齐到 28 的倍数（保持近似比例，允许轻微形变）。
+        如不希望形变，可用下方“padding 版本”替换。
+        """
+        # 处理 EXIF 方向，避免有的图“看起来”是横图但实际尺寸是竖图
+        img = ImageOps.exif_transpose(img)
 
-    #     # 标准化键名，统一成 vision_inputs = {"x": ..., "grid_thw": ...}
-    #     pixel_values = vis_pack.get("pixel_values")
-    #     grid_thw     = (vis_pack.get("grid_thw")
-    #                     or vis_pack.get("image_grid_thw"))
+        w, h = img.size
+        new_w = _round_to_multiple(w, 28)
+        new_h = _round_to_multiple(h, 28)
+        if (new_w, new_h) == (w, h):
+            return img
+        # CPU 训练下，PIL 的双三次插值质量/速度较平衡
+        return img.resize((new_w, new_h), resample=Image.BICUBIC)
 
-    #     assert pixel_values is not None, "processor 未返回 pixel_values"
-    #     assert grid_thw is not None,     "processor 未返回 grid_thw（或 image_grid_thw）"
-
-    #     # 绝大多数情况下，Qwen-Omni 视觉编码器期待 x=[B,C,T,H,W]。若当前为 4D，则补一个 T 维。
-    #     if pixel_values.ndim == 4:
-    #         pixel_values = pixel_values.unsqueeze(2)  # -> [B,C,1,H,W]
-
-    #     vision_inputs = {"x": pixel_values, "grid_thw": grid_thw}
-
-    #     return {"input_ids": input_ids, "labels": labels, "vision_inputs": vision_inputs}
     def collate_fn(batch):
         texts  = [ex["text"] for ex in batch]    # 保证每个元素是 str
-        images = [ex["image"] for ex in batch]
+        texts  = [ex["text"] for ex in batch]
+        images = [_resize_to_multiple_of_28(ex["image"]) for ex in batch]
 
         pack = proc(
             text=texts,
             images=images,
             return_tensors="pt",
             text_kwargs={
-                "padding": True,           # pad 到本 batch 最长
-                "truncation": True,        # 超长截断
-                # 如果你有固定上下文长，建议加上：
-                # "max_length":  max_txt_len,
+                "padding": True,
+                "truncation": True,
                 "return_attention_mask": True,
             },
         )
