@@ -78,25 +78,35 @@ class Stage0(nn.Module):
         vision_seq = None
         if self.vision_enc is not None and vision_inputs is not None:
             if isinstance(vision_inputs, dict):
-                vi = dict(vision_inputs)  # 浅拷贝，便于改键名
-                # 键名兜底：支持 pixel_values/x 与 grid_thw/image_grid_thw
-                if "x" not in vi and "pixel_values" in vi:
-                    vi["x"] = vi.pop("pixel_values")
-                if "grid_thw" not in vi and "image_grid_thw" in vi:
-                    vi["grid_thw"] = vi.pop("image_grid_thw")
-                assert "x" in vi and "grid_thw" in vi, "vision_inputs 需要包含 x 和 grid_thw"
-                # Qwen2_5OmniVisionEncoder 期望形参名为 (x, grid_thw)，用 **vi 解包最稳妥
-                vi["pixel_values"] = vi.pop("x")
-                vision_seq = self.vision_enc(**vi)
+                vi = dict(vision_inputs)  # 浅拷贝，避免原地改
+                # 兜底取图像张量
+                x = (vi.get("pixel_values") or
+                     vi.get("x") or
+                     vi.get("images") or
+                     vi.get("video"))
+                # 兜底取网格
+                grid = (vi.get("grid_thw") or
+                        vi.get("image_grid_thw") or
+                        vi.get("thw"))
+                assert x is not None,    "vision_inputs 缺少图像张量（pixel_values/x/images/video 任一）"
+                assert grid is not None, "vision_inputs 缺少 grid_thw（或 image_grid_thw/thw）"
 
+                # 保证 5D 形状 [B,C,T,H,W]
+                if x.ndim == 4:
+                    x = x.unsqueeze(2)
+
+                vision_seq = self.vision_enc(x, grid)
 
             elif isinstance(vision_inputs, (list, tuple)):
                 assert len(vision_inputs) == 2, "vision_inputs 期望为 (x, grid_thw)"
-                x, grid_thw = vision_inputs
-                vision_seq = self.vision_enc(x, grid_thw=grid_thw)
+                x, grid = vision_inputs
+                if isinstance(x, torch.Tensor) and x.ndim == 4:
+                    x = x.unsqueeze(2)
+                vision_seq = self.vision_enc(x, grid)
 
             else:
                 raise ValueError("vision_inputs 必须是 dict 或 (x, grid_thw)")
+
 
         # 它们的输出在官方 config 中会被映射到 2048 维，与你的文本隐向量同域（便于 concat）
 
@@ -320,7 +330,7 @@ def main():
 
         if pixel_values.ndim == 4:
             pixel_values = pixel_values.unsqueeze(2)  # -> [B, C, 1, H, W]
-        vision_inputs = {"x": pixel_values, "grid_thw": grid_thw}
+        vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
 
         return {
             "input_ids": input_ids,
@@ -397,12 +407,11 @@ def main():
             if rank == 0:
                 batch = next(data_iter)
                 inp_ids = batch["input_ids"].to(device)             # [B, block]
-                vis_pack = batch["vision_inputs"]   # 这是一个 dict: {"x": pixel_values, "grid_thw": grid_thw}
-                # 如果你希望这里就搬到 device，可分别搬：
-                vis_pack["x"] = vis_pack["x"].to(device)
-                # grid_thw 可能是 LongTensor 或普通 Python/tuple；若是 tensor 再搬
+                vis_pack = batch["vision_inputs"]
+                vis_pack["pixel_values"] = vis_pack["pixel_values"].to(device)
                 if torch.is_tensor(vis_pack["grid_thw"]):
                     vis_pack["grid_thw"] = vis_pack["grid_thw"].to(device)
+
                 tgt = batch["labels"].to(device)                # [B, block]
                 # 广播 label（仅文本部分需要参与 loss）
                 dist.broadcast(tgt, src=0)
