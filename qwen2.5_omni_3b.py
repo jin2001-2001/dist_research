@@ -100,7 +100,13 @@ class Stage0(nn.Module):
 
                 if x.ndim == 4:
                     x = x.unsqueeze(2)  # -> [B,C,1,H,W]
+                if isinstance(vision_inputs, dict):
+                    grid = vision_inputs.get("grid_thw")
+                    if torch.is_tensor(grid):
+                        seq = grid[:, 0] * grid[:, 1] * grid[:, 2]
+                        assert (seq % 4 == 0).all(), f"Visual seq must be divisible by 4, got grid={grid}"
 
+                
                 vision_seq = self.vision_enc(x, grid)  # 用位置实参调用
 
 
@@ -109,6 +115,12 @@ class Stage0(nn.Module):
                 x, grid = vision_inputs
                 if isinstance(x, torch.Tensor) and x.ndim == 4:
                     x = x.unsqueeze(2)
+                if isinstance(vision_inputs, dict):
+                    grid = vision_inputs.get("grid_thw")
+                    if torch.is_tensor(grid):
+                        seq = grid[:, 0] * grid[:, 1] * grid[:, 2]
+                        assert (seq % 4 == 0).all(), f"Visual seq must be divisible by 4, got grid={grid}"
+
                 vision_seq = self.vision_enc(x, grid)
 
             else:
@@ -281,128 +293,86 @@ def main():
     ds = raw.map(tok_fn, batched=True)
 
     from PIL import Image, ImageOps
+    import numpy as np
 
     def _round_to_multiple(x: int, m: int) -> int:
-        """将数字向上取整到m的倍数"""
-        return max(m, int(math.ceil(x / m) * m))
+        return ((x + m - 1) // m) * m
 
-    def _pad_to_valid_size(img: Image.Image) -> Image.Image:
-        """
-        将图像填充到符合 Qwen2.5-Omni 视觉编码器要求的尺寸。
-        
-        Qwen2.5-Omni 的要求：
-        - patch_size = 14
-        - spatial_merge_size = 2  
-        - spatial_merge_unit = 4
-        - 最终 (H/14) 和 (W/14) 必须是 4 的倍数
-        """
+    def _pad_to_multiple_of_56(img: Image.Image) -> Image.Image:
+        # 不形变，只在右/下补 0；56 = 14(patch) * 4(merge unit)
         img = ImageOps.exif_transpose(img)
         w, h = img.size
-        
-        # 计算需要的最小尺寸
-        # 1. 必须是 14 的倍数（patch_size）
-        # 2. H/14 和 W/14 必须是 4 的倍数（spatial_merge_unit）
-        # 这意味着 H 和 W 必须是 56 (14*4) 的倍数
-        
-        # 直接填充到 56 的倍数
         new_w = _round_to_multiple(w, 56)
         new_h = _round_to_multiple(h, 56)
-        
-        # 进一步确保 grid 维度是 4 的倍数
-        grid_h = new_h // 14
-        grid_w = new_w // 14
-        
-        # 如果 grid 维度不是 4 的倍数，继续增加
-        while grid_h % 4 != 0:
-            new_h += 56
-            grid_h = new_h // 14
-        
-        while grid_w % 4 != 0:
-            new_w += 56
-            grid_w = new_w // 14
-        
-        # 为了额外的安全性，确保最终尺寸至少是 112x112
-        # （这确保有足够的 patches 进行 spatial merging）
-        new_w = max(new_w, 112)
-        new_h = max(new_h, 112)
-        
-        pad_right = new_w - w
-        pad_bottom = new_h - h
-        
-        if pad_right == 0 and pad_bottom == 0:
+        if (new_w, new_h) == (w, h):
             return img
-        
-        # 填充图像（右边和下边）
-        return ImageOps.expand(img, border=(0, 0, pad_right, pad_bottom), fill=0)
+        return ImageOps.expand(img, border=(0, 0, new_w - w, new_h - h), fill=0)
+
+    def _pil_to_tensor_chw(img: Image.Image) -> torch.Tensor:
+        arr = np.array(img, dtype=np.uint8)
+        if arr.ndim == 2:                      # 灰度图→3通道
+            arr = np.stack([arr, arr, arr], axis=-1)
+        t = torch.from_numpy(arr).to(torch.float32) / 255.0  # [H,W,C] in [0,1]
+        return t.permute(2, 0, 1).contiguous()               # [C,H,W]
+
+    def _normalize_3c(t: torch.Tensor, mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
+        if mean.ndim == 1: mean = mean.view(-1, 1, 1)
+        if std.ndim == 1:  std  = std.view(-1, 1, 1)
+        return (t - mean) / std
+
 
     def collate_fn(batch):
-        """
-        数据批处理函数 - 使用processor的默认设置
-        让processor自己处理图像大小，避免手动padding导致的不兼容
-        """
+        # ===== 文本：仍然用 processor 的 tokenizer（也可以用 tok，一样的）
         texts = [ex["text"] for ex in batch]
-        images = [ex["image"] for ex in batch]
-        
-        # 让processor使用默认设置处理图像
-        # 这会自动调整图像大小到模型期望的尺寸
-        pack = proc(
+        pack_txt = proc(
             text=texts,
-            images=images,
             return_tensors="pt",
             text_kwargs={
                 "padding": True,
                 "truncation": True,
                 "return_attention_mask": True,
             },
-            images_kwargs={                # ← 关键信息在这里
-                "min_pixels": 128 * 28 * 28,
-                "max_pixels": 512 * 28 * 28,   # 如仍报错可再调低
-                "patch_size": 14,              # 视具体视觉塔配置而定
-                "temporal_patch_size": 1,      # 单帧图像通常为 1
-                "merge_size": 4,               # 与视觉编码器的 spatial_merge_unit 对齐
-            },
         )
+        input_ids = pack_txt["input_ids"]          # [B, L]
+        labels    = input_ids.clone()
 
-        
-        # 文本侧
-        input_ids = pack["input_ids"]
-        labels = input_ids.clone()
-        
-        # 视觉侧
-                # —— pack 之后，忽略 pack 自带的 grid_thw，统一用张量尺寸重建 —— 
-        pixel_values = pack["pixel_values"]  # 期望 [B,C,H,W]
-        if pixel_values.ndim == 5:
-            # 如是视频，保证维度为 [B,C,T,H,W]；Flickr8k 是图像，通常不会走到这里
-            B, C, T, H, W = pixel_values.shape
-        elif pixel_values.ndim == 4:
-            B, C, H, W = pixel_values.shape
-            T = 1
-        else:
-            raise ValueError(f"Unexpected pixel_values shape: {pixel_values.shape}")
+        # ===== 图像：完全自行处理，确保进入视觉塔的尺寸满足 merge=4 的约束
+        images = [_pad_to_multiple_of_56(ex["image"]) for ex in batch]
 
-        # 关键：把 H、W pad 到 56 的倍数（patch_size=14，merge_unit=4）
-        def _pad_to_multiple(x, m): 
-            return ((x + m - 1) // m) * m
+        # 归一化参数：优先取 processor 的 image mean/std
+        try:
+            mean = torch.tensor(proc.image_processor.image_mean, dtype=torch.float32)
+            std  = torch.tensor(proc.image_processor.image_std,  dtype=torch.float32)
+        except Exception:
+            mean = torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32)
+            std  = torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32)
 
-        H_pad = _pad_to_multiple(H, 56)
-        W_pad = _pad_to_multiple(W, 56)
+        pixels = []
+        Hs, Ws = [], []
+        for img in images:
+            t = _pil_to_tensor_chw(img)           # [C,H,W] in [0,1]
+            t = _normalize_3c(t, mean, std)       # 归一化
+            C, H, W = t.shape
+            # 再来一道兜底（理论上已是 56 倍数，这里只是保险）
+            H_pad = _round_to_multiple(H, 56)
+            W_pad = _round_to_multiple(W, 56)
+            if H_pad != H or W_pad != W:
+                t = F.pad(t, (0, W_pad - W, 0, H_pad - H), value=0.0)
+                H, W = H_pad, W_pad
+            pixels.append(t)
+            Hs.append(H); Ws.append(W)
 
-        if (H_pad != H) or (W_pad != W):
-            # F.pad 的顺序是 (W_left, W_right, H_top, H_bottom)；我们只在右/下补零
-            if pixel_values.ndim == 4:
-                pixel_values = F.pad(pixel_values, (0, W_pad - W, 0, H_pad - H), value=0.0)
-            else:  # [B,C,T,H,W]：按最后两个维度 pad
-                pixel_values = F.pad(pixel_values, (0, W_pad - W, 0, H_pad - H, 0, 0), value=0.0)
+        # 堆 batch：→ [B,C,1,H,W]（T=1）
+        pixel_values = torch.stack(pixels, dim=0).unsqueeze(2)
 
-        # 补 T 维到 5D（视觉塔习惯 [B,C,T,H,W]）
-        if pixel_values.ndim == 4:
-            pixel_values = pixel_values.unsqueeze(2)  # [B,C,1,H,W]
-
-        # 以“pad 后的尺寸”重建 grid_thw（严格对齐视觉塔内部 patchify）
-        Hp = H_pad // 14
-        Wp = W_pad // 14
-        assert Hp % 4 == 0 and Wp % 4 == 0, f"Hp/Wp must be multiples of 4, got Hp={Hp}, Wp={Wp}"
-        grid_thw = torch.tensor([[T, Hp, Wp]] * B, dtype=torch.long)
+        # grid_thw：patch_size 固定 14（Qwen2.5-Omni 视觉塔）
+        patch = 14
+        Hp = torch.tensor([h // patch for h in Hs], dtype=torch.long)
+        Wp = torch.tensor([w // patch for w in Ws], dtype=torch.long)
+        # 必须是 4 的倍数
+        assert (Hp % 4 == 0).all() and (Wp % 4 == 0).all(), f"Hp/Wp must be multiples of 4, got Hp={Hp}, Wp={Wp}"
+        T  = torch.ones_like(Hp)
+        grid_thw = torch.stack([T, Hp, Wp], dim=1)      # [B,3] = [T,H',W']
 
         vision_inputs = {"pixel_values": pixel_values, "grid_thw": grid_thw}
 
