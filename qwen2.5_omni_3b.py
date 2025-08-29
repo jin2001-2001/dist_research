@@ -481,7 +481,9 @@ def main():
             tokenize=True,
             return_tensors="pt",
             return_dict=True,
-            padding=True
+            padding="max_length", 
+            max_length=512,       
+            truncation=True        
         )
 
         input_ids      = pack["input_ids"]            # [B, T]
