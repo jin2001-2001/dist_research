@@ -269,7 +269,8 @@ class _PipelineStageBase(ABC):
             # Note: we send gradients back to previous stage as long as in
             # forward it is a received input, regardless of whether it requires
             # grad. It is up to the previous stage to disgard this gradient.
-            if isinstance(a, _RecvInfo):
+            if isinstance(a, _RecvInfo) and getattr(a, "buffer", None) is not None \
+                    and (a.buffer.requires_grad if isinstance(a.buffer, torch.Tensor) else False):
                 grad_send_info.append(a.source)
                 return a.source
             else:
@@ -371,7 +372,10 @@ class _PipelineStageBase(ABC):
             # as the input tensor for a fresh autograd graph, not part of the previous stage's autograd graph.
             # TODO: confirm, do we use this activation as the root of the backward call for the previous stage? does
             # detach have any affect on that?
-            info.buffer = tensor.detach().requires_grad_(True)
+            t = tensor.detach()
+            if t.is_floating_point() or torch.is_complex(t):
+                t.requires_grad_(True)
+            info.buffer = t
 
     def get_local_bwd_output(self, mb_index):
         """
@@ -1069,7 +1073,7 @@ class _PipelineStage(_PipelineStageBase):
             buffer = _make_tensor_from_meta(example_value, self.device)
             # In case there is backward pass, set requires_grad for receive buffers
             # before first forward
-            if self.has_backward:
+            if self.has_backward and (buffer.is_floating_point() or torch.is_complex(buffer)):
                 buffer.requires_grad_(True)
 
             return _RecvInfo(
