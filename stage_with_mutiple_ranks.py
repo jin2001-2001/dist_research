@@ -64,6 +64,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         return self.next_group is None
     
     def _shape_inference(self, args, kwargs=None):
+        print("运行到推测")
         if kwargs is None:
             kwargs = {}
         assert args is not None
