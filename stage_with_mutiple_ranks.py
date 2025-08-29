@@ -768,41 +768,93 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         return out
     
+    # def _create_grad_recv_info(
+    #     self,
+    #     act_send_info: dict,
+    # ) -> tuple:
+    #     """
+    #     返回的 tuple 与 outputs_meta 一一对应；张量位置是 _RecvInfo，
+    #     非张量（含 None）位置放 None，后续会被跳过。
+    #     """
+    #     grad_recv_info_list = []
+    #     outputs_meta = self.get_outputs_meta()
+
+    #     print(f"[{dist.get_rank()}] Creating grad_recv_info for stage {self.stage_index}")
+    #     print(f"[{dist.get_rank()}] outputs_meta shapes: {[m.shape if torch.is_tensor(m) else 'non-tensor' for m in outputs_meta]}")
+        
+    #     if not self.is_last:
+    #         # Receiving gradients from multiple sources is not supported -> 只取第一个目的地
+    #         for idx, dst_list in act_send_info.items():
+    #             dst = dst_list[0]
+    #             meta = outputs_meta[idx] if idx < len(outputs_meta) else None
+
+    #             # 非张量（或 None）占位，保持索引对齐
+    #             if meta is None or not torch.is_tensor(meta):
+    #                 grad_recv_info_list.append(None)
+    #                 continue
+
+    #             grad_recv_info_list.append(
+    #                 _RecvInfo(
+    #                     f"recv_grad_for_{self.stage_index}_from_{dst}",
+    #                     dst,
+    #                     _make_tensor_from_meta(meta, self.device),
+    #                 )
+    #             )
+
+    #     return tuple(grad_recv_info_list)
     def _create_grad_recv_info(
         self,
         act_send_info: dict,
     ) -> tuple:
-        """
-        返回的 tuple 与 outputs_meta 一一对应；张量位置是 _RecvInfo，
-        非张量（含 None）位置放 None，后续会被跳过。
-        """
         grad_recv_info_list = []
         outputs_meta = self.get_outputs_meta()
 
-        print(f"[{dist.get_rank()}] Creating grad_recv_info for stage {self.stage_index}")
-        print(f"[{dist.get_rank()}] outputs_meta shapes: {[m.shape if torch.is_tensor(m) else 'non-tensor' for m in outputs_meta]}")
-        
         if not self.is_last:
-            # Receiving gradients from multiple sources is not supported -> 只取第一个目的地
-            for idx in range(len(outputs_meta)):
-                dst_list = act_send_info.get(idx, [])
-                dst = dst_list[0] if dst_list else None
-                meta = outputs_meta[idx]
+            for idx, dst_list in act_send_info.items():
+                dst = dst_list[0]
+                meta = outputs_meta[idx] if idx < len(outputs_meta) else None
 
-                # 非张量（或没有下游）占位，保持索引不变
-                if dst is None or meta is None or not torch.is_tensor(meta):
+                # 跳过非张量或整数类型张量（它们不需要梯度）
+                if meta is None or not torch.is_tensor(meta):
+                    grad_recv_info_list.append(None)
+                    continue
+                
+                # 检查是否是浮点或复数类型（只有这些类型有梯度）
+                if not (meta.is_floating_point() or torch.is_complex(meta)):
+                    print(f"[{dist.get_rank()}] Skipping grad recv for non-floating tensor at idx {idx}, dtype={meta.dtype}")
                     grad_recv_info_list.append(None)
                     continue
 
+                buffer = _make_tensor_from_meta(meta, self.device)
                 grad_recv_info_list.append(
                     _RecvInfo(
                         f"recv_grad_for_{self.stage_index}_from_{dst}",
                         dst,
-                        _make_tensor_from_meta(meta, self.device),
+                        buffer,
                     )
                 )
 
         return tuple(grad_recv_info_list)
+    
+    def _create_grad_send_info(
+        self,
+        args_recv_info: tuple,
+    ) -> list[Optional[int]]:
+        grad_send_info: list[Optional[int]] = []
+
+        def map_recv_to_send(a):
+            if isinstance(a, _RecvInfo) and getattr(a, "buffer", None) is not None:
+                # 只有浮点/复数类型的张量才发送梯度
+                if isinstance(a.buffer, torch.Tensor) and (
+                    a.buffer.is_floating_point() or torch.is_complex(a.buffer)
+                ):
+                    grad_send_info.append(a.source)
+                    return a.source
+            grad_send_info.append(None)
+            return None
+
+        map_aggregate(args_recv_info, map_recv_to_send)
+        return grad_send_info
 
 def _make_tensor_from_meta(
     example: Union[torch.Tensor, FakeTensor],
