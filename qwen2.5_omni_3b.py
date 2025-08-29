@@ -161,22 +161,40 @@ class Stage0(nn.Module):
                     audio_embeds = self.audio_enc(audio_values, None)            # 某些实现要求额外参数
                 hidden = self._replace_feats_by_token_id(input_ids, hidden, audio_embeds, self.audio_token_id)
 
-        # 4) 注意力掩码：causal + padding
+         # 4) 注意力掩码
         if attention_mask is None:
             attention_mask = torch.ones(B, T, dtype=torch.long, device=device)
-        causal = build_causal(T, device=device)             # [1,1,T,T]，上三角置 -inf
-        attn_4d = causal.expand(B, -1, -1, -1).clone()      # [B,1,T,T]
-        pad = (attention_mask == 0).view(B, 1, 1, T)        # pad 位置屏蔽
+        causal = build_causal(T, device=device)
+        attn_4d = causal.expand(B, -1, -1, -1).clone()
+        pad = (attention_mask == 0).view(B, 1, 1, T)
         attn_4d = attn_4d.masked_fill(pad, float("-inf")).contiguous()
 
-        # 5) 位置索引（RoPE）。简单做法：按 0..T-1；若需要 TMRoPE，可改成调用底模的 get_rope_index
-        position_ids = torch.arange(T, device=device).unsqueeze(0).repeat(B, 1).contiguous()
+        # 5) 位置索引 - 关键修改：使用模型的get_rope_index方法
+        grid_thw = None
+        if vision_inputs is not None and "grid_thw" in vision_inputs:
+            grid_thw = vision_inputs["grid_thw"]
+        
+        # 使用模型内置的方法生成正确的3D position_ids
+        if hasattr(self.text_model, "get_rope_index"):
+            position_ids, rope_deltas = self.text_model.get_rope_index(
+                input_ids, 
+                image_grid_thw=grid_thw,
+                video_grid_thw=None,  # 如果有视频支持
+                attention_mask=attention_mask
+            )
+        else:
+            # 备用方案：创建3D的position_ids (3个模态维度)
+            base_pos = torch.arange(T, device=device).unsqueeze(0).repeat(B, 1)
+            # Qwen2.5-Omni需要[3, B, T]形状
+            position_ids = torch.stack([
+                base_pos,  # text positions
+                base_pos,  # audio positions (可以根据需要调整)
+                base_pos   # vision positions (可以根据需要调整)
+            ], dim=0).contiguous()
+            rope_deltas = None
 
-        # 可选：若底模提供 get_rope_index（Omni/VL 通常有），你也可以用下面两行替换上面的简单 position_ids：
-        # if hasattr(self.text_model, "get_rope_index"):
-        #     position_ids, _ = self.text_model.get_rope_index(input_ids, grid_thw, None, attention_mask)
-
-        return hidden.contiguous(), attn_4d, position_ids
+        # 返回时包含rope_deltas（如果有的话）
+        return hidden.contiguous(), attn_4d, position_ids, rope_deltas
         
 
 
@@ -186,48 +204,76 @@ class Stage1(nn.Module):
         super().__init__()
         self.layers = nn.ModuleList(text_model.layers[:L1])
         self.rotary_emb = rotary_emb
-    def forward(self, hidden, attn_mask, position_ids):
-        pos_emb = self.rotary_emb(hidden, position_ids)
+        
+    def forward(self, hidden, attn_mask, position_ids, rope_deltas=None):
+        # 根据position_ids的维度生成正确的position embeddings
+        if position_ids.dim() == 3:
+            # Qwen2.5-Omni的3D格式
+            pos_emb = self.rotary_emb(hidden, position_ids)
+        else:
+            # 2D格式的备用处理
+            pos_emb = self.rotary_emb(hidden, position_ids.unsqueeze(0))
+            
         for blk in self.layers:
-            hidden = blk(hidden_states=hidden,
-                         attention_mask=attn_mask,
-                         position_ids=position_ids,
-                         position_embeddings=pos_emb,
-                         output_attentions=False,
-                         use_cache=False)[0]
-        return hidden.contiguous(), attn_mask, position_ids
+            hidden = blk(
+                hidden_states=hidden,
+                attention_mask=attn_mask,
+                position_ids=position_ids,
+                position_embeddings=pos_emb,
+                rope_deltas=rope_deltas,  # 传递rope_deltas
+                output_attentions=False,
+                use_cache=False
+            )[0]
+        return hidden.contiguous(), attn_mask, position_ids, rope_deltas
 
 class Stage2(nn.Module):
     def __init__(self, text_model, L1, L2, rotary_emb=None):
         super().__init__()
         self.layers = nn.ModuleList(text_model.layers[L1:L2])
         self.rotary_emb = rotary_emb
-    def forward(self, hidden, attn_mask, position_ids):
-        pos_emb = self.rotary_emb(hidden, position_ids)
+        
+    def forward(self, hidden, attn_mask, position_ids, rope_deltas=None):
+        if position_ids.dim() == 3:
+            pos_emb = self.rotary_emb(hidden, position_ids)
+        else:
+            pos_emb = self.rotary_emb(hidden, position_ids.unsqueeze(0))
+            
         for blk in self.layers:
-            hidden = blk(hidden_states=hidden,
-                         attention_mask=attn_mask,
-                         position_ids=position_ids,
-                         position_embeddings=pos_emb,
-                         output_attentions=False,
-                         use_cache=False)[0]
-        return hidden.contiguous(), attn_mask, position_ids
+            hidden = blk(
+                hidden_states=hidden,
+                attention_mask=attn_mask,
+                position_ids=position_ids,
+                position_embeddings=pos_emb,
+                rope_deltas=rope_deltas,
+                output_attentions=False,
+                use_cache=False
+            )[0]
+        return hidden.contiguous(), attn_mask, position_ids, rope_deltas
 
 class Stage3(nn.Module):
-    def __init__(self, full_thinker, text_model, L2):
+    def __init__(self, full_thinker, text_model, L2, rotary_emb=None):  # 添加rotary_emb参数
         super().__init__()
         self.layers = nn.ModuleList(text_model.layers[L2:])
-        self.norm   = text_model.norm
-        self.lm_head = full_thinker.lm_head   # Thinker 自带 LM 头（不含 Talker）
-    def forward(self, hidden, attn_mask, position_ids):
-        pos_emb = self.rotary_emb(hidden, position_ids)
+        self.norm = text_model.norm
+        self.lm_head = full_thinker.lm_head
+        self.rotary_emb = rotary_emb  # 保存rotary_emb
+        
+    def forward(self, hidden, attn_mask, position_ids, rope_deltas=None):
+        if position_ids.dim() == 3:
+            pos_emb = self.rotary_emb(hidden, position_ids)
+        else:
+            pos_emb = self.rotary_emb(hidden, position_ids.unsqueeze(0))
+            
         for blk in self.layers:
-            hidden = blk(hidden_states=hidden,
-                         attention_mask=attn_mask,
-                         position_ids=position_ids,
-                         position_embeddings=pos_emb,
-                         output_attentions=False,
-                         use_cache=False)[0]
+            hidden = blk(
+                hidden_states=hidden,
+                attention_mask=attn_mask,
+                position_ids=position_ids,
+                position_embeddings=pos_emb,
+                rope_deltas=rope_deltas,
+                output_attentions=False,
+                use_cache=False
+            )[0]
         hidden = self.norm(hidden)
         logits = self.lm_head(hidden)
         return logits
@@ -298,7 +344,7 @@ def main():
                             group=dist.group.WORLD,
                             prev_group=[1], this_group=[2], next_group=[3])
     elif rank == 3:
-        stage_mod = Stage3(thinker, text_model, L2)
+        stage_mod = Stage3(thinker, text_model, L2, rotary_emb)
         stage_mod.to(device)
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=3,
                             num_stages=world, device=device,
