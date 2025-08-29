@@ -531,7 +531,8 @@ def main():
 
     batch_size = args.batch_size
     microbatch_num = args.microbatch_num
-
+    block = 512
+    
     # 仅 rank==0 负责取数（你原先的做法）
     if rank == 0:
         loader = torch.utils.data.DataLoader(
@@ -546,16 +547,25 @@ def main():
     def loss_fn(output, target):
         if output is None or target is None:
             return None
+        
         vocab_size = output.size(-1)
-
         T_logits = output.size(1)
         T_labels = target.size(1)
         T = min(T_logits, T_labels)
-
-        # 左移对齐：logits 对应 [0..T-2]，labels 对应 [1..T-1]
+        
         logits = output[:, :T-1, :].reshape(-1, vocab_size)
         labels = target[:, 1:T].reshape(-1)
-
+        
+        # 添加调试信息
+        print(f"[rank{dist.get_rank()}] loss_fn: logits shape={logits.shape}, labels shape={labels.shape}")
+        print(f"[rank{dist.get_rank()}] labels range: min={labels.min()}, max={labels.max()}, vocab_size={vocab_size}")
+        
+        # 检查 labels 的有效性
+        valid_mask = (labels >= -100) & (labels < vocab_size)
+        if not valid_mask.all():
+            invalid_labels = labels[~valid_mask]
+            print(f"[rank{dist.get_rank()}] WARNING: Found invalid labels: {invalid_labels[:10]}...")
+        
         return F.cross_entropy(logits, labels, ignore_index=-100)
 
 
@@ -625,7 +635,7 @@ def main():
 
             else:
                 # 其它 rank 只需要 label 的占位与广播
-                tgt = torch.empty(batch_size, block, dtype=torch.long, device=device)
+                tgt = torch.zeros(batch_size, block, dtype=torch.long, device=device)
                 dist.broadcast(tgt, src=0)
                 print(f"[rank{rank}] Received labels with shape {tgt.shape}, min={tgt.min()}, max={tgt.max()}")
                 sched.step(target=tgt)
