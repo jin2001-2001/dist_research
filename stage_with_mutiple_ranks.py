@@ -247,10 +247,12 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                 )
                 ops.append(dist.P2POp(dist.isend, grad, peer_global_rank, self.group))
             else:
-                if not (grad is None and grad_recv_stage is None):
+                if grad_recv_stage is None:
+                    continue
+                if grad is None:
                     raise RuntimeError(
-                        f"[{self.stage_index}] for chunk {bwd_chunk_id} has gradients {grad} "
-                        f"and is expecting to send gradients to stage {grad_recv_stage}"
+                        f"[{self.stage_index}] expecting a gradient tensor for an input "
+                        f"coming from stage {grad_recv_stage}, but got None"
                     )
         return ops
     
