@@ -745,6 +745,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             outputs, inputs = stage.fwd_cache[mid]
 
                 elif comp_type == FULL_BACKWARD:
+                    print(f"✅✅✅ self.grad_recv_info_copy backward之前 {self.grad_recv_info_copy}")
+                    print(f"✅✅✅ stage.grad_recv_info backward之前 {stage.grad_recv_info}")
                     mb_ids = (mb_field,) if isinstance(mb_field, int) else tuple(mb_field)
                     rep_id = mb_ids[0]
                     print(f"[{dist.get_rank()}]: batch {current_batch+1} FULL_BACKWARD microbatch {mb_ids}")
@@ -825,7 +827,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if self.last_backward:
                         grad_scale_factor = backward_counter.total() if self.scale_grads else 1
                         stage.scale_grads(grad_scale_factor)
-                                
+                    print(f"✅✅✅ self.grad_recv_info_copy backward之后 {self.grad_recv_info_copy}")
+                    print(f"✅✅✅ stage.grad_recv_info backward之后 {stage.grad_recv_info}")            
                         
                 elif comp_type == BACKWARD_INPUT:
                     if stage_uses_fsdp:
