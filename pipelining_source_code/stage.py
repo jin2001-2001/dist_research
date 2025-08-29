@@ -1470,7 +1470,15 @@ class PipelineStage(_PipelineStageBase):
                 # In case there is backward pass, set requires_grad for receive buffers
                 if self.has_backward:
                     for r in recv_infos:
-                        r.buffer.requires_grad_(True)
+                        buf = getattr(r, "buffer", None)
+                        if isinstance(buf, torch.Tensor):
+                            if buf.is_floating_point() or torch.is_complex(buf):
+                                buf.requires_grad_(True)
+                            else:
+                                # 非浮点/复数不应设置梯度标志，显式关掉更安全
+                                if buf.requires_grad:
+                                    buf.requires_grad_(False)
+
 
                 self.args_recv_info[chunk_id] = recv_infos
             else:
