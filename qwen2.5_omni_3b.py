@@ -320,7 +320,7 @@ def main():
     raw = raw.map(pick_caption, remove_columns=[c for c in raw.column_names if c not in keep_cols])
 
     # 文本分词：一图一文，直接截断/填充到定长 block；labels=输入右移时的目标
-    block = 128
+    block = 512
     def tok_fn(batch):
         out = tok(batch["text"],
                 return_attention_mask=False,
