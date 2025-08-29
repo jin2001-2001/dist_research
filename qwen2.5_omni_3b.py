@@ -118,7 +118,19 @@ class Stage0(nn.Module):
         emb_flat[flat_mask] = feats
         return emb_flat.view_as(inputs_embeds)
 
-    def forward(self, input_ids, attention_mask=None, vision_inputs=None, audio_inputs=None):
+    def forward(self, *args, **kwargs):
+        # Handle both positional and keyword arguments flexibly
+        if len(args) >= 1:
+            input_ids = args[0]
+            attention_mask = args[1] if len(args) > 1 else kwargs.get('attention_mask', None)
+            vision_inputs = args[2] if len(args) > 2 else kwargs.get('vision_inputs', None)
+            audio_inputs = args[3] if len(args) > 3 else kwargs.get('audio_inputs', None)
+        else:
+            input_ids = kwargs['input_ids']
+            attention_mask = kwargs.get('attention_mask', None)
+            vision_inputs = kwargs.get('vision_inputs', None)
+            audio_inputs = kwargs.get('audio_inputs', None)
+
         if isinstance(input_ids, (tuple, list)):
             input_ids, vision_inputs = input_ids
 
@@ -181,17 +193,25 @@ class Stage0(nn.Module):
             base_pos = torch.arange(T, device=device).unsqueeze(0).repeat(B, 1)
             position_ids = torch.stack([base_pos, base_pos, base_pos], dim=0).contiguous()
 
-        # 只返回3个值
-        return hidden.contiguous(), attn_4d, position_ids
+        # 确保返回正好3个tensor
+        return hidden.contiguous(), attn_4d.contiguous(), position_ids.contiguous()
 
 
 class Stage1(nn.Module):
     def __init__(self, text_model, L1):
         super().__init__()
         self.layers = nn.ModuleList(text_model.layers[:L1])
-        self.rotary_emb = text_model.rotary_emb  # 直接从text_model获取
+        self.rotary_emb = text_model.rotary_emb
         
-    def forward(self, hidden, attn_mask, position_ids):
+    def forward(self, *args, **kwargs):
+        # Handle flexible arguments
+        if len(args) >= 3:
+            hidden, attn_mask, position_ids = args[:3]
+        else:
+            hidden = args[0] if len(args) > 0 else kwargs['hidden']
+            attn_mask = args[1] if len(args) > 1 else kwargs['attn_mask']
+            position_ids = args[2] if len(args) > 2 else kwargs['position_ids']
+        
         # 处理position_ids维度
         if position_ids.dim() == 2:
             position_ids = position_ids.unsqueeze(0).repeat(3, 1, 1)
@@ -206,16 +226,24 @@ class Stage1(nn.Module):
                 output_attentions=False,
                 use_cache=False
             )[0]
-        return hidden.contiguous(), attn_mask, position_ids
+        return hidden.contiguous(), attn_mask.contiguous(), position_ids.contiguous()
 
 
 class Stage2(nn.Module):
     def __init__(self, text_model, L1, L2):
         super().__init__()
         self.layers = nn.ModuleList(text_model.layers[L1:L2])
-        self.rotary_emb = text_model.rotary_emb  # 直接从text_model获取
+        self.rotary_emb = text_model.rotary_emb
         
-    def forward(self, hidden, attn_mask, position_ids):
+    def forward(self, *args, **kwargs):
+        # Handle flexible arguments
+        if len(args) >= 3:
+            hidden, attn_mask, position_ids = args[:3]
+        else:
+            hidden = args[0] if len(args) > 0 else kwargs['hidden']
+            attn_mask = args[1] if len(args) > 1 else kwargs['attn_mask']
+            position_ids = args[2] if len(args) > 2 else kwargs['position_ids']
+        
         if position_ids.dim() == 2:
             position_ids = position_ids.unsqueeze(0).repeat(3, 1, 1)
         
@@ -229,7 +257,7 @@ class Stage2(nn.Module):
                 output_attentions=False,
                 use_cache=False
             )[0]
-        return hidden.contiguous(), attn_mask, position_ids
+        return hidden.contiguous(), attn_mask.contiguous(), position_ids.contiguous()
 
 
 class Stage3(nn.Module):
@@ -238,9 +266,17 @@ class Stage3(nn.Module):
         self.layers = nn.ModuleList(text_model.layers[L2:])
         self.norm = text_model.norm
         self.lm_head = full_thinker.lm_head
-        self.rotary_emb = text_model.rotary_emb  # 直接从text_model获取
+        self.rotary_emb = text_model.rotary_emb
         
-    def forward(self, hidden, attn_mask, position_ids):
+    def forward(self, *args, **kwargs):
+        # Handle flexible arguments
+        if len(args) >= 3:
+            hidden, attn_mask, position_ids = args[:3]
+        else:
+            hidden = args[0] if len(args) > 0 else kwargs['hidden']
+            attn_mask = args[1] if len(args) > 1 else kwargs['attn_mask']
+            position_ids = args[2] if len(args) > 2 else kwargs['position_ids']
+        
         if position_ids.dim() == 2:
             position_ids = position_ids.unsqueeze(0).repeat(3, 1, 1)
         
