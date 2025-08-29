@@ -126,7 +126,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         if self.next_group is not None:
             next_leader = min(self.next_group)
             if self.is_leader:
-                print(f"✅✅✅{next_leader}")
+                print(f"✅✅✅{outputs_meta}")
                 dist.send_object_list([outputs_meta], dst=next_leader)  # world group
 
         if is_multi_dp:
