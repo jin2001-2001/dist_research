@@ -63,7 +63,7 @@ class Stage0(nn.Module):
         self.vision_enc   = vision_enc
         self.rotary_emb   = rotary_emb
 
-    def forward(self, input_ids, attention_mask=None, vision_inputs=None, audio_inputs=None):
+    def forward(self, input_ids, attention_mask=None, vision_inputs=None, audio_inputs=None, image_token_mask=None):
         # 兼容你原本可能传 (input_ids, vision_inputs)
         if isinstance(input_ids, (tuple, list)):
             input_ids, vision_inputs = input_ids
@@ -96,15 +96,19 @@ class Stage0(nn.Module):
             # HF 的视觉塔接受 2D patch 序列： [N_total_patches, C_feat]
             image_embeds = self.vision_enc(x, grid_thw=grid)   # 通常返回 [N_total_patches, D]
 
-            # 3) 计算图像占位符掩码，并核对“占位符个数 == 特征条数”
-            # 优先从模型/配置中获取 image_token_id
-            img_token_id = (
-                getattr(getattr(self, "config", object()), "image_token_id", None) or
-                getattr(self.vision_enc, "image_token_id", None)
-            )
-            assert img_token_id is not None, "未找到 image_token_id（请从模型 config 或视觉塔读取）"
-
-            image_mask = (input_ids == img_token_id).unsqueeze(-1).expand_as(inputs_embeds)  # [B,T,D]
+            # 3) 计算图像占位符掩码：优先使用 collate_fn 传入的 image_token_mask
+            if image_token_mask is not None:
+                mask_2d = image_token_mask.to(input_ids.device, dtype=torch.bool)  # [B,T]
+            else:
+                # 兜底：尽力从 config/vision_enc 推断（老逻辑）
+                img_token_id = (
+                    getattr(getattr(self, "config", object()), "image_token_id", None)
+                    or getattr(self.vision_enc, "image_token_id", None)
+                )
+                if img_token_id is None:
+                    raise ValueError("缺少 image_token_mask，且无法从 config/vision_enc 推断 image_token_id")
+                mask_2d = (input_ids == img_token_id)
+            image_mask = mask_2d.unsqueeze(-1).expand_as(inputs_embeds)  # [B,T,D]
             n_tokens = image_mask.sum().item() // inputs_embeds.size(-1)  # 图像占位符个数
             n_feats  = image_embeds.shape[0]                              # 视觉特征条数
             if n_tokens != n_feats:
@@ -400,12 +404,19 @@ def main():
                 "pixel_values_list": slices,   # ★ 逐样本列表
                 "grid_thw": image_grid_thw,    # [B,3]
             }
+            
+        # 构造 image_token_mask：与 input_ids 同形状 [B,T]，占位符处为 1
+        image_token_mask = torch.zeros_like(input_ids, dtype=torch.bool)
+        # 简单写法：把你认为的 image 占位 id 标出来（若你已知 id）
+        if hasattr(cfg, "image_token_id") and cfg.image_token_id is not None:
+            image_token_mask |= (input_ids == cfg.image_token_id)
 
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
             "vision_inputs": vision_inputs,
+            "image_token_mask": image_token_mask,
         }
 
 
@@ -482,10 +493,11 @@ def main():
 
             if rank == 0:
                 batch = next(data_iter)
-                print(f"✅✅✅{batch}")
+                #print(f"✅✅✅{batch}")
                 inp_ids = batch["input_ids"].to(device)             # [B, block]
                 attn    = batch["attention_mask"].to(device)
                 vis_pack = batch["vision_inputs"]
+                img_mask = batch.get("image_token_mask", None)
                 if vis_pack is not None:
                     if "pixel_values_list" in vis_pack:
                         vis_pack["pixel_values_list"] = [t.to(device) for t in vis_pack["pixel_values_list"]]
@@ -500,7 +512,7 @@ def main():
                 dist.broadcast(tgt, src=0)
 
                 # 传入流水：把 (input_ids, vision_inputs) 作为 Stage0 的输入
-                sched.step(inp_ids,attention_mask=attn , vision_inputs=vis_pack, target=tgt)
+                sched.step(inp_ids,attention_mask=attn , vision_inputs=vis_pack, image_token_mask=img_mask, target=tgt)
 
             else:
                 # 其它 rank 只需要 label 的占位与广播
