@@ -176,8 +176,7 @@ class Stage0(nn.Module):
         # if hasattr(self.text_model, "get_rope_index"):
         #     position_ids, _ = self.text_model.get_rope_index(input_ids, grid_thw, None, attention_mask)
 
-        pos_emb = None  # 让下游 Stage1/2 内部计算 RoPE（或你也可在此处用 self.rotary_emb 计算）
-        return hidden.contiguous(), attn_4d, position_ids, pos_emb
+        return hidden.contiguous(), attn_4d, position_ids
         
 
 
@@ -187,8 +186,8 @@ class Stage1(nn.Module):
         super().__init__()
         self.layers = nn.ModuleList(text_model.layers[:L1])
         self.rotary_emb = rotary_emb
-    def forward(self, hidden, attn_mask, position_ids, pos_emb=None):
-        # 若上游未给 RoPE，可在此处现算：pos_emb = self.rotary_emb(hidden, position_ids)
+    def forward(self, hidden, attn_mask, position_ids):
+        pos_emb = self.rotary_emb(hidden, position_ids)
         for blk in self.layers:
             hidden = blk(hidden_states=hidden,
                          attention_mask=attn_mask,
@@ -196,14 +195,15 @@ class Stage1(nn.Module):
                          position_embeddings=pos_emb,
                          output_attentions=False,
                          use_cache=False)[0]
-        return hidden.contiguous(), attn_mask, position_ids, pos_emb
+        return hidden.contiguous(), attn_mask, position_ids
 
 class Stage2(nn.Module):
     def __init__(self, text_model, L1, L2, rotary_emb=None):
         super().__init__()
         self.layers = nn.ModuleList(text_model.layers[L1:L2])
         self.rotary_emb = rotary_emb
-    def forward(self, hidden, attn_mask, position_ids, pos_emb=None):
+    def forward(self, hidden, attn_mask, position_ids):
+        pos_emb = self.rotary_emb(hidden, position_ids)
         for blk in self.layers:
             hidden = blk(hidden_states=hidden,
                          attention_mask=attn_mask,
@@ -211,7 +211,7 @@ class Stage2(nn.Module):
                          position_embeddings=pos_emb,
                          output_attentions=False,
                          use_cache=False)[0]
-        return hidden.contiguous(), attn_mask, position_ids, pos_emb
+        return hidden.contiguous(), attn_mask, position_ids
 
 class Stage3(nn.Module):
     def __init__(self, full_thinker, text_model, L2):
@@ -219,7 +219,8 @@ class Stage3(nn.Module):
         self.layers = nn.ModuleList(text_model.layers[L2:])
         self.norm   = text_model.norm
         self.lm_head = full_thinker.lm_head   # Thinker 自带 LM 头（不含 Talker）
-    def forward(self, hidden, attn_mask, position_ids, pos_emb=None):
+    def forward(self, hidden, attn_mask, position_ids):
+        pos_emb = self.rotary_emb(hidden, position_ids)
         for blk in self.layers:
             hidden = blk(hidden_states=hidden,
                          attention_mask=attn_mask,
