@@ -70,20 +70,18 @@ def pack_modalities(text_embeds, audio_seq=None, vision_seq=None):
 
 class Stage0(nn.Module):
     """0a: Text embed  | 0b: Audio encoder → 2048 | 0c: Vision encoder → 2048"""
-    def __init__(self, text_model, audio_enc=None, vision_enc=None, rotary_emb=None):
+    def __init__(self, text_model, audio_enc=None, vision_enc=None):
         super().__init__()
-        # 保存引用，便于取 config / 可能的 get_rope_index
-        self.text_model  = text_model
-        self.embed_tokens = text_model.embed_tokens        # [B,T_txt] -> [B,T_txt,D]
-        self.audio_enc    = audio_enc                      # 可能为 None
-        self.vision_enc   = vision_enc                     # 可能为 None
-        self.rotary_emb   = rotary_emb
+        self.text_model = text_model
+        self.embed_tokens = text_model.embed_tokens
+        self.audio_enc = audio_enc
+        self.vision_enc = vision_enc
 
         cfg = getattr(text_model, "config", None)
-        self.hidden_size     = getattr(cfg, "hidden_size", 2048)
-        self.image_token_id  = getattr(cfg, "image_token_id", None)
-        self.audio_token_id  = getattr(cfg, "audio_token_id", None)
-        self.video_token_id  = getattr(cfg, "video_token_id", None)  # 预留
+        self.hidden_size = getattr(cfg, "hidden_size", 2048)
+        self.image_token_id = getattr(cfg, "image_token_id", None)
+        self.audio_token_id = getattr(cfg, "audio_token_id", None)
+        self.video_token_id = getattr(cfg, "video_token_id", None)
 
     @staticmethod
     def _cat_pixel_values(vision_inputs):
@@ -94,9 +92,8 @@ class Stage0(nn.Module):
             pv_list = vision_inputs["pixel_values_list"]
             if pv_list is None or len(pv_list) == 0:
                 return None, vision_inputs.get("grid_thw", None)
-            pv = torch.cat(pv_list, dim=0)  # [sum_i Ni, C_feat]
+            pv = torch.cat(pv_list, dim=0)
             return pv, vision_inputs.get("grid_thw", None)
-        # 兼容：如果外面直接给了拼接好的 pixel_values
         return vision_inputs.get("pixel_values", None), vision_inputs.get("grid_thw", None)
 
     @staticmethod
@@ -105,8 +102,8 @@ class Stage0(nn.Module):
         if feats is None or special_token_id is None:
             return inputs_embeds
 
-        flat_mask = (input_ids == special_token_id).reshape(-1)                 # [B*T]
-        n_tokens  = int(flat_mask.sum().item())
+        flat_mask = (input_ids == special_token_id).reshape(-1)
+        n_tokens = int(flat_mask.sum().item())
         if n_tokens == 0:
             return inputs_embeds
 
@@ -116,13 +113,12 @@ class Stage0(nn.Module):
                 f"tokens={n_tokens} vs feats={feats.size(0)}"
             )
 
-        emb_flat = inputs_embeds.reshape(-1, inputs_embeds.size(-1))            # [B*T, D]
-        feats    = feats.to(device=emb_flat.device, dtype=emb_flat.dtype)       # 对齐 dtype/device
-        emb_flat[flat_mask] = feats                                            # 就地替换
+        emb_flat = inputs_embeds.reshape(-1, inputs_embeds.size(-1))
+        feats = feats.to(device=emb_flat.device, dtype=emb_flat.dtype)
+        emb_flat[flat_mask] = feats
         return emb_flat.view_as(inputs_embeds)
 
     def forward(self, input_ids, attention_mask=None, vision_inputs=None, audio_inputs=None):
-        # 兼容你原本可能传 (input_ids, vision_inputs)
         if isinstance(input_ids, (tuple, list)):
             input_ids, vision_inputs = input_ids
 
@@ -130,19 +126,19 @@ class Stage0(nn.Module):
         device = input_ids.device
 
         # 1) 文本嵌入
-        hidden = self.embed_tokens(input_ids)  # [B,T,D]
+        hidden = self.embed_tokens(input_ids)
 
-        # 2) 视觉：编码 + 逐位替换到 <image> 占位
+        # 2) 视觉编码
         if self.vision_enc is not None and vision_inputs is not None:
             pixel_values, grid_thw = self._cat_pixel_values(vision_inputs)
             if pixel_values is not None:
                 pixel_values = pixel_values.to(device)
                 if hasattr(self.vision_enc, "get_dtype"):
                     pixel_values = pixel_values.type(self.vision_enc.get_dtype())
-                image_embeds = self.vision_enc(pixel_values, grid_thw=grid_thw)  # [N_img_tokens, D]
+                image_embeds = self.vision_enc(pixel_values, grid_thw=grid_thw)
                 hidden = self._replace_feats_by_token_id(input_ids, hidden, image_embeds, self.image_token_id)
 
-        # 3) 音频（若你后续 collate 里提供）：同理把 <audio> 的占位替换为编码特征
+        # 3) 音频编码
         if self.audio_enc is not None and audio_inputs is not None:
             audio_values = None
             if isinstance(audio_inputs, dict):
@@ -156,12 +152,12 @@ class Stage0(nn.Module):
                 if hasattr(self.audio_enc, "get_dtype"):
                     audio_values = audio_values.type(self.audio_enc.get_dtype())
                 try:
-                    audio_embeds = self.audio_enc(audio_values)                  # [N_aud_tokens, D]
+                    audio_embeds = self.audio_enc(audio_values)
                 except TypeError:
-                    audio_embeds = self.audio_enc(audio_values, None)            # 某些实现要求额外参数
+                    audio_embeds = self.audio_enc(audio_values, None)
                 hidden = self._replace_feats_by_token_id(input_ids, hidden, audio_embeds, self.audio_token_id)
 
-         # 4) 注意力掩码
+        # 4) 注意力掩码
         if attention_mask is None:
             attention_mask = torch.ones(B, T, dtype=torch.long, device=device)
         causal = build_causal(T, device=device)
@@ -169,108 +165,92 @@ class Stage0(nn.Module):
         pad = (attention_mask == 0).view(B, 1, 1, T)
         attn_4d = attn_4d.masked_fill(pad, float("-inf")).contiguous()
 
-        # 5) 位置索引 - 关键修改：使用模型的get_rope_index方法
+        # 5) 位置索引 - 生成3D格式
         grid_thw = None
         if vision_inputs is not None and "grid_thw" in vision_inputs:
             grid_thw = vision_inputs["grid_thw"]
         
-        # 使用模型内置的方法生成正确的3D position_ids
         if hasattr(self.text_model, "get_rope_index"):
-            position_ids, rope_deltas = self.text_model.get_rope_index(
+            position_ids, _ = self.text_model.get_rope_index(
                 input_ids, 
                 image_grid_thw=grid_thw,
-                video_grid_thw=None,  # 如果有视频支持
+                video_grid_thw=None,
                 attention_mask=attention_mask
             )
         else:
-            # 备用方案：创建3D的position_ids (3个模态维度)
             base_pos = torch.arange(T, device=device).unsqueeze(0).repeat(B, 1)
-            # Qwen2.5-Omni需要[3, B, T]形状
-            position_ids = torch.stack([
-                base_pos,  # text positions
-                base_pos,  # audio positions (可以根据需要调整)
-                base_pos   # vision positions (可以根据需要调整)
-            ], dim=0).contiguous()
-            rope_deltas = None
+            position_ids = torch.stack([base_pos, base_pos, base_pos], dim=0).contiguous()
 
-        # 返回时包含rope_deltas（如果有的话）
-        return hidden.contiguous(), attn_4d, position_ids, rope_deltas
-        
-
+        # 只返回3个值
+        return hidden.contiguous(), attn_4d, position_ids
 
 
 class Stage1(nn.Module):
-    def __init__(self, text_model, L1, rotary_emb=None):
+    def __init__(self, text_model, L1):
         super().__init__()
         self.layers = nn.ModuleList(text_model.layers[:L1])
-        self.rotary_emb = rotary_emb
+        self.rotary_emb = text_model.rotary_emb  # 直接从text_model获取
         
-    def forward(self, hidden, attn_mask, position_ids, rope_deltas=None):
-        # 根据position_ids的维度生成正确的position embeddings
-        if position_ids.dim() == 3:
-            # Qwen2.5-Omni的3D格式
-            pos_emb = self.rotary_emb(hidden, position_ids)
-        else:
-            # 2D格式的备用处理
-            pos_emb = self.rotary_emb(hidden, position_ids.unsqueeze(0))
-            
+    def forward(self, hidden, attn_mask, position_ids):
+        # 处理position_ids维度
+        if position_ids.dim() == 2:
+            position_ids = position_ids.unsqueeze(0).repeat(3, 1, 1)
+        
+        pos_emb = self.rotary_emb(hidden, position_ids)
         for blk in self.layers:
             hidden = blk(
                 hidden_states=hidden,
                 attention_mask=attn_mask,
                 position_ids=position_ids,
                 position_embeddings=pos_emb,
-                rope_deltas=rope_deltas,  # 传递rope_deltas
                 output_attentions=False,
                 use_cache=False
             )[0]
-        return hidden.contiguous(), attn_mask, position_ids, rope_deltas
+        return hidden.contiguous(), attn_mask, position_ids
+
 
 class Stage2(nn.Module):
-    def __init__(self, text_model, L1, L2, rotary_emb=None):
+    def __init__(self, text_model, L1, L2):
         super().__init__()
         self.layers = nn.ModuleList(text_model.layers[L1:L2])
-        self.rotary_emb = rotary_emb
+        self.rotary_emb = text_model.rotary_emb  # 直接从text_model获取
         
-    def forward(self, hidden, attn_mask, position_ids, rope_deltas=None):
-        if position_ids.dim() == 3:
-            pos_emb = self.rotary_emb(hidden, position_ids)
-        else:
-            pos_emb = self.rotary_emb(hidden, position_ids.unsqueeze(0))
-            
+    def forward(self, hidden, attn_mask, position_ids):
+        if position_ids.dim() == 2:
+            position_ids = position_ids.unsqueeze(0).repeat(3, 1, 1)
+        
+        pos_emb = self.rotary_emb(hidden, position_ids)
         for blk in self.layers:
             hidden = blk(
                 hidden_states=hidden,
                 attention_mask=attn_mask,
                 position_ids=position_ids,
                 position_embeddings=pos_emb,
-                rope_deltas=rope_deltas,
                 output_attentions=False,
                 use_cache=False
             )[0]
-        return hidden.contiguous(), attn_mask, position_ids, rope_deltas
+        return hidden.contiguous(), attn_mask, position_ids
+
 
 class Stage3(nn.Module):
-    def __init__(self, full_thinker, text_model, L2, rotary_emb=None):  # 添加rotary_emb参数
+    def __init__(self, full_thinker, text_model, L2):
         super().__init__()
         self.layers = nn.ModuleList(text_model.layers[L2:])
         self.norm = text_model.norm
         self.lm_head = full_thinker.lm_head
-        self.rotary_emb = rotary_emb  # 保存rotary_emb
+        self.rotary_emb = text_model.rotary_emb  # 直接从text_model获取
         
-    def forward(self, hidden, attn_mask, position_ids, rope_deltas=None):
-        if position_ids.dim() == 3:
-            pos_emb = self.rotary_emb(hidden, position_ids)
-        else:
-            pos_emb = self.rotary_emb(hidden, position_ids.unsqueeze(0))
-            
+    def forward(self, hidden, attn_mask, position_ids):
+        if position_ids.dim() == 2:
+            position_ids = position_ids.unsqueeze(0).repeat(3, 1, 1)
+        
+        pos_emb = self.rotary_emb(hidden, position_ids)
         for blk in self.layers:
             hidden = blk(
                 hidden_states=hidden,
                 attention_mask=attn_mask,
                 position_ids=position_ids,
                 position_embeddings=pos_emb,
-                rope_deltas=rope_deltas,
                 output_attentions=False,
                 use_cache=False
             )[0]
@@ -322,7 +302,7 @@ def main():
     L2 = (2 * L) // 3
     
     if rank == 0:
-        stage_mod = Stage0(text_model, audio_enc, vision_enc, rotary_emb)
+        stage_mod = Stage0(text_model, audio_enc, vision_enc)
         stage_mod.to(device)
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=0,
                             num_stages=world, device=device,
@@ -330,21 +310,21 @@ def main():
                             prev_group=None, this_group=[0], next_group=[1])
         
     elif rank == 1:
-        stage_mod = Stage1(text_model, L1, rotary_emb)
+        stage_mod = Stage1(text_model, L1)
         stage_mod.to(device)
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=1,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
                             prev_group=[0], this_group=[1], next_group=[2])
     elif rank == 2:
-        stage_mod = Stage2(text_model, L1, L2, rotary_emb)
+        stage_mod = Stage2(text_model, L1, L2)
         stage_mod.to(device)
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=2,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
                             prev_group=[1], this_group=[2], next_group=[3])
     elif rank == 3:
-        stage_mod = Stage3(thinker, text_model, L2, rotary_emb)
+        stage_mod = Stage3(thinker, text_model, L2)
         stage_mod.to(device)
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=3,
                             num_stages=world, device=device,
