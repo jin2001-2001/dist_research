@@ -827,8 +827,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if self.last_backward:
                         grad_scale_factor = backward_counter.total() if self.scale_grads else 1
                         stage.scale_grads(grad_scale_factor)
-                    print(f"✅✅✅ self.grad_recv_info_copy backward之后 {self.grad_recv_info_copy}")
-                    print(f"✅✅✅ stage.grad_recv_info backward之后 {stage.grad_recv_info}")            
+                    # print(f"✅✅✅ self.grad_recv_info_copy backward之后 {self.grad_recv_info_copy}")
+                    # print(f"✅✅✅ stage.grad_recv_info backward之后 {stage.grad_recv_info}")            
                         
                 elif comp_type == BACKWARD_INPUT:
                     if stage_uses_fsdp:

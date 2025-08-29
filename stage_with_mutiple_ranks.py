@@ -784,12 +784,13 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         
         if not self.is_last:
             # Receiving gradients from multiple sources is not supported -> 只取第一个目的地
-            for idx, dst_list in act_send_info.items():
-                dst = dst_list[0]
-                meta = outputs_meta[idx] if idx < len(outputs_meta) else None
+            for idx in range(len(outputs_meta)):
+                dst_list = act_send_info.get(idx, [])
+                dst = dst_list[0] if dst_list else None
+                meta = outputs_meta[idx]
 
-                # 非张量（或 None）占位，保持索引对齐
-                if meta is None or not torch.is_tensor(meta):
+                # 非张量（或没有下游）占位，保持索引不变
+                if dst is None or meta is None or not torch.is_tensor(meta):
                     grad_recv_info_list.append(None)
                     continue
 
