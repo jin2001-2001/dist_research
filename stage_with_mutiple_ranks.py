@@ -224,23 +224,24 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         if not self.has_backward or self.is_first:
             return []
 
-        # Create bwd send infra lazily
         if self.grad_send_info is None:
-            # Send info for input grads during backward:
-            # List of destinations corresponding to input grads
-            # Can be None if an input has no grad
-            # `grad_send_info` is a mirror of `args_recv_info`
             self.grad_send_info = self._create_grad_send_info(self.args_recv_info[0])
 
         ops: list[dist.P2POp] = []
         grads_input = self.bwd_cache.pop(bwd_chunk_id)
         self.fwd_cache.pop(bwd_chunk_id, None)
-        print(f"[{dist.get_rank()}] get_bwd_send_ops for chunk {bwd_chunk_id}")
-        for i, grad in enumerate(grads_input):
-            if torch.is_tensor(grad):
-                print(f"  Grad {i}: shape={grad.shape}, bytes={grad.numel() * grad.element_size()}, dtype={grad.dtype}")
+        
         for grad, grad_recv_stage in zip(grads_input, self.grad_send_info):
-            if isinstance(grad, torch.Tensor) and grad_recv_stage is not None:
+            # 跳过 None 的梯度接收阶段（对应于整数类型的tensor）
+            if grad_recv_stage is None:
+                continue
+                
+            if isinstance(grad, torch.Tensor):
+                # 额外检查：只发送浮点类型的梯度
+                if not (grad.is_floating_point() or torch.is_complex(grad)):
+                    print(f"[{dist.get_rank()}] Skipping non-floating grad send: dtype={grad.dtype}")
+                    continue
+                    
                 logger.debug(
                     "%s Sending gradient to Stage %s: %s",
                     self.log_prefix,
@@ -254,14 +255,12 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                     else dist.get_global_rank(self.group, peer_rank)
                 )
                 ops.append(dist.P2POp(dist.isend, grad, peer_global_rank, self.group))
-            else:
-                if grad_recv_stage is None:
-                    continue
-                if grad is None:
-                    raise RuntimeError(
-                        f"[{self.stage_index}] expecting a gradient tensor for an input "
-                        f"coming from stage {grad_recv_stage}, but got None"
-                    )
+            elif grad is not None:
+                raise RuntimeError(
+                    f"[{self.stage_index}] expecting a gradient tensor for an input "
+                    f"coming from stage {grad_recv_stage}, but got {type(grad)}"
+                )
+        
         return ops
     
     def _execute_allreduce(self):
