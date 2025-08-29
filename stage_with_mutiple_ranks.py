@@ -855,6 +855,25 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         map_aggregate(args_recv_info, map_recv_to_send)
         return grad_send_info
+    
+    def _map_tensor_from_recv_info(
+        self,
+        recv_infos: tuple[InputInfo, ...],
+    ):
+        """
+        Map tensors from recv infos to a list.
+        """
+
+        def get_recv_tensor(info):
+            if info is None:
+                # 返回 None 表示这个位置没有梯度
+                return None
+            elif isinstance(info, _RecvInfo):
+                return info.buffer
+            else:
+                raise AssertionError(f"Expected _RecvInfo or None but got {type(info)}")
+
+        return map_aggregate(cast(Argument, recv_infos), get_recv_tensor)
 
 def _make_tensor_from_meta(
     example: Union[torch.Tensor, FakeTensor],
