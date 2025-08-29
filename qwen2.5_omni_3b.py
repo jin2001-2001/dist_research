@@ -91,7 +91,7 @@ class Stage0(nn.Module):
             smu = int(getattr(self.vision_enc, "spatial_merge_unit", 4))  # 仍保留，用于整除性检查
             exp = int((grid[:,0]*grid[:,1]*grid[:,2]).sum().item())       # ★ 不再乘 4
             if x.size(0) != exp or (x.size(0) % smu) != 0:
-                raise ValueError(f"[chkv] seq_len={x.size(0)}, expected={exp}, seq_len%{smu}={x.size(0)%smu}")
+                raise ValueError(f"[chk] seq_len={x.size(0)}, expected={exp}, seq_len%{smu}={x.size(0)%smu}")
 
             # HF 的视觉塔接受 2D patch 序列： [N_total_patches, C_feat]
             image_embeds = self.vision_enc(x, grid_thw=grid)   # 通常返回 [N_total_patches, D]
@@ -493,7 +493,7 @@ def main():
 
             if rank == 0:
                 batch = next(data_iter)
-                #print(f"✅✅✅{batch}")
+                print(f"✅✅✅{batch}")
                 inp_ids = batch["input_ids"].to(device)             # [B, block]
                 attn    = batch["attention_mask"].to(device)
                 vis_pack = batch["vision_inputs"]
