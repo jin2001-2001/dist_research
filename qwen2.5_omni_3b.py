@@ -547,12 +547,16 @@ def main():
             return None
         vocab_size = output.size(-1)
 
-        # output: [B, T, V]; target: [B, T]，其中非文本位置已在 collate_fn 置 -100
-        # 做常规左移
-        logits = output[:, :-1, :].reshape(-1, vocab_size)
-        labels = target[:, 1:].reshape(-1)
+        T_logits = output.size(1)
+        T_labels = target.size(1)
+        T = min(T_logits, T_labels)
+
+        # 左移对齐：logits 对应 [0..T-2]，labels 对应 [1..T-1]
+        logits = output[:, :T-1, :].reshape(-1, vocab_size)
+        labels = target[:, 1:T].reshape(-1)
 
         return F.cross_entropy(logits, labels, ignore_index=-100)
+
 
 
 
