@@ -404,11 +404,22 @@ class _PipelineStageBase(ABC):
             "can't set bwd input if this stage doesn't have backward"
         )
         assert not self.is_last, "can't set bwd input if this stage is last"
+        
         recv_infos = self.grad_recv_info[mb_index]
+        
         for info, tensor in zip(recv_infos, next_stage_bwd_outputs):
-            # assert isinstance(tensor, torch.Tensor), (
-            #     f"expected tensor values as outputs from prev stage, got {type(tensor)}"
-            # )
+            # 跳过 None 值（对应于不需要梯度的 tensor，如 position_ids）
+            if info is None:
+                # 相应的 tensor 也应该是 None
+                assert tensor is None, (
+                    f"Expected None tensor for None recv_info, got {type(tensor)}"
+                )
+                continue
+                
+            # 现在 info 应该是 _RecvInfo，tensor 应该是 torch.Tensor
+            assert isinstance(tensor, torch.Tensor), (
+                f"expected tensor values as outputs from prev stage, got {type(tensor)}"
+            )
             assert isinstance(info, _RecvInfo), (
                 f"Expected a recv info, got {type(info)}"
             )
