@@ -193,6 +193,7 @@ class Stage0(nn.Module):
             base_pos = torch.arange(T, device=device).unsqueeze(0).repeat(B, 1)
             position_ids = torch.stack([base_pos, base_pos, base_pos], dim=0).contiguous()
 
+        print(f"[{dist.get_rank()}] Stage0 output shapes: hidden={hidden.shape}, attn={attn_4d.shape}, pos={position_ids.shape}")
         # 确保返回正好3个tensor
         return hidden.contiguous(), attn_4d.contiguous(), position_ids.contiguous()
 

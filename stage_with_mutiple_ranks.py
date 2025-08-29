@@ -180,7 +180,11 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             return []
 
         recv_infos = self.grad_recv_info[bwd_chunk_id]
-        print(f"✅✅✅ recv_infos {recv_infos}")
+        print(f"[{dist.get_rank()}] get_bwd_recv_ops for chunk {bwd_chunk_id}")
+        for i, info in enumerate(recv_infos):
+            if isinstance(info, _RecvInfo):
+                buf = info.buffer
+                print(f"  Buffer {i}: shape={buf.shape}, bytes={buf.numel() * buf.element_size()}, dtype={buf.dtype}")
         return self._get_recv_ops(recv_infos, rank, dest_rank)
 
     def get_fwd_send_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
@@ -232,8 +236,10 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         ops: list[dist.P2POp] = []
         grads_input = self.bwd_cache.pop(bwd_chunk_id)
         self.fwd_cache.pop(bwd_chunk_id, None)
-        print(f"✅✅✅grads_input {grads_input}")
-        print(f"✅✅✅self.grad_send_info {self.grad_send_info}")
+        print(f"[{dist.get_rank()}] get_bwd_send_ops for chunk {bwd_chunk_id}")
+        for i, grad in enumerate(grads_input):
+            if torch.is_tensor(grad):
+                print(f"  Grad {i}: shape={grad.shape}, bytes={grad.numel() * grad.element_size()}, dtype={grad.dtype}")
         for grad, grad_recv_stage in zip(grads_input, self.grad_send_info):
             if isinstance(grad, torch.Tensor) and grad_recv_stage is not None:
                 logger.debug(
@@ -774,6 +780,9 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         grad_recv_info_list = []
         outputs_meta = self.get_outputs_meta()
 
+        print(f"[{dist.get_rank()}] Creating grad_recv_info for stage {self.stage_index}")
+        print(f"[{dist.get_rank()}] outputs_meta shapes: {[m.shape if torch.is_tensor(m) else 'non-tensor' for m in outputs_meta]}")
+        
         if not self.is_last:
             # Receiving gradients from multiple sources is not supported -> 只取第一个目的地
             for idx, dst_list in act_send_info.items():
