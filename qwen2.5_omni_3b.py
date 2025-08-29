@@ -617,6 +617,7 @@ def main():
 
                 tgt = batch["labels"].to(device)                # [B, block]
                 # 广播 label（仅文本部分需要参与 loss）
+                print(f"[rank0] Broadcasting labels with shape {tgt.shape}, min={tgt.min()}, max={tgt.max()}")
                 dist.broadcast(tgt, src=0)
 
                 # 传入流水：把 (input_ids, vision_inputs) 作为 Stage0 的输入
@@ -626,6 +627,7 @@ def main():
                 # 其它 rank 只需要 label 的占位与广播
                 tgt = torch.empty(batch_size, block, dtype=torch.long, device=device)
                 dist.broadcast(tgt, src=0)
+                print(f"[rank{rank}] Received labels with shape {tgt.shape}, min={tgt.min()}, max={tgt.max()}")
                 sched.step(target=tgt)
 
             # 清理时间线（按你原逻辑）
