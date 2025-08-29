@@ -669,6 +669,14 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                 # Save a placeholder for the dw_runner
                 self.dw_runner[bwd_chunk_id] = lambda: None
 
+        if self.grad_send_info is None:
+            self.grad_send_info = self._create_grad_send_info(self.args_recv_info[0])
+
+        grads_input = tuple(
+            (g if dst is not None and isinstance(g, torch.Tensor) else None)
+            for g, dst in zip(grads_input, self.grad_send_info)
+        )
+        
         self.bwd_cache[bwd_chunk_id] = grads_input
 
         if self.is_last and not self.is_first:
