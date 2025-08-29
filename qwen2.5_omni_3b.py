@@ -54,84 +54,131 @@ def pack_modalities(text_embeds, audio_seq=None, vision_seq=None):
     return torch.cat(seqs, dim=1) if len(seqs) > 1 else seqs[0]
 
 
+# class Stage0(nn.Module):
+#     """0a: Text embed  | 0b: Audio encoder → 2048 | 0c: Vision encoder → 2048"""
+#     def __init__(self, text_model, audio_enc=None, vision_enc=None, rotary_emb=None):
+#         super().__init__()
+#         self.embed_tokens = text_model.embed_tokens        # [B,T_txt] -> [B,T_txt,2048]
+#         self.audio_enc    = audio_enc                      # 原生编码器（内部会投到 2048）
+#         self.vision_enc   = vision_enc
+#         self.rotary_emb   = rotary_emb
+
+#     def forward(self, input_ids, attention_mask=None, vision_inputs=None, audio_inputs=None):
+#         # 兼容你原本可能传 (input_ids, vision_inputs)
+#         if isinstance(input_ids, (tuple, list)):
+#             input_ids, vision_inputs = input_ids
+
 class Stage0(nn.Module):
     """0a: Text embed  | 0b: Audio encoder → 2048 | 0c: Vision encoder → 2048"""
     def __init__(self, text_model, audio_enc=None, vision_enc=None, rotary_emb=None):
         super().__init__()
-        self.embed_tokens = text_model.embed_tokens        # [B,T_txt] -> [B,T_txt,2048]
-        self.audio_enc    = audio_enc                      # 原生编码器（内部会投到 2048）
-        self.vision_enc   = vision_enc
+        # 保存引用，便于取 config / 可能的 get_rope_index
+        self.text_model  = text_model
+        self.embed_tokens = text_model.embed_tokens        # [B,T_txt] -> [B,T_txt,D]
+        self.audio_enc    = audio_enc                      # 可能为 None
+        self.vision_enc   = vision_enc                     # 可能为 None
         self.rotary_emb   = rotary_emb
 
-    def forward(self, input_ids, attention_mask=None, vision_inputs=None, audio_inputs=None, image_token_mask=None):
+        cfg = getattr(text_model, "config", None)
+        self.hidden_size     = getattr(cfg, "hidden_size", 2048)
+        self.image_token_id  = getattr(cfg, "image_token_id", None)
+        self.audio_token_id  = getattr(cfg, "audio_token_id", None)
+        self.video_token_id  = getattr(cfg, "video_token_id", None)  # 预留
+
+    @staticmethod
+    def _cat_pixel_values(vision_inputs):
+        """把 collate_fn 拆成的逐样本列表拼回总二维 [sum_i Ni, C_feat]；并取 grid_thw。"""
+        if vision_inputs is None or not isinstance(vision_inputs, dict):
+            return None, None
+        if "pixel_values_list" in vision_inputs:
+            pv_list = vision_inputs["pixel_values_list"]
+            if pv_list is None or len(pv_list) == 0:
+                return None, vision_inputs.get("grid_thw", None)
+            pv = torch.cat(pv_list, dim=0)  # [sum_i Ni, C_feat]
+            return pv, vision_inputs.get("grid_thw", None)
+        # 兼容：如果外面直接给了拼接好的 pixel_values
+        return vision_inputs.get("pixel_values", None), vision_inputs.get("grid_thw", None)
+
+    @staticmethod
+    def _replace_feats_by_token_id(input_ids, inputs_embeds, feats, special_token_id):
+        """将 inputs_embeds 中 special_token_id 的位置替换为 feats（逐位、一一对应）。"""
+        if feats is None or special_token_id is None:
+            return inputs_embeds
+
+        flat_mask = (input_ids == special_token_id).reshape(-1)                 # [B*T]
+        n_tokens  = int(flat_mask.sum().item())
+        if n_tokens == 0:
+            return inputs_embeds
+
+        if feats.size(0) != n_tokens:
+            raise RuntimeError(
+                f"Feature count mismatch for token_id={special_token_id}: "
+                f"tokens={n_tokens} vs feats={feats.size(0)}"
+            )
+
+        emb_flat = inputs_embeds.reshape(-1, inputs_embeds.size(-1))            # [B*T, D]
+        feats    = feats.to(device=emb_flat.device, dtype=emb_flat.dtype)       # 对齐 dtype/device
+        emb_flat[flat_mask] = feats                                            # 就地替换
+        return emb_flat.view_as(inputs_embeds)
+
+    def forward(self, input_ids, attention_mask=None, vision_inputs=None, audio_inputs=None):
         # 兼容你原本可能传 (input_ids, vision_inputs)
         if isinstance(input_ids, (tuple, list)):
             input_ids, vision_inputs = input_ids
 
-        device = input_ids.device
         B, T = input_ids.shape
+        device = input_ids.device
 
         # 1) 文本嵌入
-        inputs_embeds = self.embed_tokens(input_ids)      # [B, T, D]
+        hidden = self.embed_tokens(input_ids)  # [B,T,D]
 
-        # 2) 视觉侧：如有图像则经视觉塔得到 image_embeds（2D 或 [B, Tv, D]）
-        if vision_inputs is not None and self.vision_enc is not None:
-            grid = vision_inputs.get("grid_thw", None)  # [B,3]
-            x = None
-            if "pixel_values_list" in vision_inputs and isinstance(vision_inputs["pixel_values_list"], list):
-                # microbatch 内部把逐样本列表拼回 2D
-                x = torch.cat([t.to(device) for t in vision_inputs["pixel_values_list"]], dim=0)
+        # 2) 视觉：编码 + 逐位替换到 <image> 占位
+        if self.vision_enc is not None and vision_inputs is not None:
+            pixel_values, grid_thw = self._cat_pixel_values(vision_inputs)
+            if pixel_values is not None:
+                pixel_values = pixel_values.to(device)
+                if hasattr(self.vision_enc, "get_dtype"):
+                    pixel_values = pixel_values.type(self.vision_enc.get_dtype())
+                image_embeds = self.vision_enc(pixel_values, grid_thw=grid_thw)  # [N_img_tokens, D]
+                hidden = self._replace_feats_by_token_id(input_ids, hidden, image_embeds, self.image_token_id)
+
+        # 3) 音频（若你后续 collate 里提供）：同理把 <audio> 的占位替换为编码特征
+        if self.audio_enc is not None and audio_inputs is not None:
+            audio_values = None
+            if isinstance(audio_inputs, dict):
+                audio_values = (audio_inputs.get("input_values")
+                                or audio_inputs.get("audio_values")
+                                or audio_inputs.get("input_features"))
             else:
-                x = vision_inputs.get("pixel_values", None)
-                if x is not None:
-                    x = x.to(device)
-            assert x is not None and grid is not None, "vision_inputs 需要包含 pixel_values(_list) 与 grid_thw"
+                audio_values = audio_inputs
+            if audio_values is not None:
+                audio_values = audio_values.to(device)
+                if hasattr(self.audio_enc, "get_dtype"):
+                    audio_values = audio_values.type(self.audio_enc.get_dtype())
+                try:
+                    audio_embeds = self.audio_enc(audio_values)                  # [N_aud_tokens, D]
+                except TypeError:
+                    audio_embeds = self.audio_enc(audio_values, None)            # 某些实现要求额外参数
+                hidden = self._replace_feats_by_token_id(input_ids, hidden, audio_embeds, self.audio_token_id)
 
-            # 调试与兜底：检查长度与 2x2 merge 的整除关系
-            smu = int(getattr(self.vision_enc, "spatial_merge_unit", 4))  # 仍保留，用于整除性检查
-            exp = int((grid[:,0]*grid[:,1]*grid[:,2]).sum().item())       # ★ 不再乘 4
-            if x.size(0) != exp or (x.size(0) % smu) != 0:
-                raise ValueError(f"[chk] seq_len={x.size(0)}, expected={exp}, seq_len%{smu}={x.size(0)%smu}")
-
-            # HF 的视觉塔接受 2D patch 序列： [N_total_patches, C_feat]
-            image_embeds = self.vision_enc(x, grid_thw=grid)   # 通常返回 [N_total_patches, D]
-
-            # 3) 计算图像占位符掩码：优先使用 collate_fn 传入的 image_token_mask
-            if image_token_mask is not None:
-                mask_2d = image_token_mask.to(input_ids.device, dtype=torch.bool)  # [B,T]
-            else:
-                # 兜底：尽力从 config/vision_enc 推断（老逻辑）
-                img_token_id = (
-                    getattr(getattr(self, "config", object()), "image_token_id", None)
-                    or getattr(self.vision_enc, "image_token_id", None)
-                )
-                if img_token_id is None:
-                    raise ValueError("缺少 image_token_mask，且无法从 config/vision_enc 推断 image_token_id")
-                mask_2d = (input_ids == img_token_id)
-            image_mask = mask_2d.unsqueeze(-1).expand_as(inputs_embeds)  # [B,T,D]
-            n_tokens = image_mask.sum().item() // inputs_embeds.size(-1)  # 图像占位符个数
-            n_feats  = image_embeds.shape[0]                              # 视觉特征条数
-            if n_tokens != n_feats:
-                raise ValueError(f"Image features and image tokens do not match: tokens={n_tokens}, features={n_feats}")
-
-            # 4) 注入：把占位符位置的嵌入换成视觉特征
-            image_embeds = image_embeds.to(inputs_embeds.device, dtype=inputs_embeds.dtype)
-            inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
-
-        # 5) 注意力 mask / 位置 id（后续 Stage 沿用）
+        # 4) 注意力掩码：causal + padding
         if attention_mask is None:
-            attention_mask = torch.ones((B, T), dtype=torch.long, device=device)
+            attention_mask = torch.ones(B, T, dtype=torch.long, device=device)
+        causal = build_causal(T, device=device)             # [1,1,T,T]，上三角置 -inf
+        attn_4d = causal.expand(B, -1, -1, -1).clone()      # [B,1,T,T]
+        pad = (attention_mask == 0).view(B, 1, 1, T)        # pad 位置屏蔽
+        attn_4d = attn_4d.masked_fill(pad, float("-inf")).contiguous()
 
-        # 你原逻辑里使用的是 4D causal mask；保持一致
-        attn_mask = torch.triu(
-            torch.full((T, T), float("-inf"), device=device), diagonal=1
-        ).unsqueeze(0).unsqueeze(0).expand(B, 1, -1, -1).contiguous()
+        # 5) 位置索引（RoPE）。简单做法：按 0..T-1；若需要 TMRoPE，可改成调用底模的 get_rope_index
+        position_ids = torch.arange(T, device=device).unsqueeze(0).expand(B, T)
 
-        position_ids = torch.arange(T, device=device).unsqueeze(0).expand(B, -1).contiguous()
-        pos_emb = self.rotary_emb(inputs_embeds, position_ids) if self.rotary_emb is not None else None
+        # 可选：若底模提供 get_rope_index（Omni/VL 通常有），你也可以用下面两行替换上面的简单 position_ids：
+        # if hasattr(self.text_model, "get_rope_index"):
+        #     position_ids, _ = self.text_model.get_rope_index(input_ids, grid_thw, None, attention_mask)
 
-        # 返回与原流水线一致的四元组
-        return inputs_embeds.contiguous(), attn_mask, position_ids, pos_emb
+        pos_emb = None  # 让下游 Stage1/2 内部计算 RoPE（或你也可在此处用 self.rotary_emb 计算）
+        return hidden.contiguous(), attn_4d, position_ids, pos_emb
+        
 
 
 
@@ -404,19 +451,12 @@ def main():
                 "pixel_values_list": slices,   # ★ 逐样本列表
                 "grid_thw": image_grid_thw,    # [B,3]
             }
-            
-        # 构造 image_token_mask：与 input_ids 同形状 [B,T]，占位符处为 1
-        image_token_mask = torch.zeros_like(input_ids, dtype=torch.bool)
-        # 简单写法：把你认为的 image 占位 id 标出来（若你已知 id）
-        if hasattr(cfg, "image_token_id") and cfg.image_token_id is not None:
-            image_token_mask |= (input_ids == cfg.image_token_id)
 
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
             "vision_inputs": vision_inputs,
-            "image_token_mask": image_token_mask,
         }
 
 
@@ -497,7 +537,6 @@ def main():
                 inp_ids = batch["input_ids"].to(device)             # [B, block]
                 attn    = batch["attention_mask"].to(device)
                 vis_pack = batch["vision_inputs"]
-                img_mask = batch.get("image_token_mask", None)
                 if vis_pack is not None:
                     if "pixel_values_list" in vis_pack:
                         vis_pack["pixel_values_list"] = [t.to(device) for t in vis_pack["pixel_values_list"]]
@@ -512,7 +551,7 @@ def main():
                 dist.broadcast(tgt, src=0)
 
                 # 传入流水：把 (input_ids, vision_inputs) 作为 Stage0 的输入
-                sched.step(inp_ids,attention_mask=attn , vision_inputs=vis_pack, image_token_mask=img_mask, target=tgt)
+                sched.step(inp_ids,attention_mask=attn , vision_inputs=vis_pack, target=tgt)
 
             else:
                 # 其它 rank 只需要 label 的占位与广播
