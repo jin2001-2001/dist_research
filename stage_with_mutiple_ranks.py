@@ -93,7 +93,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             prev_leader = min(self.prev_group)
             if self.is_leader:
                 buf = [None]
-                dist.recv_object_list(buf, src=prev_leader, group=dist.group.WORLD, tag=self._shape_tag(),)  # world group
+                dist.recv_object_list(buf, src=prev_leader, group=dist.group.WORLD)  # world group
                 args = buf[0]
                 # Safety: ensure meta in case upstream sent real tensors by mistake
                 args = tree_map_only(torch.Tensor, lambda x: x.to("meta"), args)
@@ -126,17 +126,12 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         if self.next_group is not None:
             next_leader = min(self.next_group)
             if self.is_leader:
-                dist.send_object_list([outputs_meta], dst=next_leader, group=dist.group.WORLD, tag=self._shape_tag(),)  # world group
+                dist.send_object_list([outputs_meta], dst=next_leader, group=dist.group.WORLD)  # world group
 
         if is_multi_dp:
             dist.broadcast_object_list([outputs_meta], src=self.leader, group=self.dp_group)
 
         return outputs_meta
-
-    def _shape_tag(self) -> int:
-        # 预留一段不与其它消息复用的区间
-        # 如果可能在一次 run 内多次初始化，可把 epoch/seed/流水线 id 叠进来
-        return 10000 + self.stage_index  # 或者 hash("shape") ^ self.stage_index
 
     
     def _get_recv_ops(
