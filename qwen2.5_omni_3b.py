@@ -170,7 +170,7 @@ class Stage0(nn.Module):
         attn_4d = attn_4d.masked_fill(pad, float("-inf")).contiguous()
 
         # 5) 位置索引（RoPE）。简单做法：按 0..T-1；若需要 TMRoPE，可改成调用底模的 get_rope_index
-        position_ids = torch.arange(T, device=device).unsqueeze(0).expand(B, T)
+        position_ids = torch.arange(T, device=device).unsqueeze(0).repeat(B, 1).contiguous()
 
         # 可选：若底模提供 get_rope_index（Omni/VL 通常有），你也可以用下面两行替换上面的简单 position_ids：
         # if hasattr(self.text_model, "get_rope_index"):
