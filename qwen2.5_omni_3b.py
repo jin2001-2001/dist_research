@@ -266,6 +266,7 @@ def main():
     audio_enc    = getattr(thinker, "audio_tower", None)
     vision_enc   = getattr(thinker, "visual", None)
     rotary_emb   = getattr(text_model, "rotary_emb", None)
+    print(f"✅✅✅rotary_emb {rotary_emb}")
     vocab_size   = tok.vocab_size
 
     # 自动切分点
