@@ -45,7 +45,7 @@ def build_causal(mask_len, device):
                 .unsqueeze(0).unsqueeze(0)  # [1,1,T,T]
 
 def pack_modalities(text_embeds, audio_seq=None, vision_seq=None):
-    """把三路序列拼成 [B, T_total, D]；若某一路是 [T,D] 则兜底补 batch 维。"""
+
     def _ensure_3d(x):
         if x is None:
             return None
@@ -54,19 +54,6 @@ def pack_modalities(text_embeds, audio_seq=None, vision_seq=None):
     return torch.cat(seqs, dim=1) if len(seqs) > 1 else seqs[0]
 
 
-# class Stage0(nn.Module):
-#     """0a: Text embed  | 0b: Audio encoder → 2048 | 0c: Vision encoder → 2048"""
-#     def __init__(self, text_model, audio_enc=None, vision_enc=None, rotary_emb=None):
-#         super().__init__()
-#         self.embed_tokens = text_model.embed_tokens        # [B,T_txt] -> [B,T_txt,2048]
-#         self.audio_enc    = audio_enc                      # 原生编码器（内部会投到 2048）
-#         self.vision_enc   = vision_enc
-#         self.rotary_emb   = rotary_emb
-
-#     def forward(self, input_ids, attention_mask=None, vision_inputs=None, audio_inputs=None):
-#         # 兼容你原本可能传 (input_ids, vision_inputs)
-#         if isinstance(input_ids, (tuple, list)):
-#             input_ids, vision_inputs = input_ids
 
 class Stage0(nn.Module):
     """0a: Text embed  | 0b: Audio encoder → 2048 | 0c: Vision encoder → 2048"""
@@ -169,7 +156,6 @@ class Stage0(nn.Module):
                     audio_embeds = self.audio_enc(audio_values, None)
                 hidden = self._replace_feats_by_token_id(input_ids, hidden, audio_embeds, self.audio_token_id)
 
-        # 4) 注意力掩码
         if attention_mask is None:
             attention_mask = torch.ones(B, T, dtype=torch.long, device=device)
         causal = build_causal(T, device=device)
@@ -177,7 +163,6 @@ class Stage0(nn.Module):
         pad = (attention_mask == 0).view(B, 1, 1, T)
         attn_4d = attn_4d.masked_fill(pad, float("-inf")).contiguous()
 
-        # 5) 位置索引 - 生成3D格式
         grid_thw = None
         if vision_inputs is not None and "grid_thw" in vision_inputs:
             grid_thw = vision_inputs["grid_thw"]
@@ -376,15 +361,13 @@ def main():
     def pick_caption(example):
         text = example.get("caption_0", None)
         if text is None:
-            caps = example.get("captions")  # 某些镜像用这个字段
+            caps = example.get("captions") 
             text = caps[0] if isinstance(caps, list) and caps else ""
         return {"text": text}
 
-    # 仅保留 image 和我们新增的 text 列
     keep_cols = {"image", "text"}
     raw = raw.map(pick_caption, remove_columns=[c for c in raw.column_names if c not in keep_cols])
 
-    # 文本分词：一图一文，直接截断/填充到定长 block；labels=输入右移时的目标
     block = 512
     def tok_fn(batch):
         out = tok(batch["text"],
@@ -392,7 +375,7 @@ def main():
                 truncation=True,
                 max_length=block,
                 padding="max_length")
-        # 语言建模：labels 与 input_ids 相同（loss_fn 内部会做左移对齐）
+
         out["labels"] = out["input_ids"].copy()
         return out
 
@@ -416,21 +399,13 @@ def main():
         """
         img = ImageOps.exif_transpose(img)
         w, h = img.size
-        
-        # 计算需要的最小尺寸
-        # 1. 必须是 14 的倍数（patch_size）
-        # 2. H/14 和 W/14 必须是 4 的倍数（spatial_merge_unit）
-        # 这意味着 H 和 W 必须是 56 (14*4) 的倍数
-        
-        # 直接填充到 56 的倍数
+
         new_w = _round_to_multiple(w, 56)
         new_h = _round_to_multiple(h, 56)
-        
-        # 进一步确保 grid 维度是 4 的倍数
+
         grid_h = new_h // 14
         grid_w = new_w // 14
-        
-        # 如果 grid 维度不是 4 的倍数，继续增加
+
         while grid_h % 4 != 0:
             new_h += 56
             grid_h = new_h // 14
@@ -439,8 +414,6 @@ def main():
             new_w += 56
             grid_w = new_w // 14
         
-        # 为了额外的安全性，确保最终尺寸至少是 112x112
-        # （这确保有足够的 patches 进行 spatial merging）
         new_w = max(new_w, 112)
         new_h = max(new_h, 112)
         
@@ -454,13 +427,7 @@ def main():
         return ImageOps.expand(img, border=(0, 0, pad_right, pad_bottom), fill=0)
 
     def collate_fn(batch):
-        """
-        使用官方推荐路径：
-        - 逐样本构造会话，image 放在 content 里，caption 作为 user 的 text
-        - 用 processor.apply_chat_template 生成带图像占位符的 input_ids/attention_mask
-        - 拆解 processor 返回的拼接 2D pixel_values 为“逐样本列表”，并保留 image_grid_thw (B,3)
-        - 构造 labels：仅对文本 token 计算 loss，图像占位符与特殊符号置为 -100
-        """
+
         conversations = []
         for ex in batch:
             img = ex["image"]
@@ -490,7 +457,6 @@ def main():
         attention_mask = pack["attention_mask"]       # [B, T]
         labels         = input_ids.clone()
 
-        # 忽略图像占位符、特殊 token
         special_ids = set([
             tok.pad_token_id, getattr(tok, "eos_token_id", None), getattr(tok, "bos_token_id", None),
             getattr(cfg, "image_token_id", None),
@@ -501,9 +467,8 @@ def main():
         for sid in special_ids:
             labels[labels == sid] = -100
 
-        # === 关键：把拼接后的 2D pixel_values 按样本切回列表 ===
         vision_inputs = None
-        pixel_values   = pack.get("pixel_values", None)  # [sum_i N_i, C_feat] 例如 [2940, 1176]
+        pixel_values   = pack.get("pixel_values", None)  # [sum_i N_i, C_feat]  [2940, 1176]
         image_grid_thw = torch.as_tensor(pack.get("image_grid_thw", []), dtype=torch.long)  # [B, 3]
         if pixel_values is not None and image_grid_thw.numel() > 0:
             smu = int(getattr(vision_enc, "spatial_merge_unit", 4))  # 2x2 merge -> 4
@@ -515,7 +480,7 @@ def main():
             assert off == pixel_values.size(0), f"visual tokens mismatch: {off} != {pixel_values.size(0)}"
 
             vision_inputs = {
-                "pixel_values_list": slices,   # ★ 逐样本列表
+                "pixel_values_list": slices,  
                 "grid_thw": image_grid_thw,    # [B,3]
             }
 
@@ -535,7 +500,6 @@ def main():
     microbatch_num = args.microbatch_num
     block = 512
     
-    # 仅 rank==0 负责取数（你原先的做法）
     if rank == 0:
         loader = torch.utils.data.DataLoader(
             ds,
@@ -545,7 +509,6 @@ def main():
             collate_fn=collate_fn
         )
 
-    # ==== 语言模型损失（与原来相同：next-token LM）====
     def loss_fn(output, target):
         if output is None or target is None:
             return None
@@ -558,11 +521,9 @@ def main():
         logits = output[:, :T-1, :].reshape(-1, vocab_size)
         labels = target[:, 1:T].reshape(-1)
         
-        # 添加调试信息
         print(f"[rank{dist.get_rank()}] loss_fn: logits shape={logits.shape}, labels shape={labels.shape}")
         print(f"[rank{dist.get_rank()}] labels range: min={labels.min()}, max={labels.max()}, vocab_size={vocab_size}")
-        
-        # 检查 labels 的有效性
+
         valid_mask = (labels >= -100) & (labels < vocab_size)
         if not valid_mask.all():
             invalid_labels = labels[~valid_mask]
@@ -570,16 +531,11 @@ def main():
         
         return F.cross_entropy(logits, labels, ignore_index=-100)
 
-
-
-
-    # ==== 调度与动作表（保持你现有逻辑）====
     sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=microbatch_num,
                                                 loss_fn=loss_fn, root_pass=args.sudo_pass)
     actions = generate_1f1b_pipeline_actions(num_stages=4, num_microbatches=8, upstream = args.upstream)
     sched._load_actions(actions, format="compute_comms")
 
-    # ==== 优化器（不变）====
     opt = optim.Adam(stage_mod.parameters(), lr=1e-4)
     prev_loss = None
     
@@ -621,28 +577,25 @@ def main():
                 if vis_pack is not None:
                     if "pixel_values_list" in vis_pack:
                         vis_pack["pixel_values_list"] = [t.to(device) for t in vis_pack["pixel_values_list"]]
-                    elif "pixel_values" in vis_pack:  # 兼容意外情况
+                    elif "pixel_values" in vis_pack:  
                         vis_pack["pixel_values"] = vis_pack["pixel_values"].to(device)
                     if torch.is_tensor(vis_pack.get("grid_thw", None)):
                         vis_pack["grid_thw"] = vis_pack["grid_thw"].to(device)
 
 
                 tgt = batch["labels"].to(device)                # [B, block]
-                # 广播 label（仅文本部分需要参与 loss）
+
                 print(f"[rank0] Broadcasting labels with shape {tgt.shape}, min={tgt.min()}, max={tgt.max()}")
                 dist.broadcast(tgt, src=0)
 
-                # 传入流水：把 (input_ids, vision_inputs) 作为 Stage0 的输入
                 sched.step(inp_ids,attention_mask=attn , vision_inputs=vis_pack, target=tgt)
 
             else:
-                # 其它 rank 只需要 label 的占位与广播
                 tgt = torch.zeros(batch_size, block, dtype=torch.long, device=device)
                 dist.broadcast(tgt, src=0)
                 print(f"[rank{rank}] Received labels with shape {tgt.shape}, min={tgt.min()}, max={tgt.max()}")
                 sched.step(target=tgt)
 
-            # 清理时间线（按你原逻辑）
             if (step + 1) % 50 == 0:
                 try:
                     sched.timeline_rec.events.clear()
@@ -675,8 +628,6 @@ def main():
             print(f"\nEpoch {epoch+1} completed in {total_time:.2f}s")
             print(f"Average speed: {total_steps / total_time:.2f} steps/s")
 
-    # ========= 合并并保存（Thinker-only，四段聚合） =========
-    # 所有 rank 参与三轮广播：src 分别为 1、2、3；rank0 收集，其他 rank 在自己回合发送
     recv1, recv2, recv3 = [None], [None], [None]
 
     buf = [stage_mod.state_dict()] if rank == 1 else [None]
@@ -691,7 +642,6 @@ def main():
     dist.broadcast_object_list(buf, src=3)
     if rank == 0: part3_state = buf[0]
 
-    # rank0 本地的 Stage0 权重
     if rank == 0:
         print("\nMerging and saving model...")
         part0_state = stage_mod.state_dict()
@@ -699,14 +649,13 @@ def main():
         merged = Qwen2_5OmniThinkerForConditionalGeneration.from_pretrained(MODEL_ID, trust_remote_code=True)
         merged_state = merged.state_dict()
 
-        # --- Stage0: embed_tokens / rotary_emb / audio_encoder / vision_encoder ---
         for k, v in part0_state.items():
             if k.startswith("embed_tokens."):
                 newk = "model.embed_tokens." + k[len("embed_tokens."):]
                 merged_state[newk] = v
             elif k.startswith("rotary_emb."):
                 newk = "model.rotary_emb." + k[len("rotary_emb."):]
-                if newk in merged_state:  # 有的版本可能没有持久化该缓冲
+                if newk in merged_state: 
                     merged_state[newk] = v
             elif k.startswith("audio_enc."):
                 newk = "audio_tower." + k[len("audio_enc."):]
@@ -716,30 +665,24 @@ def main():
                 newk = "visual." + k[len("vision_enc."):]
                 if newk in merged_state:
                     merged_state[newk] = v
-            # Stage0 通常不包含 layers.*
 
-        # 工具函数：把局部层 key 映射为全局层 key
         def _map_layer_key(local_key: str, global_offset: int) -> str:
-            # local_key 形如: "layers.<i>.<rest>"
             parts = local_key.split(".")
             assert parts[0] == "layers", f"unexpected key {local_key}"
             li = int(parts[1]) + global_offset
             rest = ".".join(parts[2:])
             return f"model.layers.{li}.{rest}"
 
-        # --- Stage1: 前 1/3 层（偏移 +0） ---
         for k, v in part1_state.items():
             if k.startswith("layers."):
                 newk = _map_layer_key(k, 0)
                 merged_state[newk] = v
 
-        # --- Stage2: 中 1/3 层（偏移 +L1） ---
         for k, v in part2_state.items():
             if k.startswith("layers."):
                 newk = _map_layer_key(k, L1)
                 merged_state[newk] = v
 
-        # --- Stage3: 后 1/3 层（偏移 +L2）+ norm + lm_head ---
         for k, v in part3_state.items():
             if k.startswith("layers."):
                 newk = _map_layer_key(k, L2)
@@ -755,7 +698,6 @@ def main():
                 if "lm_head.bias" in merged_state:
                     merged_state["lm_head.bias"] = v
 
-        # 加载合并权重并保存
         merged.load_state_dict(merged_state, strict=False)
         merged.save_pretrained("trained_qwen_pp")
         tok.save_pretrained("trained_qwen_pp")
