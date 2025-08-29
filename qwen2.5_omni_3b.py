@@ -533,7 +533,7 @@ def main():
 
             if rank == 0:
                 batch = next(data_iter)
-                print(f"✅✅✅{batch}")
+                #print(f"✅✅✅{batch}")
                 inp_ids = batch["input_ids"].to(device)             # [B, block]
                 attn    = batch["attention_mask"].to(device)
                 vis_pack = batch["vision_inputs"]
