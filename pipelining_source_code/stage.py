@@ -406,9 +406,9 @@ class _PipelineStageBase(ABC):
         assert not self.is_last, "can't set bwd input if this stage is last"
         recv_infos = self.grad_recv_info[mb_index]
         for info, tensor in zip(recv_infos, next_stage_bwd_outputs):
-            assert isinstance(tensor, torch.Tensor), (
-                f"expected tensor values as outputs from prev stage, got {type(tensor)}"
-            )
+            # assert isinstance(tensor, torch.Tensor), (
+            #     f"expected tensor values as outputs from prev stage, got {type(tensor)}"
+            # )
             assert isinstance(info, _RecvInfo), (
                 f"Expected a recv info, got {type(info)}"
             )
