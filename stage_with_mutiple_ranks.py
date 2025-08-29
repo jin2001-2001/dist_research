@@ -180,6 +180,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             return []
 
         recv_infos = self.grad_recv_info[bwd_chunk_id]
+        print(f"✅✅✅ recv_infos {recv_infos}")
         return self._get_recv_ops(recv_infos, rank, dest_rank)
 
     def get_fwd_send_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
