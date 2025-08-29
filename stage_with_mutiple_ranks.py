@@ -232,7 +232,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         ops: list[dist.P2POp] = []
         grads_input = self.bwd_cache.pop(bwd_chunk_id)
         self.fwd_cache.pop(bwd_chunk_id, None)
-        print(f"✅✅✅grads_input.shape {grads_input.shape}")
+        print(f"✅✅✅grads_input {grads_input}")
         print(f"✅✅✅self.grad_send_info {self.grad_send_info}")
         for grad, grad_recv_stage in zip(grads_input, self.grad_send_info):
             if isinstance(grad, torch.Tensor) and grad_recv_stage is not None:
