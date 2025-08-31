@@ -517,9 +517,6 @@ def main():
         
         logits = output[:, :T-1, :].reshape(-1, vocab_size)
         labels = target[:, 1:T].reshape(-1)
-        
-        print(f"[rank{dist.get_rank()}] loss_fn: logits shape={logits.shape}, labels shape={labels.shape}")
-        print(f"[rank{dist.get_rank()}] labels range: min={labels.min()}, max={labels.max()}, vocab_size={vocab_size}")
 
         valid_mask = (labels >= -100) & (labels < vocab_size)
         if not valid_mask.all():
@@ -582,7 +579,6 @@ def main():
 
                 tgt = batch["labels"].to(device)                # [B, block]
 
-                print(f"[rank0] Broadcasting labels with shape {tgt.shape}, min={tgt.min()}, max={tgt.max()}")
                 dist.broadcast(tgt, src=0)
 
                 sched.step(inp_ids,attention_mask=attn , vision_inputs=vis_pack, target=tgt)
