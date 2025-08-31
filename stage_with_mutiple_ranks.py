@@ -179,11 +179,6 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             return []
 
         recv_infos = self.grad_recv_info[bwd_chunk_id]
-        print(f"[{dist.get_rank()}] get_bwd_recv_ops for chunk {bwd_chunk_id}")
-        for i, info in enumerate(recv_infos):
-            if isinstance(info, _RecvInfo):
-                buf = info.buffer
-                print(f"  Buffer {i}: shape={buf.shape}, bytes={buf.numel() * buf.element_size()}, dtype={buf.dtype}")
         return self._get_recv_ops(recv_infos, rank, dest_rank)
 
     def get_fwd_send_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
@@ -813,14 +808,11 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                 dst = dst_list[0]
                 meta = outputs_meta[idx] if idx < len(outputs_meta) else None
 
-                # 跳过非张量或整数类型张量（它们不需要梯度）
                 if meta is None or not torch.is_tensor(meta):
                     grad_recv_info_list.append(None)
                     continue
                 
-                # 检查是否是浮点或复数类型（只有这些类型有梯度）
                 if not (meta.is_floating_point() or torch.is_complex(meta)):
-                    print(f"[{dist.get_rank()}] Skipping grad recv for non-floating tensor at idx {idx}, dtype={meta.dtype}")
                     grad_recv_info_list.append(None)
                     continue
 
