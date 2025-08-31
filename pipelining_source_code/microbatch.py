@@ -349,7 +349,7 @@ def split_args_kwargs_into_chunks(
     ]
 
     # 返回之前，修正按样本对齐的 list 字段（例如 vision_inputs.pixel_values_list）
-    if kwargs is not None and len(kwargs_split) > 0:
+    if kwargs is not None and len(kwargs_split) > 0 and any(kw for kw in kwargs_split if kw):
         _postfix_slice_listlike_by_samples(kwargs, kwargs_split)
     
     return args_split, kwargs_split
@@ -560,7 +560,6 @@ def _infer_mb_sizes_from_kwargs_split(kwargs_split: list[dict]) -> list[int]:
                     mb_size = int(v.size(0))
                     break
         if mb_size is None:
-            print(kwargs_split)
             raise RuntimeError(f"Cannot infer microbatch size for kwargs_split[{i}]")
         sizes.append(mb_size)
     return sizes
