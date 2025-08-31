@@ -586,7 +586,6 @@ def main():
             else:
                 tgt = torch.zeros(batch_size, block, dtype=torch.long, device=device)
                 dist.broadcast(tgt, src=0)
-                print(f"[rank{rank}] Received labels with shape {tgt.shape}, min={tgt.min()}, max={tgt.max()}")
                 sched.step(target=tgt)
 
             if (step + 1) % 50 == 0:
