@@ -560,6 +560,7 @@ def _infer_mb_sizes_from_kwargs_split(kwargs_split: list[dict]) -> list[int]:
                     mb_size = int(v.size(0))
                     break
         if mb_size is None:
+            print(kwargs_split)
             raise RuntimeError(f"Cannot infer microbatch size for kwargs_split[{i}]")
         sizes.append(mb_size)
     return sizes

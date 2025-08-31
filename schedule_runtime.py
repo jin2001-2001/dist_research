@@ -627,7 +627,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             cat_kwargs: dict[str, Any] = {}
                             for k in kwarg_mbs[rep_id]:
                                 vals = [kwarg_mbs[mid][k] for mid in mb_ids]
-                                # ★ 无论是 Tensor、dict（如 vision_inputs）、还是 list/tuple，都交给 _cat_like 递归处理
                                 cat_kwargs[k] = _cat_like(vals)
 
                         else:
