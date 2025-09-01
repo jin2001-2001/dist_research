@@ -269,7 +269,8 @@ class _PipelineStageBase(ABC):
             # Note: we send gradients back to previous stage as long as in
             # forward it is a received input, regardless of whether it requires
             # grad. It is up to the previous stage to disgard this gradient.
-            if isinstance(a, _RecvInfo):
+            if isinstance(a, _RecvInfo) and getattr(a, "buffer", None) is not None \
+                    and (a.buffer.requires_grad if isinstance(a.buffer, torch.Tensor) else False):
                 grad_send_info.append(a.source)
                 return a.source
             else:
@@ -371,7 +372,10 @@ class _PipelineStageBase(ABC):
             # as the input tensor for a fresh autograd graph, not part of the previous stage's autograd graph.
             # TODO: confirm, do we use this activation as the root of the backward call for the previous stage? does
             # detach have any affect on that?
-            info.buffer = tensor.detach().requires_grad_(True)
+            t = tensor.detach()
+            if t.is_floating_point() or torch.is_complex(t):
+                t.requires_grad_(True)
+            info.buffer = t
 
     def get_local_bwd_output(self, mb_index):
         """
@@ -400,8 +404,19 @@ class _PipelineStageBase(ABC):
             "can't set bwd input if this stage doesn't have backward"
         )
         assert not self.is_last, "can't set bwd input if this stage is last"
+        
         recv_infos = self.grad_recv_info[mb_index]
+        
         for info, tensor in zip(recv_infos, next_stage_bwd_outputs):
+            # 跳过 None 值（对应于不需要梯度的 tensor，如 position_ids）
+            if info is None:
+                # 相应的 tensor 也应该是 None
+                assert tensor is None, (
+                    f"Expected None tensor for None recv_info, got {type(tensor)}"
+                )
+                continue
+                
+            # 现在 info 应该是 _RecvInfo，tensor 应该是 torch.Tensor
             assert isinstance(tensor, torch.Tensor), (
                 f"expected tensor values as outputs from prev stage, got {type(tensor)}"
             )
@@ -1069,7 +1084,7 @@ class _PipelineStage(_PipelineStageBase):
             buffer = _make_tensor_from_meta(example_value, self.device)
             # In case there is backward pass, set requires_grad for receive buffers
             # before first forward
-            if self.has_backward:
+            if self.has_backward and (buffer.is_floating_point() or torch.is_complex(buffer)):
                 buffer.requires_grad_(True)
 
             return _RecvInfo(
@@ -1466,7 +1481,15 @@ class PipelineStage(_PipelineStageBase):
                 # In case there is backward pass, set requires_grad for receive buffers
                 if self.has_backward:
                     for r in recv_infos:
-                        r.buffer.requires_grad_(True)
+                        buf = getattr(r, "buffer", None)
+                        if isinstance(buf, torch.Tensor):
+                            if buf.is_floating_point() or torch.is_complex(buf):
+                                buf.requires_grad_(True)
+                            else:
+                                # 非浮点/复数不应设置梯度标志，显式关掉更安全
+                                if buf.requires_grad:
+                                    buf.requires_grad_(False)
+
 
                 self.args_recv_info[chunk_id] = recv_infos
             else:

@@ -93,7 +93,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             prev_leader = min(self.prev_group)
             if self.is_leader:
                 buf = [None]
-                dist.recv_object_list(buf, src=prev_leader)  # world group
+                dist.recv_object_list(buf, src=prev_leader, group=dist.group.WORLD)  # world group
                 args = buf[0]
                 # Safety: ensure meta in case upstream sent real tensors by mistake
                 args = tree_map_only(torch.Tensor, lambda x: x.to("meta"), args)
@@ -126,14 +126,13 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         if self.next_group is not None:
             next_leader = min(self.next_group)
             if self.is_leader:
-                dist.send_object_list([outputs_meta], dst=next_leader)  # world group
+                dist.send_object_list([outputs_meta], dst=next_leader, group=dist.group.WORLD)  # world group
 
         if is_multi_dp:
             dist.broadcast_object_list([outputs_meta], src=self.leader, group=self.dp_group)
 
         return outputs_meta
 
-    
     
     def _get_recv_ops(
         self,
@@ -220,19 +219,24 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         if not self.has_backward or self.is_first:
             return []
 
-        # Create bwd send infra lazily
         if self.grad_send_info is None:
-            # Send info for input grads during backward:
-            # List of destinations corresponding to input grads
-            # Can be None if an input has no grad
-            # `grad_send_info` is a mirror of `args_recv_info`
             self.grad_send_info = self._create_grad_send_info(self.args_recv_info[0])
 
         ops: list[dist.P2POp] = []
         grads_input = self.bwd_cache.pop(bwd_chunk_id)
         self.fwd_cache.pop(bwd_chunk_id, None)
+        
         for grad, grad_recv_stage in zip(grads_input, self.grad_send_info):
-            if isinstance(grad, torch.Tensor) and grad_recv_stage is not None:
+            # 跳过 None 的梯度接收阶段（对应于整数类型的tensor）
+            if grad_recv_stage is None:
+                continue
+                
+            if isinstance(grad, torch.Tensor):
+                # 额外检查：只发送浮点类型的梯度
+                if not (grad.is_floating_point() or torch.is_complex(grad)):
+                    print(f"[{dist.get_rank()}] Skipping non-floating grad send: dtype={grad.dtype}")
+                    continue
+                    
                 logger.debug(
                     "%s Sending gradient to Stage %s: %s",
                     self.log_prefix,
@@ -246,12 +250,12 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                     else dist.get_global_rank(self.group, peer_rank)
                 )
                 ops.append(dist.P2POp(dist.isend, grad, peer_global_rank, self.group))
-            else:
-                if not (grad is None and grad_recv_stage is None):
-                    raise RuntimeError(
-                        f"[{self.stage_index}] for chunk {bwd_chunk_id} has gradients {grad} "
-                        f"and is expecting to send gradients to stage {grad_recv_stage}"
-                    )
+            elif grad is not None:
+                raise RuntimeError(
+                    f"[{self.stage_index}] expecting a gradient tensor for an input "
+                    f"coming from stage {grad_recv_stage}, but got {type(grad)}"
+                )
+        
         return ops
     
     def _execute_allreduce(self):
@@ -669,6 +673,14 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                 # Save a placeholder for the dw_runner
                 self.dw_runner[bwd_chunk_id] = lambda: None
 
+        if self.grad_send_info is None:
+            self.grad_send_info = self._create_grad_send_info(self.args_recv_info[0])
+
+        grads_input = tuple(
+            (g if dst is not None and isinstance(g, torch.Tensor) else None)
+            for g, dst in zip(grads_input, self.grad_send_info)
+        )
+        
         self.bwd_cache[bwd_chunk_id] = grads_input
 
         if self.is_last and not self.is_first:
@@ -749,4 +761,87 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                 pass
 
         return out
+    
+    def _create_grad_recv_info(
+        self,
+        act_send_info: dict,
+    ) -> tuple:
+        grad_recv_info_list = []
+        outputs_meta = self.get_outputs_meta()
+
+        if not self.is_last:
+            for idx, dst_list in act_send_info.items():
+                dst = dst_list[0]
+                meta = outputs_meta[idx] if idx < len(outputs_meta) else None
+
+                if meta is None or not torch.is_tensor(meta):
+                    grad_recv_info_list.append(None)
+                    continue
+                
+                if not (meta.is_floating_point() or torch.is_complex(meta)):
+                    grad_recv_info_list.append(None)
+                    continue
+
+                buffer = _make_tensor_from_meta(meta, self.device)
+                grad_recv_info_list.append(
+                    _RecvInfo(
+                        f"recv_grad_for_{self.stage_index}_from_{dst}",
+                        dst,
+                        buffer,
+                    )
+                )
+
+        return tuple(grad_recv_info_list)
+    
+    def _create_grad_send_info(
+        self,
+        args_recv_info: tuple,
+    ) -> list[Optional[int]]:
+        grad_send_info: list[Optional[int]] = []
+
+        def map_recv_to_send(a):
+            if isinstance(a, _RecvInfo) and getattr(a, "buffer", None) is not None:
+                if isinstance(a.buffer, torch.Tensor) and (
+                    a.buffer.is_floating_point() or torch.is_complex(a.buffer)
+                ):
+                    grad_send_info.append(a.source)
+                    return a.source
+            grad_send_info.append(None)
+            return None
+
+        map_aggregate(args_recv_info, map_recv_to_send)
+        return grad_send_info
+    
+    def _map_tensor_from_recv_info(
+        self,
+        recv_infos: tuple[InputInfo, ...],
+    ):
+        """
+        Map tensors from recv infos to a list.
+        """
+
+        def get_recv_tensor(info):
+            if info is None:
+                return None
+            elif isinstance(info, _RecvInfo):
+                return info.buffer
+            else:
+                raise AssertionError(f"Expected _RecvInfo or None but got {type(info)}")
+
+        return map_aggregate(cast(Argument, recv_infos), get_recv_tensor)
+
+def _make_tensor_from_meta(
+    example: Union[torch.Tensor, FakeTensor],
+    device: torch.device,
+) -> torch.Tensor:
+    """
+    Create a real tensor from a tensor.
+    """
+    return torch.empty(
+        example.size(),
+        dtype=example.dtype,
+        layout=example.layout,
+        device=device,
+    )
+
 

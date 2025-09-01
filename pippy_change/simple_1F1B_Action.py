@@ -1,7 +1,7 @@
 from pipelining_source_code.schedules import _Action, _ComputationType
 
 
-def generate_1f1b_pipeline_actions(num_stages: int, num_microbatches: int):
+def generate_1f1b_pipeline_actions(num_stages: int, num_microbatches: int, upstream = None):
     actions_per_rank = {}
 
     for stage_idx in range(num_stages):
@@ -13,10 +13,10 @@ def generate_1f1b_pipeline_actions(num_stages: int, num_microbatches: int):
 
         fwd_mb = 0  
         bwd_mb = 0  
-
+        # [stage],[rank],[id],[action type],[microbatch],[dest_rank],[upstream],[dependency]
         def make_action(stage, rank, type_, mb, dest):
             nonlocal local_id
-            a = _Action(stage, rank, local_id, type_, mb, dest, None, None)
+            a = _Action(stage, rank, local_id, type_, mb, dest, upstream, None)
             local_id += 1
             return a
 
