@@ -151,11 +151,15 @@ def _shard_dict_of_args(
 
         chunk_spec = args_chunk_spec[arg_key]
         assert chunk_spec is not None  # Should have been set by caller
-        chunk_spec_flat, _ = tree_flatten(chunk_spec)
+
+        # 新增：将规格广播成与 arg 同构的“规格树”，以兼容 dict/list/tuple 的嵌套值
+        expanded_chunk_spec = _expand_chunk_spec_for_value(arg, chunk_spec)
+
+        chunk_spec_flat, _ = tree_flatten(expanded_chunk_spec)
         if len(flat) != len(chunk_spec_flat):
             raise ValueError(
                 f"Argument value {arg} did not have the same number of "
-                f"values as as chunk spec {chunk_spec}"
+                f"values as chunk spec {expanded_chunk_spec}"
             )
 
         sharded_arg_flat = []
@@ -344,6 +348,10 @@ def split_args_kwargs_into_chunks(
         for chunk_args in args_split_dict
     ]
 
+    # 返回之前，修正按样本对齐的 list 字段（例如 vision_inputs.pixel_values_list）
+    if kwargs is not None and len(kwargs_split) > 0 and any(kw for kw in kwargs_split if kw):
+        _postfix_slice_listlike_by_samples(kwargs, kwargs_split)
+    
     return args_split, kwargs_split
 
 
@@ -393,7 +401,9 @@ def merge_chunks(
 
     # Preliminary: flatten the chunk spec
     if chunk_spec is not None:
-        spec_flattened, flatten_spec = tree_flatten(chunk_spec)
+        value_like = chunks[0]
+        expanded_chunk_spec = _expand_chunk_spec_for_value(value_like, chunk_spec)
+        spec_flattened, flatten_spec = tree_flatten(expanded_chunk_spec)
     else:
         # If chunk_spec is not provided, we will merge chunks along the default dimension (0), for all output fields
         # We obtain the output structure by flattening chunk 0 and generate the chunk_spec
@@ -467,3 +477,107 @@ def merge_chunks(
 
     # Stage 4: Unflatten combined args
     return tree_unflatten(args_flattened, flatten_spec)
+
+def _is_container(x):
+    return isinstance(x, (dict, list, tuple))
+
+
+def _expand_chunk_spec_for_value(value, spec):
+
+    from torch import Tensor
+
+    if _is_container(spec):
+        if isinstance(value, dict) and isinstance(spec, dict):
+            return {k: _expand_chunk_spec_for_value(value[k], spec[k]) for k in spec.keys()}
+        elif isinstance(value, list) and isinstance(spec, list):
+            return [_expand_chunk_spec_for_value(v, s) for v, s in zip(value, spec)]
+        elif isinstance(value, tuple) and isinstance(spec, tuple):
+            return tuple(_expand_chunk_spec_for_value(v, s) for v, s in zip(value, spec))
+        else:
+            return spec
+
+    if isinstance(spec, TensorChunkSpec):
+        if isinstance(value, dict):
+            return {k: _expand_chunk_spec_for_value(v, spec) for k, v in value.items()}
+        elif isinstance(value, list):
+            return [_expand_chunk_spec_for_value(v, spec) for v in value]
+        elif isinstance(value, tuple):
+            return tuple(_expand_chunk_spec_for_value(v, spec) for v in value)
+        else:
+            return spec if isinstance(value, Tensor) else _Replicate
+
+    if spec is _Replicate:
+
+        if isinstance(value, dict):
+            return {k: _expand_chunk_spec_for_value(v, _Replicate) for k, v in value.items()}
+        elif isinstance(value, list):
+            return [_expand_chunk_spec_for_value(v, _Replicate) for v in value]
+        elif isinstance(value, tuple):
+            return tuple(_expand_chunk_spec_for_value(v, _Replicate) for v in value)
+        else:
+            return _Replicate
+
+    return spec
+
+def _infer_mb_sizes_from_kwargs_split(kwargs_split: list[dict]) -> list[int]:
+
+    sizes = []
+    for i, kw in enumerate(kwargs_split):
+        mb_size = None
+        for key in ("input_ids", "labels", "attention_mask"):
+            v = kw.get(key, None)
+            if torch.is_tensor(v) and v.dim() >= 1:
+                mb_size = int(v.size(0))
+                break
+        if mb_size is None:
+            # 兜底：找任意 [B, ...] 张量
+            for v in kw.values():
+                if torch.is_tensor(v) and v.dim() >= 1:
+                    mb_size = int(v.size(0))
+                    break
+        if mb_size is None:
+            raise RuntimeError(f"Cannot infer microbatch size for kwargs_split[{i}]")
+        sizes.append(mb_size)
+    return sizes
+
+
+def _postfix_slice_listlike_by_samples(
+    full_kwargs: dict,
+    kwargs_split: list[dict],
+    key_paths: tuple[tuple[str, ...], ...] = (("vision_inputs", "pixel_values_list"),),
+):
+
+    mb_sizes = _infer_mb_sizes_from_kwargs_split(kwargs_split)
+    total = sum(mb_sizes)
+
+    for path in key_paths:
+        cursor = full_kwargs
+        ok = True
+        for k in path:
+            if not (isinstance(cursor, dict) and k in cursor):
+                ok = False
+                break
+            cursor = cursor[k]
+        if not ok:
+            continue 
+
+        full_list = cursor
+        if not isinstance(full_list, list):
+            continue 
+
+        if len(full_list) != total:
+            continue
+
+        st = 0
+        for i, mb in enumerate(kwargs_split):
+            ed = st + mb_sizes[i]
+            dst = mb
+            for k in path[:-1]:
+                nxt = dst.get(k, None)
+                if not isinstance(nxt, dict):
+                    nxt = {} if nxt is None else dict(nxt)
+                dst[k] = nxt
+                dst = nxt
+            dst[path[-1]] = full_list[st:ed]
+            st = ed
+        assert st == total, "List slicing mismatch: consumed != total"

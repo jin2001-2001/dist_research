@@ -159,22 +159,39 @@ def _sudo(cmd: list[str]):
 
 
 
-def _cat_like(items: List[Any]) -> Any:
+def _cat_like(items: list[Any]) -> Any:
     """
-    Support recursive concatenation of tensors/tuples/lists/None.
-    Use torch.stack for 0-dimensional tensors; For other tensors, use torch.cat(dim=0).
+    递归拼接：支持 Tensor / 标量0维Tensor / tuple / list / dict / None。
+    Tensor 默认按 dim=0 cat；0维用 stack。
+    容器按键或下标对齐后递归调用本函数。
     """
     first = items[0]
+    # --- 新增：dict 支持 ---
+    if isinstance(first, dict):
+        out = {}
+        keys = first.keys()
+        # 断言所有字典 key 集合一致（或做一次交集/并集按需处理）
+        for it in items[1:]:
+            assert isinstance(it, dict) and it.keys() == keys, "kwargs dict keys mismatch across microbatches"
+        for k in keys:
+            out[k] = _cat_like([it[k] for it in items])
+        return out
+
+    # 原有逻辑
     if torch.is_tensor(first):
         if first.dim() == 0:
-            return torch.stack(items, dim=0)    
+            return torch.stack(items, dim=0)
         else:
             return torch.cat(items, dim=0)
     elif isinstance(first, (tuple, list)):
         pieces = [_cat_like([itm[i] for itm in items]) for i in range(len(first))]
         return type(first)(pieces)
     else:
+        # 非张量非容器：取第一个（要求各 MB 一致）
+        for it in items[1:]:
+            assert it == first, "non-tensor kwarg values must be identical across packed MBs"
         return first
+
 
 # Safely split the tensor into n parts in the batch dimension; If the number of blocks is less than n, the last block is copied to make up for it
 def _safe_chunk(t: torch.Tensor, n: int) -> List[torch.Tensor]:
@@ -610,11 +627,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             cat_kwargs: dict[str, Any] = {}
                             for k in kwarg_mbs[rep_id]:
                                 vals = [kwarg_mbs[mid][k] for mid in mb_ids]
-                                v0 = vals[0]
-                                if isinstance(v0, torch.Tensor):
-                                    cat_kwargs[k] = torch.cat(vals, dim=0)
-                                else:
-                                    cat_kwargs[k] = v0
+                                cat_kwargs[k] = _cat_like(vals)
+
                         else:
                             cat_kwargs = {}
                             
@@ -734,38 +748,27 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     rep_id = mb_ids[0]
                     print(f"[{dist.get_rank()}]: batch {current_batch+1} FULL_BACKWARD microbatch {mb_ids}")
 
-                    # ===== 与你现有的一致：检查 pack 组完全一致 =====
-                    # （你的前置 pack 校验逻辑保留，这里略）
-
                     if stage_uses_fsdp:
                         _assert_unsharded(stage_idx)
 
-                    # 如果上游在别的 rank，先等 grad recv
                     if not stage.is_last and not is_next_stage_on_this_rank:
                         for mid in mb_ids:
                             key = (stage_idx, mid)
                             if key in bwd_recv_ops:
                                 schedule._wait_batch_p2p(bwd_recv_ops.pop(key))
 
-                    # === 关键改动从这里开始 ===
-
-                    # 1) 先把各 mid 的 per-mb fwd_cache 清掉（这里只清 per-mb 的，不动 rep_id）
                     for mid in mb_ids:
                         stage.fwd_cache.pop(mid, None)
 
-                    # 2) 取出“前向真正使用的大条目” big_entry
                     big_key   = (stage_idx, rep_id)
                     big_entry = self._big_fwd_cache.pop(big_key, None)
                     if big_entry is None:
-                        # 兜底：直接从 fwd_cache 里拿 rep_id（正常情况下应该有）
                         big_entry = stage.fwd_cache.get(rep_id)
                     assert big_entry is not None, f"big forward entry missing for {big_key}"
 
                     big_out_tuple, big_flat_inputs = big_entry
 
-                    # 3) 取 loss 或下游梯度（非最后一段）
                     if stage.is_last:
-                        # 你原有逻辑：mb 的 loss 平均/求和等
                         loss_lst = [ self._maybe_get_loss(stage, mid) for mid in mb_ids ]
                         cat_loss = _cat_like(loss_lst).mean()
                         cat_gradout = None
@@ -774,7 +777,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         cat_loss = None
                         cat_gradout = _cat_like(grad_out_lst)
 
-                    # 4) 把“前向大条目”放回 fwd_cache[rep_id]，交给 backward_one_chunk 使用
                     stage.fwd_cache[rep_id] = (big_out_tuple, big_flat_inputs)
 
                     backward_counter[stage_idx] += 1
@@ -791,16 +793,13 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             retain_graph_for_packed_mbs=False,
                         )
 
-                    # 5) 从 bwd_cache 取回“大输入的梯度”，用“前向大输入”的形状/结构补齐 None
                     big_grads_in = stage.bwd_cache.pop(rep_id)
-                    big_grads_in = _fill_grads_like(big_flat_inputs, big_grads_in)  # ← 修改：用 big_flat_inputs，而不是再去 fwd_cache 取
+                    big_grads_in = _fill_grads_like(big_flat_inputs, big_grads_in) 
 
-                    # 6) 再把“大输入梯度”按 mb 切回去，放回各 mid
                     split_grads = _chunk_like(big_grads_in, len(mb_ids))
                     for mid, g in zip(mb_ids, split_grads):
                         stage.bwd_cache[mid] = g
 
-                    # 7) 同 rank 的上游直接本地传递
                     if is_prev_stage_on_this_rank:
                         for mid in mb_ids:
                             stage_index_to_stage[stage_idx - 1].set_local_bwd_input(
@@ -810,8 +809,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if self.last_backward:
                         grad_scale_factor = backward_counter.total() if self.scale_grads else 1
                         stage.scale_grads(grad_scale_factor)
-                                
-                        
+                
                 elif comp_type == BACKWARD_INPUT:
                     if stage_uses_fsdp:
                         _assert_unsharded(stage_idx)
