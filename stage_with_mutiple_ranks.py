@@ -762,40 +762,6 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         return out
     
-    # def _create_grad_recv_info(
-    #     self,
-    #     act_send_info: dict,
-    # ) -> tuple:
-    #     """
-    #     返回的 tuple 与 outputs_meta 一一对应；张量位置是 _RecvInfo，
-    #     非张量（含 None）位置放 None，后续会被跳过。
-    #     """
-    #     grad_recv_info_list = []
-    #     outputs_meta = self.get_outputs_meta()
-
-    #     print(f"[{dist.get_rank()}] Creating grad_recv_info for stage {self.stage_index}")
-    #     print(f"[{dist.get_rank()}] outputs_meta shapes: {[m.shape if torch.is_tensor(m) else 'non-tensor' for m in outputs_meta]}")
-        
-    #     if not self.is_last:
-    #         # Receiving gradients from multiple sources is not supported -> 只取第一个目的地
-    #         for idx, dst_list in act_send_info.items():
-    #             dst = dst_list[0]
-    #             meta = outputs_meta[idx] if idx < len(outputs_meta) else None
-
-    #             # 非张量（或 None）占位，保持索引对齐
-    #             if meta is None or not torch.is_tensor(meta):
-    #                 grad_recv_info_list.append(None)
-    #                 continue
-
-    #             grad_recv_info_list.append(
-    #                 _RecvInfo(
-    #                     f"recv_grad_for_{self.stage_index}_from_{dst}",
-    #                     dst,
-    #                     _make_tensor_from_meta(meta, self.device),
-    #                 )
-    #             )
-
-    #     return tuple(grad_recv_info_list)
     def _create_grad_recv_info(
         self,
         act_send_info: dict,
@@ -835,7 +801,6 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         def map_recv_to_send(a):
             if isinstance(a, _RecvInfo) and getattr(a, "buffer", None) is not None:
-                # 只有浮点/复数类型的张量才发送梯度
                 if isinstance(a.buffer, torch.Tensor) and (
                     a.buffer.is_floating_point() or torch.is_complex(a.buffer)
                 ):
@@ -857,7 +822,6 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         def get_recv_tensor(info):
             if info is None:
-                # 返回 None 表示这个位置没有梯度
                 return None
             elif isinstance(info, _RecvInfo):
                 return info.buffer
