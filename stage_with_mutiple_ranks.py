@@ -171,6 +171,10 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         """
         recv_infos: tuple[InputInfo, ...] = self.args_recv_info[fwd_chunk_id]
 
+        if self.is_print == 0:
+            print(f"✅✅✅ {recv_infos}")
+            self.is_print = -1
+        
         return self._get_recv_ops(recv_infos, rank, dest_rank)
 
     def get_bwd_recv_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
@@ -183,9 +187,6 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         recv_infos = self.grad_recv_info[bwd_chunk_id]
         
-        if self.is_print == 0:
-            print(f"✅✅✅ {recv_infos}")
-            self.is_print = -1
         return self._get_recv_ops(recv_infos, rank, dest_rank)
 
     def get_fwd_send_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
