@@ -418,7 +418,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                     ops.append(dist.P2POp(dist.isend, out.contiguous(), peer_global_rank, self.group))
                 else:
                     for start, length in self._compute_slices(out.size(0), num_splits):
-                        print("运行到这里")
+                        print(f"运行到这里 {out.size(0)}")
                         chunk = out.narrow(0, start, length).contiguous()
                         # [SEND-GATE]（留空位置，供你插入“发送前阻塞/速率控制”逻辑）
                         ops.append(dist.P2POp(dist.isend, chunk, peer_global_rank, self.group))
