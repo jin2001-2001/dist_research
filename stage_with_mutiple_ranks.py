@@ -3,7 +3,7 @@
 import logging
 import operator
 from abc import ABC, abstractmethod
-from typing import Any, Callable, cast, Optional, Union
+from typing import Any, Callable, cast, Optional, Union, List
 from collections import defaultdict
 
 import torch
@@ -21,6 +21,45 @@ from pipelining_source_code._debug import map_debug_info
 from pipelining_source_code._utils import flatten_args
 from pipelining_source_code._backward import stage_backward, stage_backward_input, stage_backward_weight
 logger = logging.getLogger(__name__)
+
+
+
+def _infer_dtype_fallback(self):
+    # 供接收端分配缓冲时兜底的 dtype 推断（优先使用已存在的配置）
+    if hasattr(self, "activation_dtype") and self.activation_dtype is not None:
+        return self.activation_dtype
+    if hasattr(self, "dtype") and self.dtype is not None:
+        return self.dtype
+    return torch.float32
+
+def _alloc_like_recv_info(self, info):
+    """
+    根据 recv_info 分配完整目标缓冲。
+    优先使用项目中已有的 meta -> tensor 方法；否则使用 dtype/device 兜底。
+    """
+    if hasattr(self, "_make_tensor_from_meta"):
+        return _make_tensor_from_meta(info.shape, self.device)
+    return torch.empty(info.shape, device=self.device, dtype=_infer_dtype_fallback(self))
+
+def _compute_lastdim_slices(size_lastdim: int, num_splits: int):
+    """
+    基于最后一维长度和期望分块数，生成（offset, length）列表。
+    允许不可整除，前 remainder 个块多 1 个元素；不会产生长度为 0 的块。
+    """
+    if num_splits <= 1 or size_lastdim <= 1:
+        return [(0, size_lastdim)]
+
+    k = min(num_splits, size_lastdim)  # 有效分块数，避免 0 长块
+    base = size_lastdim // k
+    rem = size_lastdim % k
+    slices = []
+    off = 0
+    for i in range(k):
+        length = base + (1 if i < rem else 0)
+        slices.append((off, length))
+        off += length
+    return slices
+
 
 class PipelineStage_with_mutiple_ranks(PipelineStage):
     def __init__(
@@ -163,19 +202,64 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             )
 
         return ops
-    
-    def get_fwd_recv_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
+
+    def get_fwd_recv_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int) -> list[dist.P2POp]:
         """
         Returns a list of ops that are needed to receive the input arguments
         for this stage.
         """
         recv_infos: tuple[InputInfo, ...] = self.args_recv_info[fwd_chunk_id]
 
-        if self.is_print == 0:
-            print(f"✅✅✅ {recv_infos}")
-            self.is_print = -1
+        num_splits = 8
         
-        return self._get_recv_ops(recv_infos, rank, dest_rank)
+        if num_splits is None:
+            if self.is_print == 0:
+                print(f"✅✅✅ {recv_infos}")
+                self.is_print = -1
+            
+            return self._get_recv_ops(recv_infos, rank, dest_rank)
+        else:
+            if getattr(self, "is_print", 0) == 0:
+                print(f"✅✅✅ {recv_infos}")
+                # 不改变 recv_infos 的结构和含义
+
+            ops: List[dist.P2POp] = []
+
+            # 发送方 rank（源头），与你现有代码保持一致
+            src_rank = dest_rank
+            src_global_rank = (
+                src_rank
+                if self.group is None
+                else dist.get_global_rank(self.group, src_rank)
+            )
+
+            # 为本 microbatch 分配并缓存完整输入缓冲（“接收即拼好”）
+            # 供后续前向阶段直接使用
+            full_inputs = []
+
+            for t_idx, info in enumerate(recv_infos):
+                # 分配完整目标缓冲（dtype/device 通过已有方法或兜底推断）
+                full_buf = _alloc_like_recv_info(self, info)
+
+                # 在完整缓冲上计算最后一维切片
+                lastdim = full_buf.size(-1)
+                slices = _compute_lastdim_slices(lastdim, num_splits)
+
+                # 逐块 irecv 到完整缓冲的相应切片
+                for chunk_idx, (off, length) in enumerate(slices):
+                    # === 接收前控制钩子（阻塞/credit/背压/限窗等）===
+                    # 你可在此处插入接收侧的背压或 ACK/credit 逻辑
+
+                    view = full_buf.narrow(dim=full_buf.dim() - 1, start=off, length=length)
+                    if getattr(self, "is_print", 0) == 0:
+                        print(f"recv chunk idx={chunk_idx} tensor={t_idx} shape={tuple(view.shape)}")
+
+                    ops.append(dist.P2POp(dist.irecv, view, src_global_rank, self.group))
+
+                full_inputs.append(full_buf)
+
+            self.is_print = -1
+            return ops
 
     def get_bwd_recv_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
         """
@@ -189,38 +273,83 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         
         return self._get_recv_ops(recv_infos, rank, dest_rank)
 
-    def get_fwd_send_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
+    def get_fwd_send_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int) -> list[dist.P2POp]:
         """
         Get the activation send ops for current stage's forward.
         """
         output_tuple, _ = self.fwd_cache[fwd_chunk_id]
-        if self.is_print == 0:
-            print(f"✅✅✅ {output_tuple}")
-        ops: list[dist.P2POp] = []
+        
+        num_splits = 8
+        
+        if num_splits is None:
+            if self.is_print == 0:
+                print(f"✅✅✅ {output_tuple}")
+            ops: list[dist.P2POp] = []
 
-        for idx, out in enumerate(output_tuple):
-            dst_stages = self.act_send_info[idx]
-            for dst in dst_stages:
-                if dst is None:
+            for idx, out in enumerate(output_tuple):
+                dst_stages = self.act_send_info[idx]
+                for dst in dst_stages:
+                    if dst is None:
+                        continue
+                    logger.debug(
+                        "%s Sending tensor to Stage %s: %s",
+                        self.log_prefix,
+                        dst,
+                        out.size(),
+                    )
+                    peer_rank = dest_rank
+                    peer_global_rank = (
+                        peer_rank
+                        if self.group is None
+                        else dist.get_global_rank(self.group, peer_rank)
+                    )
+                    
+                    if self.is_print == 0:
+                        print(f"✅✅✅✅ {out}")
+                    ops.append(dist.P2POp(dist.isend, out, peer_global_rank, self.group))
+            self.is_print = -1
+            return ops
+        else:
+            if getattr(self, "is_print", 0) == 0:
+                print(f"✅✅✅ {output_tuple}")  # 若你不想打印，可删除
+            ops: List[dist.P2POp] = []
+
+            # 目的 rank 解析与全局 rank 转换（保持与你现有代码一致）
+            peer_rank = dest_rank
+            peer_global_rank = (
+                peer_rank
+                if self.group is None
+                else dist.get_global_rank(self.group, peer_rank)
+            )
+
+            for idx, out in enumerate(output_tuple):
+                # 可能有多个下游 stage；你的原始代码忽略了 dst 并统一用 dest_rank，这里保持一致
+                dst_stages = self.act_send_info[idx]
+                if dst_stages is None:
                     continue
-                logger.debug(
-                    "%s Sending tensor to Stage %s: %s",
-                    self.log_prefix,
-                    dst,
-                    out.size(),
-                )
-                peer_rank = dest_rank
-                peer_global_rank = (
-                    peer_rank
-                    if self.group is None
-                    else dist.get_global_rank(self.group, peer_rank)
-                )
-                
-                if self.is_print == 0:
-                    print(f"✅✅✅✅ {out}")
-                ops.append(dist.P2POp(dist.isend, out, peer_global_rank, self.group))
-        self.is_print = -1
-        return ops
+
+                # 计算最后一维切片
+                lastdim = out.size(-1)
+                slices = _compute_lastdim_slices(lastdim, num_splits)
+
+                for _dst in dst_stages:
+                    if _dst is None:
+                        continue
+
+                    # 沿最后一维切出子块并逐块发送（确保 contiguous）
+                    for chunk_idx, (off, length) in enumerate(slices):
+                        # === 发送前控制钩子（阻塞/限速/credit/整形等）===
+                        # 你可在此处插入控制逻辑（例如基于在途窗口或 token bucket）
+
+                        view = out.narrow(dim=out.dim() - 1, start=off, length=length).contiguous()
+                        if getattr(self, "is_print", 0) == 0:
+                            print(f"send chunk idx={chunk_idx} tensor={idx} shape={tuple(view.shape)}")
+
+                        ops.append(dist.P2POp(dist.isend, view, peer_global_rank, self.group))
+
+            self.is_print = -1
+            return ops
+            
 
     def get_bwd_send_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
         """
