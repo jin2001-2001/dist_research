@@ -550,9 +550,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     #record time in SEND_F and SEND_B
                     #start_ns = time.time_ns()
                     ops = (
-                        stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=self._split_parts_b)
+                        stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=self._split_parts)
                         if rank is not None and dest_rank is not None
-                        else stage.get_bwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=self._split_parts_b)
+                        else stage.get_bwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=self._split_parts)
                     )
 
                     works = schedule._batch_p2p(ops)     
@@ -587,9 +587,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     )
                     start_ns = time.time_ns()
                     ops = (
-                        stage.get_bwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=self._split_parts_b)
+                        stage.get_bwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=self._split_parts)
                         if rank is not None and dest_rank is not None
-                        else stage.get_bwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=self._split_parts_b)
+                        else stage.get_bwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=self._split_parts)
                     )
 
                     works = schedule._batch_p2p(ops)
