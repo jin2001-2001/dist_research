@@ -432,7 +432,8 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             return
         for tmp, view in post_list:
             # 这里用 copy_，目标 view 可能是非连续的窄视图，但 copy_ 支持
-            view.copy_(tmp)
+            with torch.no_grad():
+                view.copy_(tmp)
 
     
     
