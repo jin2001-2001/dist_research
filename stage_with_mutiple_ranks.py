@@ -24,41 +24,24 @@ logger = logging.getLogger(__name__)
 
 
 
-def _infer_dtype_fallback(self):
-    # 供接收端分配缓冲时兜底的 dtype 推断（优先使用已存在的配置）
-    if hasattr(self, "activation_dtype") and self.activation_dtype is not None:
-        return self.activation_dtype
-    if hasattr(self, "dtype") and self.dtype is not None:
-        return self.dtype
-    return torch.float32
-
-def _alloc_like_recv_info(self, info):
-    """
-    根据 recv_info 分配完整目标缓冲。
-    优先使用项目中已有的 meta -> tensor 方法；否则使用 dtype/device 兜底。
-    """
-    if hasattr(self, "_make_tensor_from_meta"):
-        return _make_tensor_from_meta(info.shape, self.device)
-    return torch.empty(info.shape, device=self.device, dtype=_infer_dtype_fallback(self))
-
 def _compute_lastdim_slices(size_lastdim: int, num_splits: int):
     """
-    基于最后一维长度和期望分块数，生成（offset, length）列表。
-    允许不可整除，前 remainder 个块多 1 个元素；不会产生长度为 0 的块。
+    给定最后一维长度与分块数，返回 [(offset, length), ...]。
+    不足整除时，前 remainder 个块多 1；避免 0 长块。
     """
-    if num_splits <= 1 or size_lastdim <= 1:
+    if num_splits is None or num_splits <= 1 or size_lastdim <= 1:
         return [(0, size_lastdim)]
-
-    k = min(num_splits, size_lastdim)  # 有效分块数，避免 0 长块
+    k = min(num_splits, size_lastdim)
     base = size_lastdim // k
     rem = size_lastdim % k
-    slices = []
+    out = []
     off = 0
     for i in range(k):
-        length = base + (1 if i < rem else 0)
-        slices.append((off, length))
-        off += length
-    return slices
+        ln = base + (1 if i < rem else 0)
+        out.append((off, ln))
+        off += ln
+    return out
+
 
 
 class PipelineStage_with_mutiple_ranks(PipelineStage):
@@ -225,7 +208,6 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
             ops: List[dist.P2POp] = []
 
-            # 发送方 rank（源头），与你现有代码保持一致
             src_rank = dest_rank
             src_global_rank = (
                 src_rank
@@ -233,33 +215,24 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                 else dist.get_global_rank(self.group, src_rank)
             )
 
-            # 为本 microbatch 分配并缓存完整输入缓冲（“接收即拼好”）
-            # 供后续前向阶段直接使用
-            full_inputs = []
-
             for t_idx, info in enumerate(recv_infos):
-                # 分配完整目标缓冲（dtype/device 通过已有方法或兜底推断）
-                full_buf = _alloc_like_recv_info(self, info)
+                if not isinstance(info, _RecvInfo):
+                    continue
+                full_buf = info.buffer  # 关键：直接使用已存在的完整目标缓冲
+                if not isinstance(full_buf, torch.Tensor):
+                    raise AssertionError(f"recv info buffer must be Tensor, got {type(full_buf)}")
 
-                # 在完整缓冲上计算最后一维切片
                 lastdim = full_buf.size(-1)
                 slices = _compute_lastdim_slices(lastdim, num_splits)
 
-                # 逐块 irecv 到完整缓冲的相应切片
-                for chunk_idx, (off, length) in enumerate(slices):
-                    # === 接收前控制钩子（阻塞/credit/背压/限窗等）===
-                    # 你可在此处插入接收侧的背压或 ACK/credit 逻辑
-
-                    view = full_buf.narrow(dim=full_buf.dim() - 1, start=off, length=length)
-                    if getattr(self, "is_print", 0) == 0:
-                        print(f"recv chunk idx={chunk_idx} tensor={t_idx} shape={tuple(view.shape)}")
-
+                for chunk_idx, (off, ln) in enumerate(slices):
+                    # === RECV CONTROL HOOK（背压/学分/限窗等插在这里）===
+                    view = full_buf.narrow(dim=full_buf.dim() - 1, start=off, length=ln)
+                    # 可选打印：print(f"[{dist.get_rank()}] RECV mb={fwd_chunk_id} tensor={t_idx} chunk={chunk_idx} shape={tuple(view.shape)}")
                     ops.append(dist.P2POp(dist.irecv, view, src_global_rank, self.group))
 
-                full_inputs.append(full_buf)
-
-            self.is_print = -1
             return ops
+
 
     def get_bwd_recv_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
         """
@@ -312,9 +285,8 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         else:
             if getattr(self, "is_print", 0) == 0:
                 print(f"✅✅✅ {output_tuple}")  # 若你不想打印，可删除
-            ops: List[dist.P2POp] = []
+            ops: list[dist.P2POp] = []
 
-            # 目的 rank 解析与全局 rank 转换（保持与你现有代码一致）
             peer_rank = dest_rank
             peer_global_rank = (
                 peer_rank
@@ -323,12 +295,12 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             )
 
             for idx, out in enumerate(output_tuple):
-                # 可能有多个下游 stage；你的原始代码忽略了 dst 并统一用 dest_rank，这里保持一致
+                if not isinstance(out, torch.Tensor):
+                    continue  # 跳过非 Tensor 输出
                 dst_stages = self.act_send_info[idx]
                 if dst_stages is None:
                     continue
 
-                # 计算最后一维切片
                 lastdim = out.size(-1)
                 slices = _compute_lastdim_slices(lastdim, num_splits)
 
@@ -336,18 +308,12 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                     if _dst is None:
                         continue
 
-                    # 沿最后一维切出子块并逐块发送（确保 contiguous）
-                    for chunk_idx, (off, length) in enumerate(slices):
-                        # === 发送前控制钩子（阻塞/限速/credit/整形等）===
-                        # 你可在此处插入控制逻辑（例如基于在途窗口或 token bucket）
-
-                        view = out.narrow(dim=out.dim() - 1, start=off, length=length).contiguous()
-                        if getattr(self, "is_print", 0) == 0:
-                            print(f"send chunk idx={chunk_idx} tensor={idx} shape={tuple(view.shape)}")
-
+                    for chunk_idx, (off, ln) in enumerate(slices):
+                        # === SEND CONTROL HOOK（阻塞/限速/学分等插在这里）===
+                        view = out.narrow(dim=out.dim() - 1, start=off, length=ln).contiguous()
+                        # 可选打印：print(f"[{dist.get_rank()}] SEND mb={fwd_chunk_id} tensor={idx} chunk={chunk_idx} shape={tuple(view.shape)}")
                         ops.append(dist.P2POp(dist.isend, view, peer_global_rank, self.group))
 
-            self.is_print = -1
             return ops
             
 
