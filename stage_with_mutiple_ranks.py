@@ -183,83 +183,44 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             start += length
         return slices
 
-
-    # def get_fwd_recv_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int = None) -> list[dist.P2POp]:
-    #     """
-    #     Returns a list of ops that are needed to receive the input arguments
-    #     for this stage.
-    #     """
-    #     recv_infos: tuple[InputInfo, ...] = self.args_recv_info[fwd_chunk_id]
-
-    #     num_splits = 8
-        
-    #     if num_splits is None:
-    #         if self.is_print == 0:
-    #             print(f"✅✅✅ {recv_infos}")
-    #             self.is_print = -1
-            
-    #         return self._get_recv_ops(recv_infos, rank, dest_rank)
-    #     else:
-    #         if getattr(self, "is_print", 0) == 0:
-    #             print(f"✅✅✅ {recv_infos}")
-    #             # 不改变 recv_infos 的结构和含义
-
-    #         ops: List[dist.P2POp] = []
-
-    #         src_rank = dest_rank
-    #         src_global_rank = (
-    #             src_rank
-    #             if self.group is None
-    #             else dist.get_global_rank(self.group, src_rank)
-    #         )
-
-    #         for t_idx, info in enumerate(recv_infos):
-    #             if not isinstance(info, _RecvInfo):
-    #                 continue
-    #             full_buf = info.buffer  # 关键：直接使用已存在的完整目标缓冲
-    #             if not isinstance(full_buf, torch.Tensor):
-    #                 raise AssertionError(f"recv info buffer must be Tensor, got {type(full_buf)}")
-
-    #             lastdim = full_buf.size(-1)
-    #             slices = _compute_lastdim_slices(lastdim, num_splits)
-
-    #             for chunk_idx, (off, ln) in enumerate(slices):
-    #                 # === RECV CONTROL HOOK（背压/学分/限窗等插在这里）===
-    #                 view = full_buf.narrow(dim=full_buf.dim() - 1, start=off, length=ln)
-    #                 # 可选打印：print(f"[{dist.get_rank()}] RECV mb={fwd_chunk_id} tensor={t_idx} chunk={chunk_idx} shape={tuple(view.shape)}")
-    #                 ops.append(dist.P2POp(dist.irecv, view, src_global_rank, self.group))
-
-    #         return ops
-
     def get_fwd_send_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int = 1) -> list[dist.P2POp]:
         """
-        Get the activation send ops for current stage's forward, using 1D-flat chunking.
+        Get the activation send ops for current stage's forward.
+        采用 1D 扁平切分；按“先第 k 片、后在所有张量上轮询”的顺序生成 P2P。
         """
         output_tuple, _ = self.fwd_cache[fwd_chunk_id]
         ops: list[dist.P2POp] = []
 
+        peer_rank = dest_rank
+        peer_global_rank = (peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank))
+
+        # 预计算每个张量的 1D 视图与切片表
+        plans = []  # [(flat, slices, dst_stages)]
         for idx, out in enumerate(output_tuple):
             dst_stages = self.act_send_info[idx]
-            for dst in dst_stages:
-                if dst is None:
+            if dst_stages is None:
+                continue
+            flat = out.contiguous().view(-1)
+            slices = self._compute_1d_slices(flat.numel(), num_splits)
+            plans.append((flat, slices, dst_stages))
+
+        # 外层遍历 split 索引，内层遍历各个张量
+        for split_idx in range(num_splits):
+            print(f"执行块 {split_idx}")
+            for flat, slices, dst_stages in plans:
+                print("内部tensor")
+                if split_idx >= len(slices):
                     continue
-                logger.debug("%s Sending tensor to Stage %s: %s", self.log_prefix, dst, out.size())
+                off, ln = slices[split_idx]
+                chunk_view = flat.narrow(0, off, ln)  # 1D 别名视图，连续
 
-                peer_rank = dest_rank
-                peer_global_rank = (peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank))
-
-                # ---- 关键改动：1D 扁平切分 ----
-                flat = out.contiguous().view(-1)     # 确保底层内存连续，再变 1D 视图
-                for start, length in self._compute_1d_slices(flat.numel(), num_splits):
-                    print("执行分片")
-                    if length == 0:
+                for _dst in dst_stages:
+                    if _dst is None:
                         continue
-                    chunk_view = flat.narrow(0, start, length)  # 别名视图（保持零拷贝）
-                    # [SEND-GATE]（留空位置，供你插入“发送前阻塞/速率控制”逻辑）
+                    # === [SEND-GATE] 发送前阻塞/整形逻辑写在这里 ===
                     ops.append(dist.P2POp(dist.isend, chunk_view, peer_global_rank, self.group))
 
         return ops
-
 
 
     def get_bwd_recv_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
@@ -273,80 +234,11 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         recv_infos = self.grad_recv_info[bwd_chunk_id]
         
         return self._get_recv_ops(recv_infos, rank, dest_rank)
-
-    # def get_fwd_send_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int = None) -> list[dist.P2POp]:
-    #     """
-    #     Get the activation send ops for current stage's forward.
-    #     """
-    #     output_tuple, _ = self.fwd_cache[fwd_chunk_id]
-        
-    #     num_splits = 8
-        
-    #     if num_splits is None:
-    #         if self.is_print == 0:
-    #             print(f"✅✅✅ {output_tuple}")
-    #         ops: list[dist.P2POp] = []
-
-    #         for idx, out in enumerate(output_tuple):
-    #             dst_stages = self.act_send_info[idx]
-    #             for dst in dst_stages:
-    #                 if dst is None:
-    #                     continue
-    #                 logger.debug(
-    #                     "%s Sending tensor to Stage %s: %s",
-    #                     self.log_prefix,
-    #                     dst,
-    #                     out.size(),
-    #                 )
-    #                 peer_rank = dest_rank
-    #                 peer_global_rank = (
-    #                     peer_rank
-    #                     if self.group is None
-    #                     else dist.get_global_rank(self.group, peer_rank)
-    #                 )
-                    
-    #                 if self.is_print == 0:
-    #                     print(f"✅✅✅✅ {out}")
-    #                 ops.append(dist.P2POp(dist.isend, out, peer_global_rank, self.group))
-    #         self.is_print = -1
-    #         return ops
-    #     else:
-    #         if getattr(self, "is_print", 0) == 0:
-    #             print(f"✅✅✅ {output_tuple}")  # 若你不想打印，可删除
-    #         ops: list[dist.P2POp] = []
-
-    #         peer_rank = dest_rank
-    #         peer_global_rank = (
-    #             peer_rank
-    #             if self.group is None
-    #             else dist.get_global_rank(self.group, peer_rank)
-    #         )
-
-    #         for idx, out in enumerate(output_tuple):
-    #             if not isinstance(out, torch.Tensor):
-    #                 continue  # 跳过非 Tensor 输出
-    #             dst_stages = self.act_send_info[idx]
-    #             if dst_stages is None:
-    #                 continue
-
-    #             lastdim = out.size(-1)
-    #             slices = _compute_lastdim_slices(lastdim, num_splits)
-
-    #             for _dst in dst_stages:
-    #                 if _dst is None:
-    #                     continue
-
-    #                 for chunk_idx, (off, ln) in enumerate(slices):
-    #                     # === SEND CONTROL HOOK（阻塞/限速/学分等插在这里）===
-    #                     view = out.narrow(dim=out.dim() - 1, start=off, length=ln).contiguous()
-    #                     # 可选打印：print(f"[{dist.get_rank()}] SEND mb={fwd_chunk_id} tensor={idx} chunk={chunk_idx} shape={tuple(view.shape)}")
-    #                     ops.append(dist.P2POp(dist.isend, view, peer_global_rank, self.group))
-
-    #         return ops
             
     def get_fwd_recv_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int = 1) -> list[dist.P2POp]:
         """
-        Post irecv ops into 1D-flat views of the destination buffers, so no manual merge is needed.
+        Returns the irecv ops for forward activations.
+        采用 1D 扁平切分；按“先第 k 片、后在所有待收张量上轮询”的顺序生成 P2P。
         """
         recv_infos: tuple[InputInfo, ...] = self.args_recv_info[fwd_chunk_id]
         ops: list[dist.P2POp] = []
@@ -354,20 +246,27 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         peer_rank = dest_rank
         peer_global_rank = (peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank))
 
+        # 预计算每个接收缓冲的 1D 视图与切片表
+        plans = []  # [(buf_flat, slices)]
         for info in recv_infos:
             if not isinstance(info, _RecvInfo):
                 continue
-            # 对目标 buffer 做 1D 化：确保连续 + 变 1D 视图
             buf_flat = info.buffer.contiguous().view(-1)
-            # 计算 1D 切片
-            for start, length in self._compute_1d_slices(buf_flat.numel(), num_splits):
-                if length == 0:
+            slices = self._compute_1d_slices(buf_flat.numel(), num_splits)
+            plans.append((buf_flat, slices))
+
+        # 外层遍历 split 索引，内层遍历各个目标张量
+        for split_idx in range(num_splits):
+            for buf_flat, slices in plans:
+                if split_idx >= len(slices):
                     continue
-                view = buf_flat.narrow(0, start, length)  # 直接在目标大 buffer 的别名切片上收
-                # [RECV-GATE]（留空位置，供你插入“接收前阻塞/速率控制”逻辑）
+                off, ln = slices[split_idx]
+                view = buf_flat.narrow(0, off, ln)  # 1D 别名视图，连续
+                # === [RECV-GATE] 接收前阻塞/背压逻辑写在这里 ===
                 ops.append(dist.P2POp(dist.irecv, view, peer_global_rank, self.group))
 
         return ops
+
 
     
     def finish_fwd_recv(self, fwd_chunk_id: int) -> None:
