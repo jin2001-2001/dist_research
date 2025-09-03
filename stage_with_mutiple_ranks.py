@@ -412,6 +412,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
                 # 仅在 dim0 切分；对于标量/0维或 dim0==1，强制不切分
                 if out.dim() == 0 or out.size(0) <= 1 or num_splits <= 1:
+                    print("哈哈哈哈")
                     # [SEND-GATE]（留空位置，供你插入“发送前阻塞/速率控制”逻辑）
                     # 例如：self._maybe_block_send(...)
                     ops.append(dist.P2POp(dist.isend, out.contiguous(), peer_global_rank, self.group))
