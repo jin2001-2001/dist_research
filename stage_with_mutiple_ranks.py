@@ -203,7 +203,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         return ops
 
-    def get_fwd_recv_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int) -> list[dist.P2POp]:
+    def get_fwd_recv_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int = None) -> list[dist.P2POp]:
         """
         Returns a list of ops that are needed to receive the input arguments
         for this stage.
@@ -273,7 +273,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         
         return self._get_recv_ops(recv_infos, rank, dest_rank)
 
-    def get_fwd_send_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int) -> list[dist.P2POp]:
+    def get_fwd_send_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int = None) -> list[dist.P2POp]:
         """
         Get the activation send ops for current stage's forward.
         """
