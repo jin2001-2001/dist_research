@@ -256,6 +256,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         global ROOT_PASS
         ROOT_PASS = root_pass
         
+        self._split_parts = int(os.getenv("PP_COMM_SPLITS", "1"))
+
+        
         #Each node prepares HTB at one time
         if int(os.getenv("LOCAL_RANK", "0")) == 0:
             _save_original_qdisc() 
@@ -521,11 +524,18 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     
                     #record time in SEND_F and SEND_B
                     #start_ns = time.time_ns()
+                    # ops = (
+                    #     stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
+                    #     if rank is not None and dest_rank is not None
+                    #     else stage.get_fwd_send_ops(mb_index)
+                    # )
                     ops = (
-                        stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
+                        stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=self._split_parts)
                         if rank is not None and dest_rank is not None
-                        else stage.get_fwd_send_ops(mb_index)
+                        else stage.get_fwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=self._split_parts)
                     )
+
+                    
                     works = schedule._batch_p2p(ops)
                     #self._rec.record_async(current_batch+1,action_id,"SEND_F", stage_idx, mb_index, works, start_ns)
                     send_ops.append(works)
@@ -556,14 +566,16 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     )
                     start_ns = time.time_ns()
                     ops = (
-                        stage.get_fwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank)
+                        stage.get_fwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=self._split_parts)
                         if rank is not None and dest_rank is not None
-                        else stage.get_fwd_recv_ops(mb_index)
+                        else stage.get_fwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=self._split_parts)
                     )
+
                     works = schedule._batch_p2p(ops)       
                     self._rec.record_async(current_batch+1,action_id,"RECV_F", stage_idx, mb_index, works, start_ns)
                     fwd_recv_ops[(stage_idx, mb_index)] = works
                     schedule._wait_batch_p2p(works) 
+                    stage.finish_fwd_recv(mb_index)
                     #print("fwd_recv_ops[(stage_idx, mb_index)] = []")
                     fwd_recv_ops[(stage_idx, mb_index)] = [] 
 
