@@ -206,7 +206,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         # 外层遍历 split 索引，内层遍历各个张量
         for split_idx in range(num_splits):
-            print(f"执行块 {split_idx}")
+            print(f"forward 执行块 {split_idx}")
             for flat, slices, dst_stages in plans:
                 print("内部tensor")
                 if split_idx >= len(slices):
@@ -223,17 +223,17 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         return ops
 
 
-    def get_bwd_recv_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
-        """
-        Returns a list of ops that are needed to receive the gradients
-        for this stage.
-        """
-        if not self.has_backward or self.is_last:
-            return []
+    # def get_bwd_recv_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
+    #     """
+    #     Returns a list of ops that are needed to receive the gradients
+    #     for this stage.
+    #     """
+    #     if not self.has_backward or self.is_last:
+    #         return []
 
-        recv_infos = self.grad_recv_info[bwd_chunk_id]
+    #     recv_infos = self.grad_recv_info[bwd_chunk_id]
         
-        return self._get_recv_ops(recv_infos, rank, dest_rank)
+    #     return self._get_recv_ops(recv_infos, rank, dest_rank)
             
     def get_fwd_recv_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int = 1) -> list[dist.P2POp]:
         """
@@ -281,55 +281,147 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             with torch.no_grad():
                 view.copy_(tmp)
 
-    
-    
-    def get_bwd_send_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
+    def get_bwd_recv_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int = 1) -> list[dist.P2POp]:
         """
-        Get the gradient send ops for current stage's backward.
+        Post irecv ops for upstream gradients using 1D-flat chunking.
+        Order: iterate split_idx outside, then iterate all target tensors inside.
+        """
+        if not self.has_backward or self.is_last:
+            return []
+
+        recv_infos = self.grad_recv_info[bwd_chunk_id]
+        ops: list[dist.P2POp] = []
+
+        peer_rank = dest_rank
+        peer_global_rank = (peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank))
+
+        # 预计算计划：每个要接收的 buffer → (buf_flat, slices)
+        plans: list[tuple[torch.Tensor, list[tuple[int,int]]]] = []
+        for info in recv_infos:
+            if isinstance(info, _RecvInfo) and isinstance(info.buffer, torch.Tensor):
+                buf_flat = info.buffer.contiguous().view(-1)
+                slices = self._compute_1d_slices(buf_flat.numel(), num_splits)
+                plans.append((buf_flat, slices))
+            else:
+                # None 或非张量直接跳过（保持与发送侧筛选一致）
+                continue
+    
+        # 外层 split_idx，内层各 buffer
+        for split_idx in range(num_splits):
+            for buf_flat, slices in plans:
+                if split_idx >= len(slices):
+                    continue
+                off, ln = slices[split_idx]
+                view = buf_flat.narrow(0, off, ln)  # 1D 连续别名
+                # === [RECV-GATE] 背压/限流/学分等可插在这里 ===
+                ops.append(dist.P2POp(dist.irecv, view, peer_global_rank, self.group))
+
+        return ops
+
+    def get_bwd_send_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int = 1) -> list[dist.P2POp]:
+        """
+        Get gradient send ops using 1D-flat chunking.
+        Order: iterate split_idx outside, then iterate all grad tensors inside.
         """
         self._check_chunk_id(bwd_chunk_id)
-
         if not self.has_backward or self.is_first:
             return []
 
         if self.grad_send_info is None:
             self.grad_send_info = self._create_grad_send_info(self.args_recv_info[0])
 
-        ops: list[dist.P2POp] = []
         grads_input = self.bwd_cache.pop(bwd_chunk_id)
         self.fwd_cache.pop(bwd_chunk_id, None)
-        
+
+        peer_rank = dest_rank
+        peer_global_rank = (peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank))
+
+        # 先按原有顺序筛选出要发送的梯度，并为每个准备 1D 视图与切片计划
+        plans: list[tuple[torch.Tensor, list[tuple[int,int]]]] = []
         for grad, grad_recv_stage in zip(grads_input, self.grad_send_info):
-            # 跳过 None 的梯度接收阶段（对应于整数类型的tensor）
             if grad_recv_stage is None:
                 continue
-                
-            if isinstance(grad, torch.Tensor):
-                # 额外检查：只发送浮点类型的梯度
-                if not (grad.is_floating_point() or torch.is_complex(grad)):
-                    #print(f"[{dist.get_rank()}] Skipping non-floating grad send: dtype={grad.dtype}")
-                    continue
-                    
-                logger.debug(
-                    "%s Sending gradient to Stage %s: %s",
-                    self.log_prefix,
-                    grad_recv_stage,
-                    grad.size(),
-                )
-                peer_rank = dest_rank
-                peer_global_rank = (
-                    peer_rank
-                    if self.group is None
-                    else dist.get_global_rank(self.group, peer_rank)
-                )
-                ops.append(dist.P2POp(dist.isend, grad, peer_global_rank, self.group))
-            elif grad is not None:
-                raise RuntimeError(
-                    f"[{self.stage_index}] expecting a gradient tensor for an input "
-                    f"coming from stage {grad_recv_stage}, but got {type(grad)}"
-                )
+            if not isinstance(grad, torch.Tensor):
+                if grad is not None:
+                    raise RuntimeError(
+                        f"[{self.stage_index}] expecting a gradient tensor for an input "
+                        f"coming from stage {grad_recv_stage}, but got {type(grad)}"
+                    )
+                continue
+            # 只发送浮点/复数梯度
+            if not (grad.is_floating_point() or torch.is_complex(grad)):
+                print(f"[{dist.get_rank()}] Skipping non-floating grad send: dtype={grad.dtype}")
+                continue
+
+            flat = grad.contiguous().view(-1)
+            slices = self._compute_1d_slices(flat.numel(), num_splits)
+            plans.append((flat, slices))
+
+        ops: list[dist.P2POp] = []
         
+        # 外层 split_idx，内层逐张量
+        for split_idx in range(num_splits):
+            print(f"backward 执行块 {split_idx}")
+            for flat, slices in plans:
+                print("内部tensor")
+                if split_idx >= len(slices):
+                    continue
+                off, ln = slices[split_idx]
+                chunk_view = flat.narrow(0, off, ln)  # 1D 连续别名
+                # === [SEND-GATE] 发送前阻塞/限速/学分等可插在这里 ===
+                ops.append(dist.P2POp(dist.isend, chunk_view, peer_global_rank, self.group))
+
         return ops
+
+    
+    
+    # def get_bwd_send_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
+    #     """
+    #     Get the gradient send ops for current stage's backward.
+    #     """
+    #     self._check_chunk_id(bwd_chunk_id)
+
+    #     if not self.has_backward or self.is_first:
+    #         return []
+
+    #     if self.grad_send_info is None:
+    #         self.grad_send_info = self._create_grad_send_info(self.args_recv_info[0])
+
+    #     ops: list[dist.P2POp] = []
+    #     grads_input = self.bwd_cache.pop(bwd_chunk_id)
+    #     self.fwd_cache.pop(bwd_chunk_id, None)
+        
+    #     for grad, grad_recv_stage in zip(grads_input, self.grad_send_info):
+    #         # 跳过 None 的梯度接收阶段（对应于整数类型的tensor）
+    #         if grad_recv_stage is None:
+    #             continue
+                
+    #         if isinstance(grad, torch.Tensor):
+    #             # 额外检查：只发送浮点类型的梯度
+    #             if not (grad.is_floating_point() or torch.is_complex(grad)):
+    #                 #print(f"[{dist.get_rank()}] Skipping non-floating grad send: dtype={grad.dtype}")
+    #                 continue
+                    
+    #             logger.debug(
+    #                 "%s Sending gradient to Stage %s: %s",
+    #                 self.log_prefix,
+    #                 grad_recv_stage,
+    #                 grad.size(),
+    #             )
+    #             peer_rank = dest_rank
+    #             peer_global_rank = (
+    #                 peer_rank
+    #                 if self.group is None
+    #                 else dist.get_global_rank(self.group, peer_rank)
+    #             )
+    #             ops.append(dist.P2POp(dist.isend, grad, peer_global_rank, self.group))
+    #         elif grad is not None:
+    #             raise RuntimeError(
+    #                 f"[{self.stage_index}] expecting a gradient tensor for an input "
+    #                 f"coming from stage {grad_recv_stage}, but got {type(grad)}"
+    #             )
+        
+    #     return ops
     
     def _execute_allreduce(self):
         """
