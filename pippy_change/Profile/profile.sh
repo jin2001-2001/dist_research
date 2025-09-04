@@ -41,7 +41,7 @@ for util in "${UTILS[@]}"; do
     # quota is microseconds of CPU time across *all* cores per period.
     # To target X% of full machine: quota = (X/100) * (CORES * PERIOD)
     QUOTA=$(( util * CORES * PERIOD_US / 100 ))
-    printf "%d %d\n" "$quota" "$PERIOD" | sudo tee "${GROUP}/cpu.max" >/dev/null
+    printf "%d %d\n" "$quota" "$PERIOD" | sudo tee "/sys/fs/cgroup/${GROUP}/cpu.max" >/dev/null
     echo "Set cpu.max to ${QUOTA} ${PERIOD_US}"
 
 
