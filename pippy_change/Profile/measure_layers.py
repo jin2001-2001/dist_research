@@ -99,7 +99,7 @@ def main():
     ap.add_argument("--batch", type=int, required=True)
     ap.add_argument("--dtype", type=str, default="float32", choices=["float32","bfloat16","float16"])
     ap.add_argument("--iters", type=int, default=3)
-    ap.add_argument("--warmup", type=int, default=2)
+    ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--out", type=str, required=True)
     ap.add_argument("--host", type=str, default="cpu1", help="Identifier for this machine, e.g., cpu1")
     args = ap.parse_args()
@@ -241,10 +241,14 @@ def main():
             t1 = time.perf_counter()
         else:
             loss.backward()
+    
     total_T = time.perf_counter() - total_T_start
     # Average over measured iterations
     denom = max(1, iters - warmup)
-    fwd_times = [t / denom for t in fwd_times]
+
+    total_T = total_T/denom
+
+    fwd_times = [t /iters for t in fwd_times]
     # bwd_times may be zeros if backward hook did not capture; fall back to autograd total split
     # Here we approximate by proportional split if hooks unavailable.
     total_bwd = 0.0  # not robust via hooks on CPU; optional
@@ -252,7 +256,7 @@ def main():
         # Fall back: just mark unknown
         bwd_times = [0.0 for _ in range(L)]
     else:
-        bwd_times = [t / denom for t in bwd_times]
+        bwd_times = [t /iters for t in bwd_times]
 
 
     # Pack results for metis version:
