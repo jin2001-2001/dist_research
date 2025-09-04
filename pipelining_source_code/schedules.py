@@ -9,7 +9,7 @@ import re
 from abc import ABC, abstractmethod
 from collections import Counter, defaultdict
 from enum import Enum
-from typing import Any, Callable, NamedTuple, Optional, Union, Iterable, Dict, List
+from typing import Any, Callable, NamedTuple, Optional, Union, Iterable, Dict, List, Tuple
 
 import torch
 import torch.distributed as dist
@@ -172,8 +172,10 @@ class _Action():
     upstream: Optional[int]
     id: int
     dependency: Optional[Dict[int, tuple[int, ...]]]
+    split_parts: Optional[int] 
+    chunk_deps: Optional[Dict[int, List[Tuple[int,int,int]]]]
     
-    def __init__(self, stage_index, rank, id, computation_type, microbatch_index, dest_rank=None, upstream=None, dependency=None):
+    def __init__(self, stage_index, rank, id, computation_type, microbatch_index, dest_rank=None, upstream=None, dependency=None, split_parts=None, chunk_deps=None):
         self.stage_index = stage_index
         self.rank = rank
         self.id = id
@@ -182,6 +184,8 @@ class _Action():
         self.dest_rank = dest_rank
         self.upstream = upstream
         self.dependency = dependency
+        self.split_parts = split_parts
+        self.chunk_deps  = chunk_deps
 
     # -----------------------------------------------------------------------
     # NOTE: The order here matches the from_str method parameter order:

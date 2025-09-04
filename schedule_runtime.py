@@ -84,6 +84,24 @@ def _wait_remote_id(batch_id: int, owner_rank: int, dep_id: int, timeout: float 
                 if time.time() - start > timeout:
                     raise TimeoutError(f"wait_remote_id timeout on {key}")
 
+def _mark_done_chunk(batch_id: int, action_id: int, chunk_idx: int):
+    key = f"batch_{batch_id}_done_{dist.get_rank()}_{action_id}_c{chunk_idx}"
+    _get_store().set(key, b"1")
+
+def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: int, timeout: float | None = None):
+    key = f"batch_{batch_id}_done_{owner_rank}_{dep_id}_c{dep_chunk}"
+    store = _get_store()
+    if timeout is None:
+        store.wait([key])
+    else:
+        start = time.time()
+        while True:
+            try:
+                store.wait([key], timeout=timeout)
+                break
+            except RuntimeError:
+                if time.time() - start > timeout:
+                    raise TimeoutError(f"wait_remote_chunk timeout on {key}")
 
 NIC = os.getenv("PP_BW_IF", "eth0")   # The network card can be specified through environment variables
 _LOCK = f"/tmp/pp_bw_lock_{NIC}"
@@ -522,23 +540,27 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     else:
                         print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}")
                     
-                    #record time in SEND_F and SEND_B
-                    #start_ns = time.time_ns()
-                    # ops = (
-                    #     stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank)
-                    #     if rank is not None and dest_rank is not None
-                    #     else stage.get_fwd_send_ops(mb_index)
-                    # )
-                    ops = (
-                        stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=self._split_parts)
-                        if rank is not None and dest_rank is not None
-                        else stage.get_fwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=self._split_parts)
-                    )
+                    num_splits = action.split_parts or 1
 
-                    
-                    works = schedule._batch_p2p(ops)
-                    #self._rec.record_async(current_batch+1,action_id,"SEND_F", stage_idx, mb_index, works, start_ns)
-                    send_ops.append(works)
+                    ops = (
+                        stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
+                        if rank is not None and dest_rank is not None
+                        else stage.get_fwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
+                    )
+                    # 读取 stage 填写的计划（每块的 op 数）
+                    plan = stage._last_comm_plan.get(("SEND_F", mb_index), [len(ops)])  # 后备：一整块
+                    pos = 0
+                    for chunk_idx, cnt in enumerate(plan):
+                        sub_ops = ops[pos:pos+cnt]; pos += cnt
+
+                        # === 二级依赖：只允许依赖 RECV_* 的“分块完成” ===
+                        if action.chunk_deps and chunk_idx in action.chunk_deps:
+                            for (dep_rank, dep_action_id, dep_chunk) in action.chunk_deps[chunk_idx]:
+                                _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
+
+                        # [SEND-GATE] 你的阻塞/整形逻辑可继续写在 stage 的 send 循环里（不冲突）
+                        works_k = schedule._batch_p2p(sub_ops)
+                        send_ops.append(works_k)
 
                 elif comp_type == SEND_B:
                     _tc_set_rate(action.upstream)
@@ -547,17 +569,25 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     else:
                         print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_B microbatch {mb_index}")
                     
-                    #record time in SEND_F and SEND_B
-                    #start_ns = time.time_ns()
-                    ops = (
-                        stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=self._split_parts)
-                        if rank is not None and dest_rank is not None
-                        else stage.get_bwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=self._split_parts)
-                    )
+                    num_splits = action.split_parts or 1
 
-                    works = schedule._batch_p2p(ops)     
-                    #self._rec.record_async(current_batch+1,action_id,"SEND_B", stage_idx, mb_index, works, start_ns)
-                    send_ops.append(works)
+                    ops = (
+                        stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
+                        if rank is not None and dest_rank is not None
+                        else stage.get_bwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
+                    )
+                    plan = stage._last_comm_plan.get(("SEND_B", mb_index), [len(ops)])
+                    pos = 0
+                    for chunk_idx, cnt in enumerate(plan):
+                        sub_ops = ops[pos:pos+cnt]; pos += cnt
+
+                        if action.chunk_deps and chunk_idx in action.chunk_deps:
+                            for (dep_rank, dep_action_id, dep_chunk) in action.chunk_deps[chunk_idx]:
+                                _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
+
+                        works_k = schedule._batch_p2p(sub_ops)
+                        send_ops.append(works_k)
+
 
 
                 elif comp_type == RECV_F:
@@ -566,19 +596,25 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing forward"
                     )
                     start_ns = time.time_ns()
+                    num_splits = action.split_parts or 1
                     ops = (
-                        stage.get_fwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=self._split_parts)
+                        stage.get_fwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
                         if rank is not None and dest_rank is not None
-                        else stage.get_fwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=self._split_parts)
+                        else stage.get_fwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
                     )
+                    plan = stage._last_comm_plan.get(("RECV_F", mb_index), [len(ops)])
+                    pos = 0
+                    all_works = []
+                    for chunk_idx, cnt in enumerate(plan):
+                        sub_ops = ops[pos:pos+cnt]; pos += cnt
+                        works_k = schedule._batch_p2p(sub_ops)
+                        # 分块级完成打点（后台轮询 -> _mark_done_chunk）
+                        self._rec.record_async(current_batch+1, action_id, "RECV_F", stage_idx, mb_index, works_k, start_ns, chunk_idx=chunk_idx)
+                        all_works.extend(works_k)
 
-                    works = schedule._batch_p2p(ops)       
-                    self._rec.record_async(current_batch+1,action_id,"RECV_F", stage_idx, mb_index, works, start_ns)
-                    fwd_recv_ops[(stage_idx, mb_index)] = works
-                    schedule._wait_batch_p2p(works) 
-                    stage.finish_fwd_recv(mb_index)
-                    #print("fwd_recv_ops[(stage_idx, mb_index)] = []")
-                    fwd_recv_ops[(stage_idx, mb_index)] = [] 
+                    # 如你仍想保持“RECV_F 立等”语义，可继续等待全部
+                    schedule._wait_batch_p2p(all_works)
+                    fwd_recv_ops[(stage_idx, mb_index)] = []   # 卫生：清空挂账
 
                 elif comp_type == RECV_B:
                     print(f"[{dist.get_rank()}]: batch {current_batch+1} RECV_B microbatch {mb_index}")
@@ -586,15 +622,23 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing backward"
                     )
                     start_ns = time.time_ns()
+                    num_splits = action.split_parts or 1
                     ops = (
-                        stage.get_bwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=self._split_parts)
+                        stage.get_bwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
                         if rank is not None and dest_rank is not None
-                        else stage.get_bwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=self._split_parts)
+                        else stage.get_bwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
                     )
+                    plan = stage._last_comm_plan.get(("RECV_B", mb_index), [len(ops)])
+                    pos = 0
+                    works_all = []
+                    for chunk_idx, cnt in enumerate(plan):
+                        sub_ops = ops[pos:pos+cnt]; pos += cnt
+                        works_k = schedule._batch_p2p(sub_ops)
+                        self._rec.record_async(current_batch+1, action_id, "RECV_B", stage_idx, mb_index, works_k, start_ns, chunk_idx=chunk_idx)
+                        works_all.extend(works_k)
 
-                    works = schedule._batch_p2p(ops)
-                    self._rec.record_async(current_batch+1,action_id,"RECV_B", stage_idx, mb_index, works, start_ns)
-                    bwd_recv_ops[(stage_idx, mb_index)] = works
+                    bwd_recv_ops[(stage_idx, mb_index)] = works_all  # 真正等待仍在 BACKWARD_INPUT 触发前
+
 
 
                 elif comp_type == UNSHARD:

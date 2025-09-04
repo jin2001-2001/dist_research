@@ -4,7 +4,7 @@ from dataclasses import dataclass, asdict, field
 from typing import List, Tuple, Iterable, Optional
 import psutil          
 import torch.distributed as dist
-from schedule_runtime import _mark_done
+from schedule_runtime import _mark_done, _mark_done_chunk
 
 @dataclass
 class TraceEvent:
@@ -98,6 +98,7 @@ class Recorder:
         works: List[dist.Work],
         start_ns: int,
         poll_interval: float = 0.001,   # 1 ms 轮询
+        chunk_idx: Optional[int] = None,
     ):
         if not self.enabled:
             return
@@ -123,21 +124,19 @@ class Recorder:
 
         #后台轮询完成,wait会产生死锁
         def waiter():
-            while not all(w.is_completed() for w in works): 
+            while not all(w.is_completed() for w in works):
                 time.sleep(poll_interval)
-
             end_ns = time.time_ns()
             if need_net:
                 stop_evt.set()
-
-            # print(f"{action} {mb_idx}计时结束，{action_id}添加表")
-            _mark_done(batch_id=batch_id,action_id=action_id)
-            
+            # === 修改：分块 or 整体 ===
+            if chunk_idx is None:
+                _mark_done(batch_id=batch_id, action_id=action_id)
+            else:
+                # 延迟导入，避免循环依赖
+                _mark_done_chunk(batch_id=batch_id, action_id=action_id, chunk_idx=chunk_idx)
             self.events.append(
-                TraceEvent(
-                    batch_id, self.rank, action, stage_idx, mb_idx,
-                    start_ns, end_ns, samples
-                )
+                TraceEvent(batch_id, self.rank, action, stage_idx, mb_idx, start_ns, end_ns, samples)
             )
 
             # dur_ms = (end_ns - start_ns) / 1e6
