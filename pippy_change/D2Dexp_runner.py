@@ -123,7 +123,7 @@ class PartEnd(nn.Module):                                # rank 4：25-27 + norm
         return self.lm_head(hidden)                     # logits
 
 
-def load_config() -> Dict[str, Any]:
+def load_config(cfg:str) -> Dict[str, Any]:
     """Accepts a dict or a JSON file path."""
     if isinstance(cfg, str):
         with open(cfg, "r") as f:
