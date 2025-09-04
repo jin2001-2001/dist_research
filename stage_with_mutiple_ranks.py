@@ -200,6 +200,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         plans = []  # [(flat, slices, dst_stages)]
         for idx, out in enumerate(output_tuple):
             dst_stages = self.act_send_info[idx]
+            print(f"✅✅✅dst_stages {dst_stages}")
             if dst_stages is None:
                 continue
             if not isinstance(out, torch.Tensor):
