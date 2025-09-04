@@ -25,12 +25,11 @@ for util in "${UTILS[@]}"; do
     QUOTA_PCT=$(( util * CORES ))%
 
     OUTFILE="./cpu${util}_bs${bs}.json"
-    echo "CPUQuota=${QUOTA_PCT}  ->  ${OUTFILE}"
 
     # --scope: transient scope cgroup
     # --wait/--collect: wait for completion & collect status
     # -p WorkingDirectory: run in current dir so outputs land here
-    systemd-run --scope --quiet --wait --collect \
+    systemd-run --scope --quiet \
       -p "CPUQuota=${QUOTA_PCT}" \
       -p "WorkingDirectory=${PWD_NOW}" \
       -- python measure_layers.py --batch "${bs}" --out "${OUTFILE}" --host "cpu${util}"
