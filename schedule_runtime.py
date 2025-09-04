@@ -50,7 +50,7 @@ _EXEC_DONE: Set[int] = set()
 _STORE = None
 
 master_addr = os.environ.get("MASTER_ADDR", "10.10.0.2")  # 你的主节点IP
-master_port = int(os.environ.get("MASTER_PORT", "29500"))
+master_port = int(os.environ.get("MASTER_PORT", "8080"))
 world_size = int(os.environ["WORLD_SIZE"])
 rank = int(os.environ["RANK"])
 start_daemon = (rank == 0)
