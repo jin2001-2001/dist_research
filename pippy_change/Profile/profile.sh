@@ -1,61 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ask for sudo once
-sudo -v
+# Optional: check systemd-run exists
+command -v systemd-run >/dev/null || { echo "systemd-run not found"; exit 1; }
 
 # -------- Config --------
 BATCH_SIZES=(1 2 3 4 5)
-UTILS=(100 70)                 # target CPU utilization percentages
-CGROUP_NAME="pybench_group"
-PERIOD_US=1000000              # 1,000,000 µs (1s) period, matches your example
+UTILS=(100 70)   # target % of the whole machine
 # ------------------------
 
-# Make sure cgroup v2 cpu controller is available
-if [ ! -d /sys/fs/cgroup ]; then
-  echo "cgroup fs not found at /sys/fs/cgroup"; exit 1
-fi
-
-# Detect cores
 CORES=$(nproc --all)
+PWD_NOW="$(pwd)"
 echo "Detected CPU cores: ${CORES}"
-
-# Ensure clean start
-if [ -d "/sys/fs/cgroup/${CGROUP_NAME}" ]; then
-  echo "Removing existing cgroup ${CGROUP_NAME}..."
-  sudo bash -c "echo max > /sys/fs/cgroup/${CGROUP_NAME}/cpu.max" || true
-  sudo rmdir "/sys/fs/cgroup/${CGROUP_NAME}" || true
-fi
+echo "Working directory : ${PWD_NOW}"
 
 for util in "${UTILS[@]}"; do
   for bs in "${BATCH_SIZES[@]}"; do
     echo "=============================================="
-    echo "Run: CPU util ${util}%  |  batch ${bs}"
+    echo "Run: CPU util ${util}% of machine  |  batch ${bs}"
     echo "=============================================="
 
-    # Create cgroup
-    sudo mkdir -p "/sys/fs/cgroup/${CGROUP_NAME}"
+    # systemd CPUQuota is % of a single CPU.
+    # To target X% of the entire machine, multiply by core count.
+    QUOTA_PCT=$(( util * CORES ))%
 
-    # Compute quota:
-    # For cgroup v2, cpu.max = "<quota> <period>"
-    # quota is microseconds of CPU time across *all* cores per period.
-    # To target X% of full machine: quota = (X/100) * (CORES * PERIOD)
-    QUOTA=$(( util * CORES * PERIOD_US / 100 ))
-    printf "%d %d\n" "$QUOTA" "$PERIOD_US" | sudo tee "/sys/fs/cgroup/${CGROUP_NAME}/cpu.max" >/dev/null
-    echo "Set cpu.max to ${QUOTA} ${PERIOD_US}"
-
-
-    # Move this shell into the cgroup (children inherit it)
-    echo $$ | sudo tee "/sys/fs/cgroup/${CGROUP_NAME}/cgroup.procs" >/dev/null
-
-    # Run workload
     OUTFILE="./cpu${util}_bs${bs}.json"
-    echo "Output -> ${OUTFILE}"
-    python measure_layers.py --batch "${bs}" --out "${OUTFILE}" --host "cpu${util}"
+    echo "CPUQuota=${QUOTA_PCT}  ->  ${OUTFILE}"
 
-    # Reset CPU limit and remove cgroup
-    sudo bash -c "echo max > /sys/fs/cgroup/${CGROUP_NAME}/cpu.max"
-    sudo rmdir "/sys/fs/cgroup/${CGROUP_NAME}"
+    # --scope: transient scope cgroup
+    # --wait/--collect: wait for completion & collect status
+    # -p WorkingDirectory: run in current dir so outputs land here
+    systemd-run --scope --quiet --wait --collect \
+      -p "CPUQuota=${QUOTA_PCT}" \
+      -p "WorkingDirectory=${PWD_NOW}" \
+      -- python measure_layers.py --batch "${bs}" --out "${OUTFILE}" --host "cpu${util}"
   done
 done
 
