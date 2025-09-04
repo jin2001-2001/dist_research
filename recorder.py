@@ -136,7 +136,6 @@ class Recorder:
                     prev_ts, prev_sent, prev_recv = curr_ts, io.bytes_sent, io.bytes_recv
             threading.Thread(target=sampler, daemon=True).start()
 
-        #后台轮询完成,wait会产生死锁
         def waiter():
             status = "completed"
             try:

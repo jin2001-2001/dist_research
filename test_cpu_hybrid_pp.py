@@ -42,52 +42,52 @@ def create_pipeline_actions():
         _Action(
             0, 0, 1, _ComputationType.SEND_F, (0,), 1, 10000, None,
             4,  # split_parts
-            # { 
-            #     1: [(2, 1, 0)], #(rank,id,sub_id)
-            #     2: [(2, 1, 1)],
-            #     3: [(2, 1, 2)],
-            # }
-            None
+            { 
+                1: [(2, 1, 0)], #(rank,id,sub_id)
+                2: [(2, 1, 1)],
+                3: [(2, 1, 2)],
+            }
+            # None
         ),
 
        
         _Action(
             0, 0, 2, _ComputationType.SEND_F, (1,), 2, 10000, None,
             4,
-            # {
-            #     # 1.k <- 0.k
-            #     0: [(1, 0, 0)],
-            #     1: [(1, 0, 1)],
-            #     2: [(1, 0, 2)],
-            #     3: [(1, 0, 3)],
-            # }
-            None
+            {
+                # 1.k <- 0.k
+                0: [(1, 0, 0)],
+                1: [(1, 0, 1)],
+                2: [(1, 0, 2)],
+                3: [(1, 0, 3)],
+            }
+            # None
         ),
 
         _Action(
             0, 0, 3, _ComputationType.SEND_F, (2,), 1, 10000, None,
             4,
-            # {
-            #     # 2.k <- 1.k
-            #     0: [(2, 0, 0)],
-            #     1: [(2, 0, 1)],
-            #     2: [(2, 0, 2)],
-            #     3: [(2, 0, 3)],
-            # }
-            None
+            {
+                # 2.k <- 1.k
+                0: [(2, 0, 0)],
+                1: [(2, 0, 1)],
+                2: [(2, 0, 2)],
+                3: [(2, 0, 3)],
+            }
+            # None
         ),
 
         _Action(
             0, 0, 4, _ComputationType.SEND_F, (3,), 2, 10000, None,
             4,
-            # {
-            #     # 3.k <- 2.k
-            #     0: [(1, 1, 0)],
-            #     1: [(1, 1, 1)],
-            #     2: [(1, 1, 2)],
-            #     3: [(1, 1, 3)],
-            # }
-            None
+            {
+                # 3.k <- 2.k
+                0: [(1, 1, 0)],
+                1: [(1, 1, 1)],
+                2: [(1, 1, 2)],
+                3: [(1, 1, 3)],
+            }
+            # None
         ),
 
         _Action(0, 0, 5, _ComputationType.RECV_B, (0,), 1, None, None, 4, None),
@@ -100,21 +100,21 @@ def create_pipeline_actions():
 
     rank1_actions = [
         _Action(1, 1, 0, _ComputationType.RECV_F, (0,), 0, None, None, 4, 
-            #     {
-            #     1: [(1, 1, 0)],
-            #     2: [(1, 1, 1)],
-            #     3: [(1, 1, 2)],
-            # }
-            None
+                {
+                1: [(1, 1, 0)],
+                2: [(1, 1, 1)],
+                3: [(1, 1, 2)],
+            }
+            # None
                 ),  # mb0
         _Action(1, 1, 1, _ComputationType.RECV_F, (2,), 0, None, None, 4, 
-            #     {
-            #     0: [(1, 0, 0)],
-            #     1: [(1, 0, 1)],
-            #     2: [(1, 0, 2)],
-            #     3: [(1, 0, 3)],
-            # }
-            None
+                {
+                0: [(1, 0, 0)],
+                1: [(1, 0, 1)],
+                2: [(1, 0, 2)],
+                3: [(1, 0, 3)],
+            }
+            # None
                 ),  # mb2
         _Action(1, 1, 2, _ComputationType.FORWARD, (0,2), None, None, None),
         _Action(1, 1, 3, _ComputationType.FULL_BACKWARD, (0,2), None, None, None),
