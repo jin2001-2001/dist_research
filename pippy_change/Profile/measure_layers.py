@@ -334,7 +334,7 @@ def main():
 
 
     name = "DeviceType." + str(args.host) + "_tp1_bs"+str(args.batch)+".json"
-    with open(args.out, "w", encoding="utf-8") as f:
+    with open(name, "w", encoding="utf-8") as f:
         json.dump(metis_result, f, indent=2)
 
     # Cleanup hooks
