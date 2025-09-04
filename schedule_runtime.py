@@ -369,7 +369,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                 if chunk_deps and chunk_idx in chunk_deps:
                     for (dep_rank, dep_action_id, dep_chunk) in chunk_deps[chunk_idx]:
                         _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
-                print(f"这里mb {mb_index} chunk {chunk_idx}")
+                print(f"\n这里mb {mb_index} chunk {chunk_idx}")
                 # 提交该 chunk 的发送
                 works_k = schedule._batch_p2p(sub_ops)
 
