@@ -301,28 +301,28 @@ def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: i
     key = f"batch_{batch_id}_done_{owner_rank}_{dep_id}_c{dep_chunk}"
     client = _get_redis_client()
     
-    # 特殊调试代码（保留原有逻辑）
-    if key == "batch_0_done_2_0_c0":
-        val = client.get(key)
-        if val:
-            print(f"✅✅✅ {val}")
+    # # 特殊调试代码（保留原有逻辑）
+    # if key == "batch_0_done_2_0_c0":
+    #     val = client.get(key)
+    #     if val:
+    #         print(f"✅✅✅ {val}")
         
-        # 启动监控线程
-        def monitor_key(client, key):
-            import time
-            while True:
-                try:
-                    print("开始查询")
-                    if client.exists(key):
-                        print(f"{key} 已存在")
-                    else:
-                        print(f"{key} 不存在")
-                except Exception as e:
-                    print(f"查询错误: {e}")
-                time.sleep(1)
+    #     # 启动监控线程
+    #     def monitor_key(client, key):
+    #         import time
+    #         while True:
+    #             try:
+    #                 print("开始查询")
+    #                 if client.exists(key):
+    #                     print(f"{key} 已存在")
+    #                 else:
+    #                     print(f"{key} 不存在")
+    #             except Exception as e:
+    #                 print(f"查询错误: {e}")
+    #             time.sleep(1)
         
-        t = threading.Thread(target=monitor_key, args=(client, key), daemon=True)
-        t.start()
+    #     t = threading.Thread(target=monitor_key, args=(client, key), daemon=True)
+    #     t.start()
     
     # 首先检查键是否已存在
     if client.exists(key):
