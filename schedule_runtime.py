@@ -97,6 +97,8 @@ def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: i
     if timeout is None:
         if key == "batch_0_done_2_0_c0":
             print("正在等batch_0_done_2_0_c0")
+        time.sleep(10)
+        print(store)
         store.wait([key])
     else:
         start = time.time()
