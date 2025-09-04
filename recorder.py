@@ -16,12 +16,14 @@ class TraceEvent:
     mb_idx:     int
     start_ns:   int
     end_ns:     int
+    net_series: List[Tuple[int, float, float]] = field(default_factory=list)
+    
     # 新增：分块编号（一级命令无分块时为 None）
     chunk:      Optional[int] = None
     # 新增：执行状态（completed / error:...）
     status:     str = "completed"
     # (ts_ns, up_mbps, down_mbps)
-    net_series: List[Tuple[int, float, float]] = field(default_factory=list)
+    
 
 
 class Recorder:
