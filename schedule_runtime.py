@@ -154,8 +154,8 @@ REDIS_CONFIG = {
     'port': int(os.environ.get('REDIS_PORT', 6379)),
     'db': int(os.environ.get('REDIS_DB', 0)),
     'password': os.environ.get('REDIS_PASSWORD', None),
-    'socket_connect_timeout': 30,
-    'socket_timeout': 30,
+    'socket_connect_timeout': 3000,
+    'socket_timeout': 3000,
     # 'connection_pool_kwargs': {...}  # <- 删除这层
 }
 
