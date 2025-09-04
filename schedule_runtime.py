@@ -361,6 +361,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         def worker():
             pos = 0
             for chunk_idx, cnt in enumerate(plan):
+                print(f"mb {mb_index} chunk {chunk_idx}")
                 if cnt <= 0:
                     continue
                 sub_ops = ops[pos:pos+cnt]; pos += cnt
