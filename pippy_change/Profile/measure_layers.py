@@ -98,7 +98,7 @@ def main():
     ap.add_argument("--seq_len", type=int, default=2048)
     ap.add_argument("--batch", type=int, required=True)
     ap.add_argument("--dtype", type=str, default="float32", choices=["float32","bfloat16","float16"])
-    ap.add_argument("--iters", type=int, default=3)
+    ap.add_argument("--iters", type=int, default=2)
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--out", type=str, required=True)
     ap.add_argument("--host", type=str, default="cpu1", help="Identifier for this machine, e.g., cpu1")
@@ -337,7 +337,7 @@ def main():
         json.dump(result, f, indent=2)
 
 
-    name = "DeviceType." + str(args.host) + "_tp1_bs"+str(args.batch)+".json"
+    name = "./metisProfile/"+"DeviceType." + str(args.host) + "_tp1_bs"+str(args.batch)+".json"
     with open(name, "w", encoding="utf-8") as f:
         json.dump(metis_result, f, indent=2)
 
@@ -345,5 +345,5 @@ def main():
     for h in handles:
         h.remove()
 
-if __name__ == "__main__":
+if __name__ == "__main__": 
     main()
