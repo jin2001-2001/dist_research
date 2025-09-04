@@ -147,8 +147,9 @@ class Recorder:
                 if chunk_idx is None:
                     _mark_done(batch_id=batch_id, action_id=action_id)
                 else:
-                    # 延迟导入，避免循环依赖
                     _mark_done_chunk(batch_id=batch_id, action_id=action_id, chunk_idx=chunk_idx)
+                print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
+      f"works={len(works)}")
             except Exception as e:
                 status = f"error:{type(e).__name__}"
             finally:

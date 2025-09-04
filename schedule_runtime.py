@@ -318,7 +318,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
                 # 立即 post 该 chunk 的 irecv
                 works_k = schedule._batch_p2p(sub_ops)
-
+                print(f"[{dist.get_rank()}] POST {kind} st{stage_idx} mb{mb_index} "
+                        f"chunk{chunk_idx} ops={len(works_k)}")
+                
                 # 记录到异步容器
                 with self._async_recv_lock:
                     if kind == "RECV_F":
@@ -368,7 +370,18 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                 # 只允许 SEND 依赖 RECV 的 chunk 完成
                 if chunk_deps and chunk_idx in chunk_deps:
                     for (dep_rank, dep_action_id, dep_chunk) in chunk_deps[chunk_idx]:
-                        _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
+                        dep_key = f"batch_{current_batch+1}_done_{dep_rank}_{dep_action_id}_c{dep_chunk}"
+                        print(f"[{dist.get_rank()}] SEND {kind} st{stage_idx} mb{mb_index} "
+                            f"chunk{chunk_idx} waiting {dep_key}")
+                        try:
+                            _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk,
+                                            timeout=60)
+                        except TimeoutError:
+                            print(f"[{dist.get_rank()}] TIMEOUT waiting {dep_key} "
+                                f"(check remote RECV posting/completion)")
+                            raise
+                        print(f"[{dist.get_rank()}] SEND {kind} st{stage_idx} mb{mb_index} "
+                            f"chunk{chunk_idx} dep OK: {dep_key}")
                 print(f"\n这里mb {mb_index} chunk {chunk_idx}")
                 # 提交该 chunk 的发送
                 works_k = schedule._batch_p2p(sub_ops)
@@ -885,7 +898,12 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                 # 再等待“全部 works 完成”
                                 with self._async_recv_lock:
                                     works = self._fwd_recv_works.pop(key, [])
+                                print(f"[{dist.get_rank()}] FORWARD wait st{stage_idx} mb{mid} "
+                                        f"posted={self._fwd_recv_posted[key].is_set()} "
+                                        f"works={len(self._fwd_recv_works.get(key, []))}")
                                 schedule._wait_batch_p2p(works)
+                                
+
                                 # 清理 event
                                 self._fwd_recv_posted.pop(key, None)
 

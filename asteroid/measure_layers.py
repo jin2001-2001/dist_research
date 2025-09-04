@@ -176,8 +176,9 @@ def main():
     # bwd_times may be zeros if backward hook did not capture; fall back to autograd total split
     # Here we approximate by proportional split if hooks unavailable.
     total_bwd = 0.0  # not robust via hooks on CPU; optional
-    if sum(bwd_times) == 0.0:
-        # Fall back: just mark unknown
+    if sum(bwd_times) > 0.0:
+        bwd_times = [t / denom for t in bwd_times]
+    else:
         bwd_times = [0.0 for _ in range(L)]
 
     # Pack results
