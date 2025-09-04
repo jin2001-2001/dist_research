@@ -51,7 +51,7 @@ _STORE = None
 def _get_store():
     global _STORE
     if _STORE is None:
-        _STORE = dist.FileStore("/local/desk/filestore", dist.get_world_size)
+        _STORE = dist.FileStore("/local/desk/filestore", dist.get_world_size())
         #_STORE = _get_default_store()   # Only the first real get
     return _STORE
 
