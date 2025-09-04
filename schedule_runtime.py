@@ -97,14 +97,14 @@ def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: i
     if timeout is None:
         if key == "batch_0_done_2_0_c0":
             import threading, time
-
+            from datetime import timedelta
             def monitor_key(store, key):
                 import time
                 while True:
                     try:
                         print("开始查询")
                         # 等待 0.1 秒，如果超时说明 key 不存在
-                        store.wait([key], timeout=1)
+                        store.wait([key], timeout=timedelta(seconds=1))
                         print(f"{key} 已存在")
                     except RuntimeError:
                         print(f"{key} 不存在")
