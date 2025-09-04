@@ -48,11 +48,17 @@ B = FULL_BACKWARD
 _EXEC_DONE: Set[int] = set()
 
 _STORE = None
+
+master_addr = os.environ.get("MASTER_ADDR", "10.10.0.2")  # 你的主节点IP
+master_port = int(os.environ.get("MASTER_PORT", "29500"))
+world_size = int(os.environ["WORLD_SIZE"])
+rank = int(os.environ["RANK"])
+start_daemon = (rank == 0)
 def _get_store():
     global _STORE
     if _STORE is None:
         print("初始化")
-        _STORE = dist.FileStore("/local/desk/filestore", dist.get_world_size())
+        _STORE = dist.TCPStore(master_addr, master_port, world_size, start_daemon)
         print("初始化结束")
         #_STORE = _get_default_store()   # Only the first real get
     return _STORE
