@@ -595,7 +595,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     assert (stage_idx, mb_index) not in fwd_recv_ops, (
                         f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing forward"
                     )
-                    start_ns = time.time_ns()
                     num_splits = action.split_parts or 1
                     ops = (
                         stage.get_fwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
@@ -609,6 +608,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         sub_ops = ops[pos:pos+cnt]; pos += cnt
                         works_k = schedule._batch_p2p(sub_ops)
                         # 分块级完成打点（后台轮询 -> _mark_done_chunk）
+                        start_ns = time.time_ns()
                         self._rec.record_async(current_batch+1, action_id, "RECV_F", stage_idx, mb_index, works_k, start_ns, chunk_idx=chunk_idx)
                         all_works.extend(works_k)
 
@@ -621,7 +621,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     assert (stage_idx, mb_index) not in bwd_recv_ops, (
                         f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing backward"
                     )
-                    start_ns = time.time_ns()
                     num_splits = action.split_parts or 1
                     ops = (
                         stage.get_bwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
@@ -634,6 +633,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     for chunk_idx, cnt in enumerate(plan):
                         sub_ops = ops[pos:pos+cnt]; pos += cnt
                         works_k = schedule._batch_p2p(sub_ops)
+                        start_ns = time.time_ns()
                         self._rec.record_async(current_batch+1, action_id, "RECV_B", stage_idx, mb_index, works_k, start_ns, chunk_idx=chunk_idx)
                         works_all.extend(works_k)
 

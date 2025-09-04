@@ -7,6 +7,7 @@ import torch.distributed as dist
 from schedule_runtime import _mark_done, _mark_done_chunk
 
 @dataclass
+@dataclass
 class TraceEvent:
     batch_id:  int
     rank:       int
@@ -15,8 +16,13 @@ class TraceEvent:
     mb_idx:     int
     start_ns:   int
     end_ns:     int
+    # 新增：分块编号（一级命令无分块时为 None）
+    chunk:      Optional[int] = None
+    # 新增：执行状态（completed / error:...）
+    status:     str = "completed"
     # (ts_ns, up_mbps, down_mbps)
     net_series: List[Tuple[int, float, float]] = field(default_factory=list)
+
 
 class Recorder:
     _NET_ACTIONS = {"SEND_F", "RECV_F", "SEND_B", "RECV_B", "ALL_REDUCE"}
@@ -84,9 +90,13 @@ class Recorder:
             self.events.append(
                 TraceEvent(
                     batch_id, self.rank, action, stage_idx, mb_idx,
-                    start_ns, end_ns, samples
+                    start_ns, end_ns,
+                    chunk=None,
+                    status="completed",
+                    net_series=samples,
                 )
             )
+
     ...
     def record_async(
         self,
@@ -124,20 +134,31 @@ class Recorder:
 
         #后台轮询完成,wait会产生死锁
         def waiter():
-            while not all(w.is_completed() for w in works):
-                time.sleep(poll_interval)
-            end_ns = time.time_ns()
-            if need_net:
-                stop_evt.set()
-            # === 修改：分块 or 整体 ===
-            if chunk_idx is None:
-                _mark_done(batch_id=batch_id, action_id=action_id)
-            else:
-                # 延迟导入，避免循环依赖
-                _mark_done_chunk(batch_id=batch_id, action_id=action_id, chunk_idx=chunk_idx)
-            self.events.append(
-                TraceEvent(batch_id, self.rank, action, stage_idx, mb_idx, start_ns, end_ns, samples)
-            )
+            status = "completed"
+            try:
+                while not all(w.is_completed() for w in works):
+                    time.sleep(poll_interval)
+                end_ns = time.time_ns()
+                if need_net:
+                    stop_evt.set()
+                # === 修改：分块 or 整体 ===
+                if chunk_idx is None:
+                    _mark_done(batch_id=batch_id, action_id=action_id)
+                else:
+                    # 延迟导入，避免循环依赖
+                    _mark_done_chunk(batch_id=batch_id, action_id=action_id, chunk_idx=chunk_idx)
+            except Exception as e:
+                status = f"error:{type(e).__name__}"
+            finally:
+                self.events.append(
+                    TraceEvent(
+                        batch_id, self.rank, action, stage_idx, mb_idx,
+                        start_ns, end_ns,
+                        chunk=chunk_idx,
+                        status=status,
+                        net_series=samples,
+                    )
+                )
 
             # dur_ms = (end_ns - start_ns) / 1e6
             # print(
