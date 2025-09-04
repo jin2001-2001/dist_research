@@ -584,7 +584,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         global ROOT_PASS
         ROOT_PASS = root_pass
         
-        self._split_parts = int(os.getenv("PP_COMM_SPLITS", "8"))
 
         
         #Each node prepares HTB at one time
