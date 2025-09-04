@@ -169,12 +169,6 @@ REDIS_CONFIG = {
 # 键的过期时间（秒）
 KEY_EXPIRE_TIME = 3600  # 1小时
 
-master_addr = os.environ.get("MASTER_ADDR", "10.10.0.2")
-master_port = 29501
-world_size = int(os.environ["WORLD_SIZE"])
-rank = int(os.environ["RANK"])
-start_daemon = (rank == 0)
-
 def _get_redis_client():
     """获取或创建Redis客户端"""
     global _REDIS_CLIENT
