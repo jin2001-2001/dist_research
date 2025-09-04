@@ -51,7 +51,7 @@ def create_pipeline_actions():
 
        
         _Action(
-            0, 0, 3, _ComputationType.SEND_F, (1,), 2, 10000, None,
+            0, 0, 2, _ComputationType.SEND_F, (1,), 2, 10000, None,
             4,
             {
                 # 1.k <- 0.k
@@ -63,7 +63,7 @@ def create_pipeline_actions():
         ),
 
         _Action(
-            0, 0, 2, _ComputationType.SEND_F, (2,), 1, 10000, None,
+            0, 0, 3, _ComputationType.SEND_F, (2,), 1, 10000, None,
             4,
             {
                 # 2.k <- 1.k
