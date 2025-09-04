@@ -296,7 +296,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
             （可选）record_async 仅用于日志 (chunk_idx=None)，避免误写完成标记
         """
         assert kind in ("SEND_F", "SEND_B")
-        schedule = self  # 方便闭包里用
 
         def worker():
             pos = 0
@@ -314,8 +313,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                 works_k = schedule._batch_p2p(sub_ops)
 
                 # 记录到异步容器，批尾统一等待
-                with schedule._async_send_lock:
-                    schedule._async_send_works[current_batch+1].append(works_k)
+                with self._async_send_lock:
+                    self._async_send_works[current_batch+1].append(works_k)
 
                 # （可选）如果你也想记录发送侧 chunk 的时间线，可解开下面注释
                 # start_ns_k = time.time_ns()
