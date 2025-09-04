@@ -272,6 +272,16 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         # 异步 SEND 的 work 容器（按 batch 存），以及互斥锁
         self._async_send_works = defaultdict(list)   # key: batch_id -> List[List[dist.Work]]
         self._async_send_lock = threading.Lock()
+        # —— 异步 RECV 的容器（按 (stage_idx, mb) 存），以及互斥锁 ——
+        self._async_recv_lock = threading.Lock()
+        # RECV_F
+        self._fwd_recv_works: dict[tuple[int,int], list[dist.Work]] = {}
+        self._fwd_recv_posted: dict[tuple[int,int], threading.Event] = {}
+        # RECV_B
+        self._bwd_recv_works: dict[tuple[int,int], list[dist.Work]] = {}
+        self._bwd_recv_posted: dict[tuple[int,int], threading.Event] = {}
+
+        
         
         self._big_fwd_cache: dict[tuple[int, int], tuple[tuple[torch.Tensor, ...], list[torch.Tensor]]] = {}
         
@@ -286,7 +296,58 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
             _save_original_qdisc() 
         if dist.is_initialized():
             dist.barrier()
-        
+    
+    def _spawn_chunked_recv_worker(self, *, kind: str, action, ops, plan, current_batch: int, stage_idx: int, mb_index: int, action_id: int):
+        """
+        在独立线程中执行：
+        for chunk in plan:
+            立即 post 该 chunk 的 irecv (batch_isend_irecv) -> 得到 works_k
+            将 works_k 追加进对应 key 的 works 列表
+            recorder.record_async(..., chunk_idx=chunk_idx) 异步轮询完成，并 _mark_done_chunk
+        循环结束 → 置位 “已全部 post 完成” 的 Event
+        """
+        assert kind in ("RECV_F", "RECV_B")
+        key = (stage_idx, mb_index)
+
+        def worker():
+            pos = 0
+            for chunk_idx, cnt in enumerate(plan):
+                if cnt <= 0:
+                    continue
+                sub_ops = ops[pos:pos+cnt]; pos += cnt
+
+                # 立即 post 该 chunk 的 irecv
+                works_k = schedule._batch_p2p(sub_ops)
+
+                # 记录到异步容器
+                with self._async_recv_lock:
+                    if kind == "RECV_F":
+                        self._fwd_recv_works.setdefault(key, []).extend(works_k)
+                    else:
+                        self._bwd_recv_works.setdefault(key, []).extend(works_k)
+
+                # 逐 chunk 记录（完成后 _mark_done_chunk，供 SEND 的 chunk 依赖等待）
+                start_ns_k = time.time_ns()
+                self._rec.record_async(
+                    current_batch+1, action_id, kind, stage_idx, mb_index,
+                    works_k, start_ns_k, chunk_idx=chunk_idx
+                )
+
+            # 全部 chunk 的 irecv 都已 post
+            with self._async_recv_lock:
+                if kind == "RECV_F":
+                    ev = self._fwd_recv_posted.get(key)
+                else:
+                    ev = self._bwd_recv_posted.get(key)
+            if ev is not None:
+                ev.set()
+
+        t = threading.Thread(
+            target=worker, name=f"{kind}_st{stage_idx}_mb{mb_index}_b{current_batch+1}", daemon=True
+        )
+        t.start()
+
+    
     def _spawn_chunked_send_worker(self, *, kind: str, action, ops, plan, chunk_deps,
                                 current_batch: int, stage_idx: int, mb_index: int):
         """
@@ -669,8 +730,33 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
 
                 elif comp_type == RECV_F:
+                    # print(f"[{dist.get_rank()}]: batch {current_batch+1} RECV_F microbatch {mb_index}")
+                    # assert (stage_idx, mb_index) not in fwd_recv_ops, (
+                    #     f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing forward"
+                    # )
+                    # num_splits = action.split_parts or 1
+                    # ops = (
+                    #     stage.get_fwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
+                    #     if rank is not None and dest_rank is not None
+                    #     else stage.get_fwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
+                    # )
+                    # plan = stage._last_comm_plan.get(("RECV_F", mb_index), [len(ops)])
+                    # pos = 0
+                    # all_works = []
+                    # for chunk_idx, cnt in enumerate(plan):
+                    #     sub_ops = ops[pos:pos+cnt]; pos += cnt
+                    #     works_k = schedule._batch_p2p(sub_ops)
+                    #     # 分块级完成打点（后台轮询 -> _mark_done_chunk）
+                    #     start_ns = time.time_ns()
+                    #     self._rec.record_async(current_batch+1, action_id, "RECV_F", stage_idx, mb_index, works_k, start_ns, chunk_idx=chunk_idx)
+                    #     all_works.extend(works_k)
+
+                    # # 如你仍想保持“RECV_F 立等”语义，可继续等待全部
+                    # schedule._wait_batch_p2p(all_works)
+                    # fwd_recv_ops[(stage_idx, mb_index)] = []   # 卫生：清空挂账
                     print(f"[{dist.get_rank()}]: batch {current_batch+1} RECV_F microbatch {mb_index}")
-                    assert (stage_idx, mb_index) not in fwd_recv_ops, (
+                    key = (stage_idx, mb_index)
+                    assert key not in self._fwd_recv_posted, (
                         f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing forward"
                     )
                     num_splits = action.split_parts or 1
@@ -680,23 +766,45 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         else stage.get_fwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
                     )
                     plan = stage._last_comm_plan.get(("RECV_F", mb_index), [len(ops)])
-                    pos = 0
-                    all_works = []
-                    for chunk_idx, cnt in enumerate(plan):
-                        sub_ops = ops[pos:pos+cnt]; pos += cnt
-                        works_k = schedule._batch_p2p(sub_ops)
-                        # 分块级完成打点（后台轮询 -> _mark_done_chunk）
-                        start_ns = time.time_ns()
-                        self._rec.record_async(current_batch+1, action_id, "RECV_F", stage_idx, mb_index, works_k, start_ns, chunk_idx=chunk_idx)
-                        all_works.extend(works_k)
 
-                    # 如你仍想保持“RECV_F 立等”语义，可继续等待全部
-                    schedule._wait_batch_p2p(all_works)
-                    fwd_recv_ops[(stage_idx, mb_index)] = []   # 卫生：清空挂账
+                    # 建立“全部 irecv 已 post”的 Event，占位 works 容器
+                    with self._async_recv_lock:
+                        self._fwd_recv_works[key] = []
+                        self._fwd_recv_posted[key] = threading.Event()
+
+                    # 启动接收线程
+                    self._spawn_chunked_recv_worker(
+                        kind="RECV_F", action=action, ops=ops, plan=plan,
+                        current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index, action_id=action_id
+                    )
+
+
 
                 elif comp_type == RECV_B:
+                    # print(f"[{dist.get_rank()}]: batch {current_batch+1} RECV_B microbatch {mb_index}")
+                    # assert (stage_idx, mb_index) not in bwd_recv_ops, (
+                    #     f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing backward"
+                    # )
+                    # num_splits = action.split_parts or 1
+                    # ops = (
+                    #     stage.get_bwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
+                    #     if rank is not None and dest_rank is not None
+                    #     else stage.get_bwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
+                    # )
+                    # plan = stage._last_comm_plan.get(("RECV_B", mb_index), [len(ops)])
+                    # pos = 0
+                    # works_all = []
+                    # for chunk_idx, cnt in enumerate(plan):
+                    #     sub_ops = ops[pos:pos+cnt]; pos += cnt
+                    #     works_k = schedule._batch_p2p(sub_ops)
+                    #     start_ns = time.time_ns()
+                    #     self._rec.record_async(current_batch+1, action_id, "RECV_B", stage_idx, mb_index, works_k, start_ns, chunk_idx=chunk_idx)
+                    #     works_all.extend(works_k)
+
+                    # bwd_recv_ops[(stage_idx, mb_index)] = works_all  # 真正等待仍在 BACKWARD_INPUT 触发前
                     print(f"[{dist.get_rank()}]: batch {current_batch+1} RECV_B microbatch {mb_index}")
-                    assert (stage_idx, mb_index) not in bwd_recv_ops, (
+                    key = (stage_idx, mb_index)
+                    assert key not in self._bwd_recv_posted, (
                         f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing backward"
                     )
                     num_splits = action.split_parts or 1
@@ -706,16 +814,15 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         else stage.get_bwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
                     )
                     plan = stage._last_comm_plan.get(("RECV_B", mb_index), [len(ops)])
-                    pos = 0
-                    works_all = []
-                    for chunk_idx, cnt in enumerate(plan):
-                        sub_ops = ops[pos:pos+cnt]; pos += cnt
-                        works_k = schedule._batch_p2p(sub_ops)
-                        start_ns = time.time_ns()
-                        self._rec.record_async(current_batch+1, action_id, "RECV_B", stage_idx, mb_index, works_k, start_ns, chunk_idx=chunk_idx)
-                        works_all.extend(works_k)
 
-                    bwd_recv_ops[(stage_idx, mb_index)] = works_all  # 真正等待仍在 BACKWARD_INPUT 触发前
+                    with self._async_recv_lock:
+                        self._bwd_recv_works[key] = []
+                        self._bwd_recv_posted[key] = threading.Event()
+
+                    self._spawn_chunked_recv_worker(
+                        kind="RECV_B", action=action, ops=ops, plan=plan,
+                        current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index, action_id=action_id
+                    )
 
 
 
@@ -771,11 +878,17 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     else:
                         if not is_prev_stage_on_this_rank:
                             for mid in mb_ids:
-                                assert (
-                                    stage_idx,
-                                    mid,
-                                ) in fwd_recv_ops, f"Computing {action=} before receiving input"
-                                schedule._wait_batch_p2p(fwd_recv_ops.pop((stage_idx, mid)))
+                                key = (stage_idx, mid)
+                                # 等待“所有 irecv 已 post”
+                                assert key in self._fwd_recv_posted, f"Computing {action=} before RECV_F posted"
+                                self._fwd_recv_posted[key].wait()
+                                # 再等待“全部 works 完成”
+                                with self._async_recv_lock:
+                                    works = self._fwd_recv_works.pop(key, [])
+                                schedule._wait_batch_p2p(works)
+                                # 清理 event
+                                self._fwd_recv_posted.pop(key, None)
+
                         
                         if len(mb_ids) == 1:
                             composite_args = stage._retrieve_recv_activations(mb_ids[0])
@@ -890,8 +1003,13 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if not stage.is_last and not is_next_stage_on_this_rank:
                         for mid in mb_ids:
                             key = (stage_idx, mid)
-                            if key in bwd_recv_ops:
-                                schedule._wait_batch_p2p(bwd_recv_ops.pop(key))
+                            if key in self._bwd_recv_posted:
+                                self._bwd_recv_posted[key].wait()
+                                with self._async_recv_lock:
+                                    works = self._bwd_recv_works.pop(key, [])
+                                schedule._wait_batch_p2p(works)
+                                self._bwd_recv_posted.pop(key, None)
+
 
                     for mid in mb_ids:
                         stage.fwd_cache.pop(mid, None)
@@ -1017,7 +1135,22 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         for works_k in async_list:
             schedule._wait_batch_p2p(works_k)
 
+        # —— 保险：回收任何未消费的 RECV works，并清理 posted events ——
+        with self._async_recv_lock:
+            # FWD
+            for key, ev in list(self._fwd_recv_posted.items()):
+                ev.wait()
+                works = self._fwd_recv_works.pop(key, [])
+                schedule._wait_batch_p2p(works)
+                self._fwd_recv_posted.pop(key, None)
+            # BWD
+            for key, ev in list(self._bwd_recv_posted.items()):
+                ev.wait()
+                works = self._bwd_recv_works.pop(key, [])
+                schedule._wait_batch_p2p(works)
+                self._bwd_recv_posted.pop(key, None)
 
+        
         assert len(unshard_ops) == 0, "Unused unshard operations"
 
                 

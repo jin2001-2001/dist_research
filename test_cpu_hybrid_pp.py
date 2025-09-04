@@ -42,15 +42,14 @@ def create_pipeline_actions():
         _Action(
             0, 0, 1, _ComputationType.SEND_F, (0,), 1, 10000, None,
             4,  # split_parts
-            {
-                # 0.(k+1) <- 3.k  : 0.1<-3.0, 0.2<-3.1, 0.3<-3.2
-                1: [(2, 1, 0)],
+            { 
+                1: [(2, 1, 0)], #(rank,id,sub_id)
                 2: [(2, 1, 1)],
                 3: [(2, 1, 2)],
             }
         ),
 
-        # mb1 -> rank2 (RECV_F id=0 on rank2)
+       
         _Action(
             0, 0, 3, _ComputationType.SEND_F, (1,), 2, 10000, None,
             4,
@@ -63,7 +62,6 @@ def create_pipeline_actions():
             }
         ),
 
-        # mb2 -> rank1 (RECV_F id=1 on rank1)
         _Action(
             0, 0, 2, _ComputationType.SEND_F, (2,), 1, 10000, None,
             4,
@@ -76,7 +74,6 @@ def create_pipeline_actions():
             }
         ),
 
-        # mb3 -> rank2 (RECV_F id=1 on rank2)
         _Action(
             0, 0, 4, _ComputationType.SEND_F, (3,), 2, 10000, None,
             4,
@@ -97,7 +94,6 @@ def create_pipeline_actions():
         _Action(0, 0, 9, _ComputationType.FULL_BACKWARD, (0,1,2,3), None, None, None),
     ]
 
-    # Rank 1 (Stage 1) —— 给 RECV_F 写 split_parts=4（不写 chunk_deps）
     rank1_actions = [
         _Action(1, 1, 0, _ComputationType.RECV_F, (0,), 0, None, None, 4, None),  # mb0
         _Action(1, 1, 1, _ComputationType.RECV_F, (2,), 0, None, None, 4, None),  # mb2
@@ -108,7 +104,6 @@ def create_pipeline_actions():
         _Action(1, 1, 6, _ComputationType.ALL_REDUCE, None, None, None, None),
     ]
 
-    # Rank 2 (Stage 1) —— 同样给 RECV_F 写 split_parts=4
     rank2_actions = [
         _Action(1, 2, 0, _ComputationType.RECV_F, (1,), 0, None, None, 4, None),  # mb1
         _Action(1, 2, 1, _ComputationType.RECV_F, (3,), 0, None, None, 4, None),  # mb3
