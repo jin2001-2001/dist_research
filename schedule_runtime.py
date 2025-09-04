@@ -51,7 +51,9 @@ _STORE = None
 def _get_store():
     global _STORE
     if _STORE is None:
+        print("初始化")
         _STORE = dist.FileStore("/local/desk/filestore", dist.get_world_size())
+        print("初始化结束")
         #_STORE = _get_default_store()   # Only the first real get
     return _STORE
 
