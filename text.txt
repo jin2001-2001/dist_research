@@ -1,0 +1,60 @@
+[Rank 0] 初始化Redis连接...
+[Rank 0] Redis连接成功
+[0]: batch 0 FORWARD microbatch (0, 1, 2, 3)
+[bw] set enp6s0f1 rate -> 10000 mbit/s
+[0]: batch 0 SEND_F microbatch 0, upstream bandwidth 10000 mbps
+[0]: batch 0 SEND_F microbatch 1, upstream bandwidth 10000 mbps
+
+SEND_F mb 0 chunk 0发送命令已创建
+[0] SEND SEND_F st0 mb0 chunk1 waiting batch_0_done_2_1_c0
+[0] SEND SEND_F st0 mb1 chunk0 waiting batch_0_done_1_0_c0[0]: batch 0 SEND_F microbatch 2, upstream bandwidth 10000 mbps
+
+[0] SEND SEND_F st0 mb2 chunk0 waiting batch_0_done_2_0_c0[0]: batch 0 SEND_F microbatch 3, upstream bandwidth 10000 mbps
+
+[0] SEND SEND_F st0 mb3 chunk0 waiting batch_0_done_1_1_c0[0]: batch 0 RECV_B microbatch 0
+
+[0]: batch 0 RECV_B microbatch 1
+[0] POST RECV_B st0 mb0 chunk0 ops=2
+
+[0] POST RECV_B st0 mb0 chunk1 ops=2
+
+[0]: batch 0 RECV_B microbatch 2
+[0] POST RECV_B st0 mb1 chunk0 ops=2
+
+[0] POST RECV_B st0 mb0 chunk2 ops=2
+
+[0] POST RECV_B st0 mb1 chunk1 ops=2
+
+[0]: batch 0 RECV_B microbatch 3
+[0] POST RECV_B st0 mb2 chunk0 ops=2[0] POST RECV_B st0 mb0 chunk3 ops=2
+[0] POST RECV_B st0 mb1 chunk2 ops=2
+
+
+[0] POST RECV_B st0 mb1 chunk3 ops=2
+
+[0] POST RECV_B st0 mb2 chunk1 ops=2
+
+[0] POST RECV_B st0 mb3 chunk0 ops=2[0]: batch 0 FULL_BACKWARD microbatch (0, 1, 2, 3)
+[0] POST RECV_B st0 mb2 chunk2 ops=2
+
+
+
+[0] POST RECV_B st0 mb3 chunk1 ops=2
+[0] POST RECV_B st0 mb2 chunk3 ops=2
+
+
+[0] POST RECV_B st0 mb3 chunk2 ops=2
+
+[0] POST RECV_B st0 mb3 chunk3 ops=2
+
+
+Done.
+[1]: batch 0 RECV_F microbatch 0
+[1]: batch 0 RECV_F microbatch 2
+[1] POST RECV_F st1 mb0 chunk0 ops=2
+
+[1] RECV RECV_F st1 mb2 chunk0 waiting batch_0_done_1_0_c0[1] RECV RECV_F st1 mb0 chunk1 waiting batch_0_done_1_1_c0[1]: batch 0 FORWARD microbatch (0, 2)
+
+[Rank 1] 初始化Redis连接...
+
+
