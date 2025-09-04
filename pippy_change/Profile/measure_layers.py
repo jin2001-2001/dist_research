@@ -288,8 +288,8 @@ def main():
     }
 
     for i in range(L):
-        metis_result["model"]["parameters_per_layer_bytes"].append(pbytes[i])
-        metis_result["model"]["total_parameters_bytes"]+=pbytes[i]
+        metis_result["model"]["parameters"]["parameters_per_layer_bytes"].append(pbytes[i])
+        metis_result["model"]["parameters"]["total_parameters_bytes"]+=pbytes[i]
         total_parameters += pbytes[i]
 
         metis_result["execution_time"]["layer_compute_total_ms"].append(fwd_times[i]+bwd_times[i])
