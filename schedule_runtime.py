@@ -16,6 +16,7 @@ import os, socket, subprocess, functools, fcntl, tempfile
 ROOT_PASS = None              
 _last_rate = None
 
+import threading
 import torch
 import torch.distributed as dist
 import pipelining_source_code.schedules as schedule
@@ -268,6 +269,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         self.last_backward = False
         self.grad_recv_info_copy = None
         self.last_step_loss = None
+        # 异步 SEND 的 work 容器（按 batch 存），以及互斥锁
+        self._async_send_works = defaultdict(list)   # key: batch_id -> List[List[dist.Work]]
+        self._async_send_lock = threading.Lock()
         
         self._big_fwd_cache: dict[tuple[int, int], tuple[tuple[torch.Tensor, ...], list[torch.Tensor]]] = {}
         
@@ -283,7 +287,48 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         if dist.is_initialized():
             dist.barrier()
         
-        
+    def _spawn_chunked_send_worker(self, *, kind: str, action, ops, plan, chunk_deps,
+                                current_batch: int, stage_idx: int, mb_index: int):
+        """
+        在独立线程中执行：
+        for chunk in plan:
+            等待依赖(如果有) -> batch_isend_irecv(sub_ops) -> 把 works 放入 self._async_send_works[current_batch+1]
+            （可选）record_async 仅用于日志 (chunk_idx=None)，避免误写完成标记
+        """
+        assert kind in ("SEND_F", "SEND_B")
+        schedule = self  # 方便闭包里用
+
+        def worker():
+            pos = 0
+            for chunk_idx, cnt in enumerate(plan):
+                if cnt <= 0:
+                    continue
+                sub_ops = ops[pos:pos+cnt]; pos += cnt
+
+                # 只允许 SEND 依赖 RECV 的 chunk 完成
+                if chunk_deps and chunk_idx in chunk_deps:
+                    for (dep_rank, dep_action_id, dep_chunk) in chunk_deps[chunk_idx]:
+                        _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
+
+                # 提交该 chunk 的发送
+                works_k = schedule._batch_p2p(sub_ops)
+
+                # 记录到异步容器，批尾统一等待
+                with schedule._async_send_lock:
+                    schedule._async_send_works[current_batch+1].append(works_k)
+
+                # （可选）如果你也想记录发送侧 chunk 的时间线，可解开下面注释
+                # start_ns_k = time.time_ns()
+                # schedule._rec.record_async(current_batch+1, action.id, kind, stage_idx, mb_index,
+                #                            works_k, start_ns_k, chunk_idx=None)  # 注意 None：不写 mark_done_chunk
+
+        t = threading.Thread(
+            target=worker, name=f"{kind}_st{stage_idx}_mb{mb_index}_b{current_batch+1}", daemon=True
+        )
+        t.start()
+
+    
+    
     def _maybe_compute_loss(self, stage, output, target_mbs, mb_index):
         if stage.is_last and self._has_backward:
             loss = self._compute_loss(output, target_mbs[mb_index])  # type: ignore[index]
@@ -540,27 +585,46 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     else:
                         print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}")
                     
-                    num_splits = action.split_parts or 1
+                    # num_splits = action.split_parts or 1
 
+                    # ops = (
+                    #     stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
+                    #     if rank is not None and dest_rank is not None
+                    #     else stage.get_fwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
+                    # )
+                    # # 读取 stage 填写的计划（每块的 op 数）
+                    # plan = stage._last_comm_plan.get(("SEND_F", mb_index), [len(ops)])  # 后备：一整块
+                    # pos = 0
+                    # for chunk_idx, cnt in enumerate(plan):
+                    #     sub_ops = ops[pos:pos+cnt]; pos += cnt
+
+                    #     # === 二级依赖：只允许依赖 RECV_* 的“分块完成” ===
+                    #     if action.chunk_deps and chunk_idx in action.chunk_deps:
+                    #         for (dep_rank, dep_action_id, dep_chunk) in action.chunk_deps[chunk_idx]:
+                    #             _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
+
+                    #     # [SEND-GATE] 你的阻塞/整形逻辑可继续写在 stage 的 send 循环里（不冲突）
+                    #     works_k = schedule._batch_p2p(sub_ops)
+                    #     send_ops.append(works_k)
+                    num_splits = action.split_parts or 1
                     ops = (
                         stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
                         if rank is not None and dest_rank is not None
                         else stage.get_fwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
                     )
-                    # 读取 stage 填写的计划（每块的 op 数）
-                    plan = stage._last_comm_plan.get(("SEND_F", mb_index), [len(ops)])  # 后备：一整块
-                    pos = 0
-                    for chunk_idx, cnt in enumerate(plan):
-                        sub_ops = ops[pos:pos+cnt]; pos += cnt
+                    plan = stage._last_comm_plan.get(("SEND_F", mb_index), [len(ops)])
 
-                        # === 二级依赖：只允许依赖 RECV_* 的“分块完成” ===
-                        if action.chunk_deps and chunk_idx in action.chunk_deps:
-                            for (dep_rank, dep_action_id, dep_chunk) in action.chunk_deps[chunk_idx]:
-                                _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
+                    # 带宽限速的设置仍在主线程做（如果你这里有 _tc_set_rate）
+                    # self._tc_set_rate(action.upstream)  # 若你已有这行，保留；没有可忽略
 
-                        # [SEND-GATE] 你的阻塞/整形逻辑可继续写在 stage 的 send 循环里（不冲突）
-                        works_k = schedule._batch_p2p(sub_ops)
-                        send_ops.append(works_k)
+                    # 起线程，里面按 chunk 等依赖 -> 发送 -> 落 self._async_send_works
+                    self._spawn_chunked_send_worker(
+                        kind="SEND_F", action=action, ops=ops, plan=plan, chunk_deps=(action.chunk_deps or {}),
+                        current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index
+                    )
+
+
+                    
 
                 elif comp_type == SEND_B:
                     _tc_set_rate(action.upstream)
@@ -569,24 +633,39 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     else:
                         print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_B microbatch {mb_index}")
                     
-                    num_splits = action.split_parts or 1
+                    # num_splits = action.split_parts or 1
 
+                    # ops = (
+                    #     stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
+                    #     if rank is not None and dest_rank is not None
+                    #     else stage.get_bwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
+                    # )
+                    # plan = stage._last_comm_plan.get(("SEND_B", mb_index), [len(ops)])
+                    # pos = 0
+                    # for chunk_idx, cnt in enumerate(plan):
+                    #     sub_ops = ops[pos:pos+cnt]; pos += cnt
+
+                    #     if action.chunk_deps and chunk_idx in action.chunk_deps:
+                    #         for (dep_rank, dep_action_id, dep_chunk) in action.chunk_deps[chunk_idx]:
+                    #             _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
+
+                    #     works_k = schedule._batch_p2p(sub_ops)
+                    #     send_ops.append(works_k)
+                    num_splits = action.split_parts or 1
                     ops = (
                         stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
                         if rank is not None and dest_rank is not None
                         else stage.get_bwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
                     )
                     plan = stage._last_comm_plan.get(("SEND_B", mb_index), [len(ops)])
-                    pos = 0
-                    for chunk_idx, cnt in enumerate(plan):
-                        sub_ops = ops[pos:pos+cnt]; pos += cnt
 
-                        if action.chunk_deps and chunk_idx in action.chunk_deps:
-                            for (dep_rank, dep_action_id, dep_chunk) in action.chunk_deps[chunk_idx]:
-                                _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
+                    # self._tc_set_rate(action.upstream)  # 若你在 SEND_B 也有带宽设置，保留
 
-                        works_k = schedule._batch_p2p(sub_ops)
-                        send_ops.append(works_k)
+                    self._spawn_chunked_send_worker(
+                        kind="SEND_B", action=action, ops=ops, plan=plan, chunk_deps=(action.chunk_deps or {}),
+                        current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index
+)
+
 
 
 
@@ -932,6 +1011,13 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
        
         while len(send_ops):
             schedule._wait_batch_p2p(send_ops.pop())
+        
+        # 也回收异步 SEND 的 works
+        with self._async_send_lock:
+            async_list = self._async_send_works.pop(current_batch+1, [])
+        for works_k in async_list:
+            schedule._wait_batch_p2p(works_k)
+
 
         assert len(unshard_ops) == 0, "Unused unshard operations"
 
