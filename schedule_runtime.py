@@ -667,10 +667,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     continue
                 sub_ops = ops[pos:pos+cnt]; pos += cnt
 
-                # ========= 新增：RECV 侧也按 chunk 等依赖 =========
                 if chunk_deps and chunk_idx in chunk_deps:
                     for (dep_rank, dep_action_id, dep_chunk) in chunk_deps[chunk_idx]:
-                        # 防呆：避免“等自己同一 chunk”导致死锁
                         if (dep_rank == dist.get_rank() and dep_action_id == action_id and dep_chunk == chunk_idx):
                             print(f"[{dist.get_rank()}] WARNING: {kind} st{stage_idx} mb{mb_index} chunk{chunk_idx} "
                                 f"has self-dependency; skip waiting to avoid deadlock")
@@ -686,27 +684,22 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             raise
                         print(f"[{dist.get_rank()}] RECV {kind} st{stage_idx} mb{mb_index} "
                             f"chunk{chunk_idx} dep OK: {dep_key}")
-                # ===============================================
 
-                # 立即 post 该 chunk 的 irecv
                 works_k = schedule._batch_p2p(sub_ops)
                 print(f"[{dist.get_rank()}] POST {kind} st{stage_idx} mb{mb_index} chunk{chunk_idx} ops={len(works_k)}")
 
-                # 记录到异步容器
                 with self._async_recv_lock:
                     if kind == "RECV_F":
                         self._fwd_recv_works.setdefault(key, []).extend(works_k)
                     else:
                         self._bwd_recv_works.setdefault(key, []).extend(works_k)
 
-                # 逐 chunk 记录（完成后 _mark_done_chunk，供对端 SEND/RECV 的 chunk 依赖等待）
                 start_ns_k = time.time_ns()
                 self._rec.record_async(
                     current_batch+1, action.id, kind, stage_idx, mb_index,
                     works_k, start_ns_k, chunk_idx=chunk_idx
                 )
 
-            # 全部 chunk 的 irecv 都已 post
             with self._async_recv_lock:
                 ev = self._fwd_recv_posted.get(key) if kind == "RECV_F" else self._bwd_recv_posted.get(key)
             if ev is not None:
