@@ -16,7 +16,7 @@ def generate_1f1b_pipeline_actions(num_stages: int, num_microbatches: int, upstr
         # [stage],[rank],[id],[action type],[microbatch],[dest_rank],[upstream],[dependency]
         def make_action(stage, rank, type_, mb, dest):
             nonlocal local_id
-            a = _Action(stage, rank, local_id, type_, mb, dest, upstream, None)
+            a = _Action(stage, rank, local_id, type_, mb, dest, upstream, None, 4)
             local_id += 1
             return a
 
