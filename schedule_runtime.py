@@ -96,9 +96,20 @@ def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: i
     store = _get_store()
     if timeout is None:
         if key == "batch_0_done_2_0_c0":
-            print("正在等batch_0_done_2_0_c0")
-        time.sleep(10)
-        print(store)
+            import threading, time
+
+            def monitor_store():
+                while True:
+                    # 输出 store 里所有 key
+                    try:
+                        print("当前 store keys:", list(store.keys()))
+                    except Exception as e:
+                        print("读取 store 出错:", e)
+                    time.sleep(1)  # 每 1 秒打印一次
+
+            # 启动一个后台线程来打印
+            t = threading.Thread(target=monitor_store, daemon=True)
+            t.start()
         store.wait([key])
     else:
         start = time.time()
