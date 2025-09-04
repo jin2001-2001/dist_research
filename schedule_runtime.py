@@ -146,8 +146,9 @@ import pickle  # 用于序列化复杂对象
 _REDIS_CLIENT = None
 _REDIS_PUBSUB = None
 _REDIS_LOCK = threading.Lock()
-
+KEY_EXPIRE_TIME = 3600  # 1小时
 # Redis 配置
+# ---- 原来的 REDIS_CONFIG（有 connection_pool_kwargs 嵌套）删掉这层嵌套 ----
 REDIS_CONFIG = {
     'host': os.environ.get('REDIS_HOST', 'localhost'),
     'port': int(os.environ.get('REDIS_PORT', 6379)),
@@ -155,30 +156,40 @@ REDIS_CONFIG = {
     'password': os.environ.get('REDIS_PASSWORD', None),
     'socket_connect_timeout': 5,
     'socket_timeout': 5,
-    'connection_pool_kwargs': {
-        'max_connections': 100,
-        'socket_keepalive': True,
-        'socket_keepalive_options': {
-            1: 1,  # TCP_KEEPIDLE
-            2: 1,  # TCP_KEEPINTVL  
-            3: 3,  # TCP_KEEPCNT
-        }
-    }
+    # 'connection_pool_kwargs': {...}  # <- 删除这层
 }
 
-# 键的过期时间（秒）
-KEY_EXPIRE_TIME = 3600  # 1小时
-
 def _get_redis_client():
-    """获取或创建Redis客户端"""
     global _REDIS_CLIENT
     if _REDIS_CLIENT is None:
         with _REDIS_LOCK:
             if _REDIS_CLIENT is None:
                 print(f"[Rank {dist.get_rank()}] 初始化Redis连接...")
-                pool = redis.ConnectionPool(**REDIS_CONFIG)
-                _REDIS_CLIENT = redis.Redis(connection_pool=pool, decode_responses=False)
-                # 测试连接
+
+                # 从 REDIS_CONFIG 取出基本连接参数
+                pool = redis.ConnectionPool(
+                    host=REDIS_CONFIG['host'],
+                    port=REDIS_CONFIG['port'],
+                    db=REDIS_CONFIG['db'],
+                    password=REDIS_CONFIG['password'],
+                    socket_connect_timeout=REDIS_CONFIG['socket_connect_timeout'],
+                    socket_timeout=REDIS_CONFIG['socket_timeout'],
+                    # 这些是 ConnectionPool 的顶层参数，不要再放在自定义 dict 里
+                    max_connections=100,
+                    socket_keepalive=True,
+                    # 建议用 socket 常量（Linux: TCP_KEEPIDLE/TCP_KEEPINTVL/TCP_KEEPCNT）
+                    socket_keepalive_options={
+                        getattr(socket, "TCP_KEEPIDLE", 1): 1,
+                        getattr(socket, "TCP_KEEPINTVL", 2): 1,
+                        getattr(socket, "TCP_KEEPCNT", 3): 3,
+                    },
+                )
+                _REDIS_CLIENT = redis.Redis(
+                    connection_pool=pool,
+                    decode_responses=False,
+                    retry_on_timeout=True,
+                )
+
                 try:
                     _REDIS_CLIENT.ping()
                     print(f"[Rank {dist.get_rank()}] Redis连接成功")
@@ -186,6 +197,7 @@ def _get_redis_client():
                     print(f"[Rank {dist.get_rank()}] Redis连接失败: {e}")
                     raise
     return _REDIS_CLIENT
+
 
 def _get_pubsub():
     """获取Redis的发布订阅对象"""
