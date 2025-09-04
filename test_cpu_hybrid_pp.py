@@ -90,10 +90,10 @@ def create_pipeline_actions():
             None
         ),
 
-        _Action(0, 0, 5, _ComputationType.RECV_B, (0,), 1, None, None),
-        _Action(0, 0, 6, _ComputationType.RECV_B, (1,), 2, None, None),
-        _Action(0, 0, 7, _ComputationType.RECV_B, (2,), 1, None, None),
-        _Action(0, 0, 8, _ComputationType.RECV_B, (3,), 2, None, None),
+        _Action(0, 0, 5, _ComputationType.RECV_B, (0,), 1, None, None, 4, None),
+        _Action(0, 0, 6, _ComputationType.RECV_B, (1,), 2, None, None, 4, None),
+        _Action(0, 0, 7, _ComputationType.RECV_B, (2,), 1, None, None, 4, None),
+        _Action(0, 0, 8, _ComputationType.RECV_B, (3,), 2, None, None, 4, None),
 
         _Action(0, 0, 9, _ComputationType.FULL_BACKWARD, (0,1,2,3), None, None, None),
     ]
@@ -118,8 +118,8 @@ def create_pipeline_actions():
                 ),  # mb2
         _Action(1, 1, 2, _ComputationType.FORWARD, (0,2), None, None, None),
         _Action(1, 1, 3, _ComputationType.FULL_BACKWARD, (0,2), None, None, None),
-        _Action(1, 1, 4, _ComputationType.SEND_B, (0,), 0, 10000, None),
-        _Action(1, 1, 5, _ComputationType.SEND_B, (2,), 0, 10000, None),
+        _Action(1, 1, 4, _ComputationType.SEND_B, (0,), 0, 10000, None, 4, None),
+        _Action(1, 1, 5, _ComputationType.SEND_B, (2,), 0, 10000, None, 4, None),
         _Action(1, 1, 6, _ComputationType.ALL_REDUCE, None, None, None, None),
     ]
 
@@ -128,8 +128,8 @@ def create_pipeline_actions():
         _Action(1, 2, 1, _ComputationType.RECV_F, (3,), 0, None, None, 4, None),  # mb3
         _Action(1, 2, 2, _ComputationType.FORWARD, (1,3), None, None, None),
         _Action(1, 2, 3, _ComputationType.FULL_BACKWARD, (1,3), None, None, None),
-        _Action(1, 2, 4, _ComputationType.SEND_B, (1,), 0, 10000, None),
-        _Action(1, 2, 5, _ComputationType.SEND_B, (3,), 0, 10000, None),
+        _Action(1, 2, 4, _ComputationType.SEND_B, (1,), 0, 10000, None, 4, None),
+        _Action(1, 2, 5, _ComputationType.SEND_B, (3,), 0, 10000, None, 4, None),
         _Action(1, 2, 6, _ComputationType.ALL_REDUCE, None, None, None, None),
     ]
 
