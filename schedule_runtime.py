@@ -106,7 +106,9 @@ def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: i
     if timeout is None:
         if key == "batch_0_done_2_0_c0":
             time.sleep(5)
-            print(f"✅✅✅ {store.get("batch_0_done_2_0_c0")}")
+            val = store.get("batch_0_done_2_0_c0")
+            print(f"✅✅✅ {val}")
+
             import threading, time
             from datetime import timedelta
             def monitor_key(store, key):
