@@ -86,7 +86,9 @@ def _wait_remote_id(batch_id: int, owner_rank: int, dep_id: int, timeout: float 
                     raise TimeoutError(f"wait_remote_id timeout on {key}")
 
 def _mark_done_chunk(batch_id: int, action_id: int, chunk_idx: int):
+    
     key = f"batch_{batch_id}_done_{dist.get_rank()}_{action_id}_c{chunk_idx}"
+    print(f"已经做完了 {key}")
     _get_store().set(key, b"1")
 
 def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: int, timeout: float | None = None):
