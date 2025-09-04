@@ -114,7 +114,9 @@ class Recorder:
     ):
         if not self.enabled:
             return
-
+        
+        print("开始计时")
+        
         need_net = self.measure_net and action in self.net_actions
         samples, stop_evt = [], threading.Event()
 
