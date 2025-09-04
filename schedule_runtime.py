@@ -58,7 +58,7 @@ def _get_store():
     global _STORE
     if _STORE is None:
         print("初始化")
-        _STORE = dist.TCPStore(master_addr, master_port, world_size, start_daemon)
+        _STORE = dist.FileStore("/local/desk/rdzv_file", world_size=3)
         print("初始化结束")
         #_STORE = _get_default_store()   # Only the first real get
     return _STORE
