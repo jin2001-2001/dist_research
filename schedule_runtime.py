@@ -593,10 +593,65 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         if dist.is_initialized():
             dist.barrier()
     
-    def _spawn_chunked_recv_worker(self, *, kind: str, action, ops, plan, current_batch: int, stage_idx: int, mb_index: int, action_id: int):
+    # def _spawn_chunked_recv_worker(self, *, kind: str, action, ops, plan, current_batch: int, stage_idx: int, mb_index: int, action_id: int):
+    #     """
+    #     在独立线程中执行：
+    #     for chunk in plan:
+    #         立即 post 该 chunk 的 irecv (batch_isend_irecv) -> 得到 works_k
+    #         将 works_k 追加进对应 key 的 works 列表
+    #         recorder.record_async(..., chunk_idx=chunk_idx) 异步轮询完成，并 _mark_done_chunk
+    #     循环结束 → 置位 “已全部 post 完成” 的 Event
+    #     """
+    #     assert kind in ("RECV_F", "RECV_B")
+    #     key = (stage_idx, mb_index)
+
+    #     def worker():
+    #         pos = 0
+    #         for chunk_idx, cnt in enumerate(plan):
+    #             if cnt <= 0:
+    #                 continue
+    #             sub_ops = ops[pos:pos+cnt]; pos += cnt
+
+    #             # 立即 post 该 chunk 的 irecv
+    #             works_k = schedule._batch_p2p(sub_ops)
+    #             print(f"[{dist.get_rank()}] POST {kind} st{stage_idx} mb{mb_index} "
+    #                     f"chunk{chunk_idx} ops={len(works_k)}")
+                
+    #             # 记录到异步容器
+    #             with self._async_recv_lock:
+    #                 if kind == "RECV_F":
+    #                     self._fwd_recv_works.setdefault(key, []).extend(works_k)
+    #                 else:
+    #                     self._bwd_recv_works.setdefault(key, []).extend(works_k)
+
+    #             # 逐 chunk 记录（完成后 _mark_done_chunk，供 SEND 的 chunk 依赖等待）
+    #             start_ns_k = time.time_ns()
+    #             self._rec.record_async(
+    #                 current_batch+1, action_id, kind, stage_idx, mb_index,
+    #                 works_k, start_ns_k, chunk_idx=chunk_idx
+    #             )
+
+    #         # 全部 chunk 的 irecv 都已 post
+    #         with self._async_recv_lock:
+    #             if kind == "RECV_F":
+    #                 ev = self._fwd_recv_posted.get(key)
+    #             else:
+    #                 ev = self._bwd_recv_posted.get(key)
+    #         if ev is not None:
+    #             ev.set()
+
+    #     t = threading.Thread(
+    #         target=worker, name=f"{kind}_st{stage_idx}_mb{mb_index}_b{current_batch+1}", daemon=True
+    #     )
+    #     t.start()
+    
+    def _spawn_chunked_recv_worker(self, *, kind: str, action, ops, plan,
+                               chunk_deps,   # 新增：按 chunk 的依赖字典 {chunk_idx: [(dep_rank, dep_action_id, dep_chunk), ...], ...}
+                               current_batch: int, stage_idx: int, mb_index: int, action_id: int):
         """
         在独立线程中执行：
         for chunk in plan:
+            （可选）等待依赖(如果有) ->
             立即 post 该 chunk 的 irecv (batch_isend_irecv) -> 得到 works_k
             将 works_k 追加进对应 key 的 works 列表
             recorder.record_async(..., chunk_idx=chunk_idx) 异步轮询完成，并 _mark_done_chunk
@@ -612,11 +667,31 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     continue
                 sub_ops = ops[pos:pos+cnt]; pos += cnt
 
+                # ========= 新增：RECV 侧也按 chunk 等依赖 =========
+                if chunk_deps and chunk_idx in chunk_deps:
+                    for (dep_rank, dep_action_id, dep_chunk) in chunk_deps[chunk_idx]:
+                        # 防呆：避免“等自己同一 chunk”导致死锁
+                        if (dep_rank == dist.get_rank() and dep_action_id == action_id and dep_chunk == chunk_idx):
+                            print(f"[{dist.get_rank()}] WARNING: {kind} st{stage_idx} mb{mb_index} chunk{chunk_idx} "
+                                f"has self-dependency; skip waiting to avoid deadlock")
+                            continue
+                        dep_key = f"batch_{current_batch+1}_done_{dep_rank}_{dep_action_id}_c{dep_chunk}"
+                        print(f"[{dist.get_rank()}] RECV {kind} st{stage_idx} mb{mb_index} "
+                            f"chunk{chunk_idx} waiting {dep_key}")
+                        try:
+                            _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
+                        except TimeoutError:
+                            print(f"[{dist.get_rank()}] TIMEOUT waiting {dep_key} "
+                                f"(check remote chunk completion)")
+                            raise
+                        print(f"[{dist.get_rank()}] RECV {kind} st{stage_idx} mb{mb_index} "
+                            f"chunk{chunk_idx} dep OK: {dep_key}")
+                # ===============================================
+
                 # 立即 post 该 chunk 的 irecv
                 works_k = schedule._batch_p2p(sub_ops)
-                print(f"[{dist.get_rank()}] POST {kind} st{stage_idx} mb{mb_index} "
-                        f"chunk{chunk_idx} ops={len(works_k)}")
-                
+                print(f"[{dist.get_rank()}] POST {kind} st{stage_idx} mb{mb_index} chunk{chunk_idx} ops={len(works_k)}")
+
                 # 记录到异步容器
                 with self._async_recv_lock:
                     if kind == "RECV_F":
@@ -624,19 +699,16 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     else:
                         self._bwd_recv_works.setdefault(key, []).extend(works_k)
 
-                # 逐 chunk 记录（完成后 _mark_done_chunk，供 SEND 的 chunk 依赖等待）
+                # 逐 chunk 记录（完成后 _mark_done_chunk，供对端 SEND/RECV 的 chunk 依赖等待）
                 start_ns_k = time.time_ns()
                 self._rec.record_async(
-                    current_batch+1, action_id, kind, stage_idx, mb_index,
+                    current_batch+1, action.id, kind, stage_idx, mb_index,
                     works_k, start_ns_k, chunk_idx=chunk_idx
                 )
 
             # 全部 chunk 的 irecv 都已 post
             with self._async_recv_lock:
-                if kind == "RECV_F":
-                    ev = self._fwd_recv_posted.get(key)
-                else:
-                    ev = self._bwd_recv_posted.get(key)
+                ev = self._fwd_recv_posted.get(key) if kind == "RECV_F" else self._bwd_recv_posted.get(key)
             if ev is not None:
                 ev.set()
 
@@ -644,6 +716,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
             target=worker, name=f"{kind}_st{stage_idx}_mb{mb_index}_b{current_batch+1}", daemon=True
         )
         t.start()
+
 
     
     def _spawn_chunked_send_worker(self, *, kind: str, action, ops, plan, chunk_deps,
@@ -1083,6 +1156,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     # 启动接收线程
                     self._spawn_chunked_recv_worker(
                         kind="RECV_F", action=action, ops=ops, plan=plan,
+                        chunk_deps=(action.chunk_deps or {}),   # ← 新增
                         current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index, action_id=action_id
                     )
 
@@ -1129,8 +1203,10 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
                     self._spawn_chunked_recv_worker(
                         kind="RECV_B", action=action, ops=ops, plan=plan,
+                        chunk_deps=(action.chunk_deps or {}),   # ← 新增
                         current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index, action_id=action_id
                     )
+
 
 
 

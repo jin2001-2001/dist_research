@@ -95,8 +95,23 @@ def create_pipeline_actions():
     ]
 
     rank1_actions = [
-        _Action(1, 1, 0, _ComputationType.RECV_F, (0,), 0, None, None, 4, None),  # mb0
-        _Action(1, 1, 1, _ComputationType.RECV_F, (2,), 0, None, None, 4, None),  # mb2
+        _Action(1, 1, 0, _ComputationType.RECV_F, (0,), 0, None, None, 4, 
+                {
+                # 1.k <- 0.k
+                1: [(1, 1, 0)],
+                2: [(1, 1, 1)],
+                3: [(1, 1, 2)],
+            }
+                ),  # mb0
+        _Action(1, 1, 1, _ComputationType.RECV_F, (2,), 0, None, None, 4, 
+                {
+                # 1.k <- 0.k
+                0: [(1, 0, 0)],
+                1: [(1, 0, 1)],
+                2: [(1, 0, 2)],
+                3: [(1, 0, 3)],
+            }
+                ),  # mb2
         _Action(1, 1, 2, _ComputationType.FORWARD, (0,2), None, None, None),
         _Action(1, 1, 3, _ComputationType.FULL_BACKWARD, (0,2), None, None, None),
         _Action(1, 1, 4, _ComputationType.SEND_B, (0,), 0, 10000, None),
