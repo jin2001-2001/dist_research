@@ -49,93 +49,350 @@ _EXEC_DONE: Set[int] = set()
 
 _STORE = None
 
-master_addr = os.environ.get("MASTER_ADDR", "10.10.0.2")  # 你的主节点IP
+# master_addr = os.environ.get("MASTER_ADDR", "10.10.0.2")  # 你的主节点IP
+# master_port = 29501
+# world_size = int(os.environ["WORLD_SIZE"])
+# rank = int(os.environ["RANK"])
+# start_daemon = (rank == 0)
+# def _get_store():
+#     global _STORE
+#     if _STORE is None:
+#         print("初始化")
+#         _STORE = dist.FileStore("/local/desk/rdzv_file", world_size=dist.get_world_size)
+#         print("初始化结束")
+#         #_STORE = _get_default_store()   # Only the first real get
+#     return _STORE
+
+# def _reset_exec_done():
+#     _EXEC_DONE.clear()
+
+# def _mark_done(batch_id: int, action_id: int | None):
+#     if action_id is not None:
+#         _EXEC_DONE.add(action_id)
+#         key = f"batch_{batch_id}_done_{dist.get_rank()}_{action_id}"
+#         _get_store().set(key, b"1")
+
+
+# def _has_done(action_id: int) -> bool:
+#     return action_id in _EXEC_DONE
+
+# def _wait_remote_id(batch_id: int, owner_rank: int, dep_id: int, timeout: float | None = None):
+#     """
+#     Only block the current rank; Wait for owner_rank to mark dep_id as completed.
+#     """
+#     key = f"batch_{batch_id}_done_{owner_rank}_{dep_id}"
+#     store = _get_store()
+#     if timeout is None:
+#         store.wait([key])      
+#     else:
+#         start = time.time()
+#         while True:
+#             try:
+#                 store.get([key])
+#                 break
+#             except RuntimeError:
+#                 if time.time() - start > timeout:
+#                     raise TimeoutError(f"wait_remote_id timeout on {key}")
+
+# def _mark_done_chunk(batch_id: int, action_id: int, chunk_idx: int):
+    
+#     key = f"batch_{batch_id}_done_{dist.get_rank()}_{action_id}_c{chunk_idx}"
+#     print(f"已经做完了 {key}")
+#     _get_store().set(key, b"2")
+
+# def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: int, timeout: float | None = None):
+#     key = f"batch_{batch_id}_done_{owner_rank}_{dep_id}_c{dep_chunk}"
+#     store = _get_store()
+#     if timeout is None:
+#         if key == "batch_0_done_2_0_c0":
+#             val = store.get("batch_0_done_2_0_c0")
+#             print(f"✅✅✅ {val}")
+
+#             import threading, time
+#             from datetime import timedelta
+#             def monitor_key(store, key):
+#                 import time
+#                 while True:
+#                     try:
+#                         print("开始查询")
+#                         # 等待 0.1 秒，如果超时说明 key 不存在
+#                         store.wait([key])
+#                         print(f"{key} 已存在")
+#                     except RuntimeError:
+#                         print(f"{key} 不存在")
+#                     time.sleep(1)  # 每秒检查一次
+
+
+#             # 启动一个后台线程来打印
+#             t = threading.Thread(target=monitor_key, args=(store, key), daemon=True)
+#             t.start()
+#         store.wait([key])
+#     else:
+#         start = time.time()
+#         while True:
+#             try:
+#                 store.wait([key], timeout=timeout)
+#                 break
+#             except RuntimeError:
+#                 if time.time() - start > timeout:
+#                     raise TimeoutError(f"wait_remote_chunk timeout on {key}")
+
+
+import redis
+from redis.exceptions import ConnectionError, TimeoutError as RedisTimeoutError
+import pickle  # 用于序列化复杂对象
+
+# ==================== Redis Store 实现 ====================
+_REDIS_CLIENT = None
+_REDIS_PUBSUB = None
+_REDIS_LOCK = threading.Lock()
+
+# Redis 配置
+REDIS_CONFIG = {
+    'host': os.environ.get('REDIS_HOST', 'localhost'),
+    'port': int(os.environ.get('REDIS_PORT', 6379)),
+    'db': int(os.environ.get('REDIS_DB', 0)),
+    'password': os.environ.get('REDIS_PASSWORD', None),
+    'socket_connect_timeout': 5,
+    'socket_timeout': 5,
+    'connection_pool_kwargs': {
+        'max_connections': 100,
+        'socket_keepalive': True,
+        'socket_keepalive_options': {
+            1: 1,  # TCP_KEEPIDLE
+            2: 1,  # TCP_KEEPINTVL  
+            3: 3,  # TCP_KEEPCNT
+        }
+    }
+}
+
+# 键的过期时间（秒）
+KEY_EXPIRE_TIME = 3600  # 1小时
+
+master_addr = os.environ.get("MASTER_ADDR", "10.10.0.2")
 master_port = 29501
 world_size = int(os.environ["WORLD_SIZE"])
 rank = int(os.environ["RANK"])
 start_daemon = (rank == 0)
-def _get_store():
-    global _STORE
-    if _STORE is None:
-        print("初始化")
-        _STORE = dist.FileStore("/local/desk/rdzv_file", world_size=3)
-        print("初始化结束")
-        #_STORE = _get_default_store()   # Only the first real get
-    return _STORE
+
+def _get_redis_client():
+    """获取或创建Redis客户端"""
+    global _REDIS_CLIENT
+    if _REDIS_CLIENT is None:
+        with _REDIS_LOCK:
+            if _REDIS_CLIENT is None:
+                print(f"[Rank {dist.get_rank()}] 初始化Redis连接...")
+                pool = redis.ConnectionPool(**REDIS_CONFIG)
+                _REDIS_CLIENT = redis.Redis(connection_pool=pool, decode_responses=False)
+                # 测试连接
+                try:
+                    _REDIS_CLIENT.ping()
+                    print(f"[Rank {dist.get_rank()}] Redis连接成功")
+                except ConnectionError as e:
+                    print(f"[Rank {dist.get_rank()}] Redis连接失败: {e}")
+                    raise
+    return _REDIS_CLIENT
+
+def _get_pubsub():
+    """获取Redis的发布订阅对象"""
+    global _REDIS_PUBSUB
+    if _REDIS_PUBSUB is None:
+        with _REDIS_LOCK:
+            if _REDIS_PUBSUB is None:
+                client = _get_redis_client()
+                _REDIS_PUBSUB = client.pubsub()
+    return _REDIS_PUBSUB
 
 def _reset_exec_done():
+    """重置本地执行完成集合"""
     _EXEC_DONE.clear()
+    # 可选：清理Redis中的旧键
+    if dist.get_rank() == 0:
+        client = _get_redis_client()
+        # 清理上一批次的键（使用模式匹配）
+        pattern = f"batch_*_done_*"
+        for key in client.scan_iter(match=pattern, count=1000):
+            client.delete(key)
 
 def _mark_done(batch_id: int, action_id: int | None):
+    """标记action完成"""
     if action_id is not None:
         _EXEC_DONE.add(action_id)
         key = f"batch_{batch_id}_done_{dist.get_rank()}_{action_id}"
-        _get_store().set(key, b"1")
-
+        client = _get_redis_client()
+        
+        # 设置键值并设置过期时间
+        client.setex(key, KEY_EXPIRE_TIME, b"1")
+        
+        # 发布完成事件（用于通知等待的进程）
+        channel = f"done_channel_{batch_id}_{dist.get_rank()}_{action_id}"
+        client.publish(channel, b"1")
 
 def _has_done(action_id: int) -> bool:
+    """检查action是否已完成（本地）"""
     return action_id in _EXEC_DONE
 
 def _wait_remote_id(batch_id: int, owner_rank: int, dep_id: int, timeout: float | None = None):
     """
-    Only block the current rank; Wait for owner_rank to mark dep_id as completed.
+    等待远程rank标记dep_id完成
+    使用Redis的发布订阅机制实现高效等待
     """
     key = f"batch_{batch_id}_done_{owner_rank}_{dep_id}"
-    store = _get_store()
+    client = _get_redis_client()
+    
+    # 首先检查键是否已存在
+    if client.exists(key):
+        return
+    
     if timeout is None:
-        store.wait([key])      
+        # 无超时等待 - 使用发布订阅
+        channel = f"done_channel_{batch_id}_{owner_rank}_{dep_id}"
+        pubsub = client.pubsub()
+        pubsub.subscribe(channel)
+        
+        try:
+            # 再次检查（避免竞态条件）
+            if client.exists(key):
+                return
+                
+            # 等待消息
+            for message in pubsub.listen():
+                if message['type'] == 'message':
+                    break
+        finally:
+            pubsub.unsubscribe(channel)
+            pubsub.close()
     else:
+        # 带超时的等待 - 使用轮询
         start = time.time()
+        poll_interval = 0.001  # 1ms轮询间隔
+        
         while True:
-            try:
-                store.get([key])
-                break
-            except RuntimeError:
-                if time.time() - start > timeout:
-                    raise TimeoutError(f"wait_remote_id timeout on {key}")
+            if client.exists(key):
+                return
+            
+            if time.time() - start > timeout:
+                raise TimeoutError(f"wait_remote_id timeout on {key}")
+            
+            time.sleep(poll_interval)
+            # 逐渐增加轮询间隔，减少CPU使用
+            poll_interval = min(poll_interval * 1.5, 0.1)
 
 def _mark_done_chunk(batch_id: int, action_id: int, chunk_idx: int):
-    
+    """标记chunk完成"""
     key = f"batch_{batch_id}_done_{dist.get_rank()}_{action_id}_c{chunk_idx}"
     print(f"已经做完了 {key}")
-    _get_store().set(key, b"2")
+    
+    client = _get_redis_client()
+    client.setex(key, KEY_EXPIRE_TIME, b"2")
+    
+    # 发布chunk完成事件
+    channel = f"chunk_channel_{batch_id}_{dist.get_rank()}_{action_id}_{chunk_idx}"
+    client.publish(channel, b"2")
 
 def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: int, timeout: float | None = None):
+    """等待远程chunk完成"""
     key = f"batch_{batch_id}_done_{owner_rank}_{dep_id}_c{dep_chunk}"
-    store = _get_store()
-    if timeout is None:
-        if key == "batch_0_done_2_0_c0":
-            val = store.get("batch_0_done_2_0_c0")
+    client = _get_redis_client()
+    
+    # 特殊调试代码（保留原有逻辑）
+    if key == "batch_0_done_2_0_c0":
+        val = client.get(key)
+        if val:
             print(f"✅✅✅ {val}")
-
-            import threading, time
-            from datetime import timedelta
-            def monitor_key(store, key):
-                import time
-                while True:
-                    try:
-                        print("开始查询")
-                        # 等待 0.1 秒，如果超时说明 key 不存在
-                        store.wait([key])
+        
+        # 启动监控线程
+        def monitor_key(client, key):
+            import time
+            while True:
+                try:
+                    print("开始查询")
+                    if client.exists(key):
                         print(f"{key} 已存在")
-                    except RuntimeError:
+                    else:
                         print(f"{key} 不存在")
-                    time.sleep(1)  # 每秒检查一次
-
-
-            # 启动一个后台线程来打印
-            t = threading.Thread(target=monitor_key, args=(store, key), daemon=True)
-            t.start()
-        store.wait([key])
+                except Exception as e:
+                    print(f"查询错误: {e}")
+                time.sleep(1)
+        
+        t = threading.Thread(target=monitor_key, args=(client, key), daemon=True)
+        t.start()
+    
+    # 首先检查键是否已存在
+    if client.exists(key):
+        return
+    
+    if timeout is None:
+        # 无超时等待 - 使用发布订阅
+        channel = f"chunk_channel_{batch_id}_{owner_rank}_{dep_id}_{dep_chunk}"
+        pubsub = client.pubsub()
+        pubsub.subscribe(channel)
+        
+        try:
+            # 再次检查（避免竞态条件）
+            if client.exists(key):
+                return
+                
+            # 等待消息
+            for message in pubsub.listen():
+                if message['type'] == 'message':
+                    break
+        finally:
+            pubsub.unsubscribe(channel)
+            pubsub.close()
     else:
+        # 带超时的等待
         start = time.time()
+        poll_interval = 0.001
+        
         while True:
-            try:
-                store.wait([key], timeout=timeout)
-                break
-            except RuntimeError:
-                if time.time() - start > timeout:
-                    raise TimeoutError(f"wait_remote_chunk timeout on {key}")
+            if client.exists(key):
+                return
+            
+            if time.time() - start > timeout:
+                raise TimeoutError(f"wait_remote_chunk timeout on {key}")
+            
+            time.sleep(poll_interval)
+            poll_interval = min(poll_interval * 1.5, 0.1)
+
+# ==================== 清理函数 ====================
+def _cleanup_redis():
+    """清理Redis连接"""
+    global _REDIS_CLIENT, _REDIS_PUBSUB
+    
+    if _REDIS_PUBSUB:
+        try:
+            _REDIS_PUBSUB.close()
+        except:
+            pass
+        _REDIS_PUBSUB = None
+    
+    if _REDIS_CLIENT:
+        try:
+            # 可选：清理本rank的所有键
+            if dist.is_initialized():
+                pattern = f"*_{dist.get_rank()}_*"
+                for key in _REDIS_CLIENT.scan_iter(match=pattern, count=1000):
+                    _REDIS_CLIENT.delete(key)
+            _REDIS_CLIENT.close()
+        except:
+            pass
+        _REDIS_CLIENT = None
+
+# 注册退出钩子
+atexit.register(_cleanup_redis)
+
+# ==================== 以下是原有的带宽控制相关代码（保持不变） ====================
+NIC = os.getenv("PP_BW_IF", "eth0")
+_LOCK = f"/tmp/pp_bw_lock_{NIC}"
+_ORIG_FILE = f"/tmp/pp_orig_qdisc_{NIC}.txt"
+_last_rate = None 
+_restore_done = False
+_lock = threading.Lock()
+
+# ... [保持原有的_run_tc, _save_original_qdisc, _restore_qdisc, _tc_set_rate, _sudo等函数不变]
+# ... [保持原有的_cat_like, _safe_chunk, _chunk_like, _fill_grads_like等辅助函数不变]
+# ... [保持原有的PipelineScheduleRuntimeWithDirection类及其所有方法不变]
 
 NIC = os.getenv("PP_BW_IF", "eth0")   # The network card can be specified through environment variables
 _LOCK = f"/tmp/pp_bw_lock_{NIC}"
