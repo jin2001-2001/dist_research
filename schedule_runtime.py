@@ -374,8 +374,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         print(f"[{dist.get_rank()}] SEND {kind} st{stage_idx} mb{mb_index} "
                             f"chunk{chunk_idx} waiting {dep_key}")
                         try:
-                            _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk,
-                                            timeout=60)
+                            _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
                         except TimeoutError:
                             print(f"[{dist.get_rank()}] TIMEOUT waiting {dep_key} "
                                 f"(check remote RECV posting/completion)")
