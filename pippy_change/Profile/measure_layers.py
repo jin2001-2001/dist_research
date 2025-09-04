@@ -260,7 +260,7 @@ def main():
 
 
     # Pack results for metis version:
-
+    # important: noticed that we need to transfer to ms unit...
     total_parameters = 0
     T1  = T4 = 0
     T2 =  0.02
@@ -277,9 +277,9 @@ def main():
       }
     },
     "execution_time": {
-      "total_time_ms": total_T,
+      "total_time_ms": total_T*1000,
       "forward_backward_time_ms": T1,
-      "batch_generator_time_ms": batch_generate_times,
+      "batch_generator_time_ms": batch_generate_times*1000,
       "layernorm_grads_all_reduce_time_ms": T2,
       "embedding_grads_all_reduce_time_ms": T3,
       "optimizer_time_ms": T4,
@@ -296,9 +296,10 @@ def main():
         metis_result["model"]["parameters"]["total_parameters_bytes"]+=pbytes[i]
         total_parameters += pbytes[i]
 
-        metis_result["execution_time"]["layer_compute_total_ms"].append(fwd_times[i]+bwd_times[i])
-        metis_result["execution_time"]["forward_backward_time_ms"]+= fwd_times[i]+bwd_times[i]
-        T1+= fwd_times[i]+bwd_times[i]
+        bundle = (fwd_times[i]+bwd_times[i])*1000
+        metis_result["execution_time"]["layer_compute_total_ms"].append(bundle)
+        metis_result["execution_time"]["forward_backward_time_ms"]+= bundle
+        T1+= bundle
 
         original_mem = pbytes[i]
         #JIn: now, we do a general estimiation of runtime mem...
@@ -308,7 +309,7 @@ def main():
         metis_result["execution_memory"]["total_memory"]+=runingM
 
 
-    metis_result["execution_time"]["optimizer_time_ms"] = total_T - T1 - batch_generate_times - T2 - T3
+    metis_result["execution_time"]["optimizer_time_ms"] = total_T*1000 - T1 - batch_generate_times*1000 - T2 - T3
 
 
 
