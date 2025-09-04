@@ -33,51 +33,95 @@ from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
 
 def create_pipeline_actions():
 
-    # [stage],[rank],[id],[action type],[microbatch],[dest_rank],[upstream],[dependency]
+    # [stage],[rank],[id],[action type],[microbatch],[dest_rank],[upstream],[dependency], [split_parts], [chunk_deps]
     # Rank 0 (Stage 0)
     rank0_actions = [
         _Action(0, 0, 0, _ComputationType.FORWARD, (0,1,2,3), None, None, None),
 
-        _Action(0, 0, 1, _ComputationType.SEND_F, (0,), 1, 10000, None),
-        _Action(0, 0, 2, _ComputationType.SEND_F, (2,), 1, 10000, None),
-        _Action(0, 0, 3, _ComputationType.SEND_F, (1,), 2, 10000, None),
-        _Action(0, 0, 4, _ComputationType.SEND_F, (3,), 2, 10000, None),
-        
-        
-        
+        # mb0 -> rank1 (RECV_F id=0 on rank1)
+        _Action(
+            0, 0, 1, _ComputationType.SEND_F, (0,), 1, 10000, None,
+            4,  # split_parts
+            {
+                # 0.(k+1) <- 3.k  : 0.1<-3.0, 0.2<-3.1, 0.3<-3.2
+                1: [(2, 1, 0)],
+                2: [(2, 1, 1)],
+                3: [(2, 1, 2)],
+            }
+        ),
+
+        # mb1 -> rank2 (RECV_F id=0 on rank2)
+        _Action(
+            0, 0, 3, _ComputationType.SEND_F, (1,), 2, 10000, None,
+            4,
+            {
+                # 1.k <- 0.k
+                0: [(1, 0, 0)],
+                1: [(1, 0, 1)],
+                2: [(1, 0, 2)],
+                3: [(1, 0, 3)],
+            }
+        ),
+
+        # mb2 -> rank1 (RECV_F id=1 on rank1)
+        _Action(
+            0, 0, 2, _ComputationType.SEND_F, (2,), 1, 10000, None,
+            4,
+            {
+                # 2.k <- 1.k
+                0: [(2, 0, 0)],
+                1: [(2, 0, 1)],
+                2: [(2, 0, 2)],
+                3: [(2, 0, 3)],
+            }
+        ),
+
+        # mb3 -> rank2 (RECV_F id=1 on rank2)
+        _Action(
+            0, 0, 4, _ComputationType.SEND_F, (3,), 2, 10000, None,
+            4,
+            {
+                # 3.k <- 2.k
+                0: [(1, 1, 0)],
+                1: [(1, 1, 1)],
+                2: [(1, 1, 2)],
+                3: [(1, 1, 3)],
+            }
+        ),
+
         _Action(0, 0, 5, _ComputationType.RECV_B, (0,), 1, None, None),
         _Action(0, 0, 6, _ComputationType.RECV_B, (1,), 2, None, None),
         _Action(0, 0, 7, _ComputationType.RECV_B, (2,), 1, None, None),
         _Action(0, 0, 8, _ComputationType.RECV_B, (3,), 2, None, None),
-        
-        _Action(0, 0, 9, _ComputationType.FULL_BACKWARD, (0,1,2,3), None, None, None),    
+
+        _Action(0, 0, 9, _ComputationType.FULL_BACKWARD, (0,1,2,3), None, None, None),
     ]
-    
-    # Rank 1 (Stage 1)
+
+    # Rank 1 (Stage 1) —— 给 RECV_F 写 split_parts=4（不写 chunk_deps）
     rank1_actions = [
-        _Action(1, 1, 0, _ComputationType.RECV_F, (0,), 0, None, None),
-        _Action(1, 1, 1, _ComputationType.RECV_F, (2,), 0, None, None),
+        _Action(1, 1, 0, _ComputationType.RECV_F, (0,), 0, None, None, 4, None),  # mb0
+        _Action(1, 1, 1, _ComputationType.RECV_F, (2,), 0, None, None, 4, None),  # mb2
         _Action(1, 1, 2, _ComputationType.FORWARD, (0,2), None, None, None),
         _Action(1, 1, 3, _ComputationType.FULL_BACKWARD, (0,2), None, None, None),
         _Action(1, 1, 4, _ComputationType.SEND_B, (0,), 0, 10000, None),
         _Action(1, 1, 5, _ComputationType.SEND_B, (2,), 0, 10000, None),
-         
         _Action(1, 1, 6, _ComputationType.ALL_REDUCE, None, None, None, None),
     ]
-    
-    # Rank 2 (Stage 1)
+
+    # Rank 2 (Stage 1) —— 同样给 RECV_F 写 split_parts=4
     rank2_actions = [
-        _Action(1, 2, 0, _ComputationType.RECV_F, (1,), 0, None, None),
-        _Action(1, 2, 1, _ComputationType.RECV_F, (3,), 0, None, None),
+        _Action(1, 2, 0, _ComputationType.RECV_F, (1,), 0, None, None, 4, None),  # mb1
+        _Action(1, 2, 1, _ComputationType.RECV_F, (3,), 0, None, None, 4, None),  # mb3
         _Action(1, 2, 2, _ComputationType.FORWARD, (1,3), None, None, None),
         _Action(1, 2, 3, _ComputationType.FULL_BACKWARD, (1,3), None, None, None),
         _Action(1, 2, 4, _ComputationType.SEND_B, (1,), 0, 10000, None),
         _Action(1, 2, 5, _ComputationType.SEND_B, (3,), 0, 10000, None),
-
         _Action(1, 2, 6, _ComputationType.ALL_REDUCE, None, None, None, None),
     ]
-    
+
     return {0: rank0_actions, 1: rank1_actions, 2: rank2_actions}
+
+
 
 
 class Part1(nn.Module):  # rank 0
