@@ -286,6 +286,19 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
             _save_original_qdisc() 
         if dist.is_initialized():
             dist.barrier()
+            
+    def _batch_p2p(
+        p2p_ops: list[dist.P2POp], desc: Optional[str] = None
+    ) -> list[dist.Work]:
+        """
+        Simple wrapper over batch_isend_irecv from torch.distributed, which just adds a descriptive logger on top.
+        """
+        if len(p2p_ops) == 0:
+            return []
+        desc_str = f"{desc}, " if desc else ""
+        logger.debug("batch_p2p %s%s", desc_str, p2p_ops)
+        return dist.batch_isend_irecv(p2p_ops)
+
         
     def _spawn_chunked_send_worker(self, *, kind: str, action, ops, plan, chunk_deps,
                                 current_batch: int, stage_idx: int, mb_index: int):
