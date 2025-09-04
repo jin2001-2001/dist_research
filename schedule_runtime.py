@@ -743,10 +743,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             raise
                         print(f"[{dist.get_rank()}] SEND {kind} st{stage_idx} mb{mb_index} "
                             f"chunk{chunk_idx} dep OK: {dep_key}")
-                print(f"\n这里mb {mb_index} chunk {chunk_idx}")
                 # 提交该 chunk 的发送
                 works_k = schedule._batch_p2p(sub_ops)
-
+                print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}发送命令已创建")
                 # 记录到异步容器，批尾统一等待
                 with self._async_send_lock:
                     self._async_send_works[current_batch+1].append(works_k)
