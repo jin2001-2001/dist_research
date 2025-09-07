@@ -1265,22 +1265,29 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             cat_kwargs = {}
                             
                     else:
+                        # In _step_microbatches, fix the FORWARD section:
                         if not is_prev_stage_on_this_rank:
                             for mid in mb_ids:
                                 key = (stage_idx, mid)
-                                # 等待“所有 irecv 已 post”
+                                # Wait for "all irecv posted"
                                 assert key in self._fwd_recv_posted, f"Computing {action=} before RECV_F posted"
                                 self._fwd_recv_posted[key].wait()
-                                # 再等待“全部 works 完成”
+                                # Then wait for "all works complete"
                                 with self._async_recv_lock:
+                                    # Check length BEFORE popping
+                                    works_count = len(self._fwd_recv_works.get(key, []))
                                     works = self._fwd_recv_works.pop(key, [])
                                 print(f"[{dist.get_rank()}] FORWARD wait st{stage_idx} mb{mid} "
                                         f"posted={self._fwd_recv_posted[key].is_set()} "
-                                        f"works={len(self._fwd_recv_works.get(key, []))}")
-                                schedule._wait_batch_p2p(works)
+                                        f"works={works_count}")  # Use the saved count
                                 
-
-                                # 清理 event
+                                # Now actually wait for the works
+                                if works:
+                                    print(f"[{dist.get_rank()}] FORWARD actually waiting for {len(works)} works")
+                                    schedule._wait_batch_p2p(works)
+                                    print(f"[{dist.get_rank()}] FORWARD done waiting for mb{mid}")
+                                
+                                # Clean up event
                                 self._fwd_recv_posted.pop(key, None)
 
                         

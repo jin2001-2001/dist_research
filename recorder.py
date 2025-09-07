@@ -109,36 +109,40 @@ class Recorder:
         mb_idx: int,
         works: List[dist.Work],
         start_ns: int,
-        poll_interval: float = 0.001,   # 1 ms 轮询
+        poll_interval: float = 0.001,
         chunk_idx: Optional[int] = None,
     ):
         if not self.enabled:
             return
-        
-        #print("开始计时")
         
         need_net = self.measure_net and action in self.net_actions
         samples, stop_evt = [], threading.Event()
 
         print(f"[{dist.get_rank()}] Recorder.record_async called: batch={batch_id}, action={action_id}, "
             f"kind={action}, stage={stage_idx}, mb={mb_idx}, chunk={chunk_idx}, works={len(works)}")
-    
-        # Create a thread to wait for completion
-        def wait_and_mark():
-            print(f"[{dist.get_rank()}] Waiting for {len(works)} works to complete (action={action_id}, chunk={chunk_idx})")
-            for i, work in enumerate(works):
-                work.wait()
-                print(f"[{dist.get_rank()}] Work {i+1}/{len(works)} completed (action={action_id}, chunk={chunk_idx})")
+        
+        # CRITICAL FIX: For RECV operations, mark done immediately without waiting
+        # The actual wait will happen in FORWARD/BACKWARD
+        if action in ("RECV_F", "RECV_B") and chunk_idx is not None:
+            print(f"[{dist.get_rank()}] RECV operation - marking chunk done immediately "
+                f"(action={action_id}, chunk={chunk_idx})")
+            _mark_done_chunk(batch_id, action_id, chunk_idx)
+            print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
+                f"works={len(works)}")
             
-            if chunk_idx is not None:
-                print(f"[{dist.get_rank()}] All works done, calling _mark_done_chunk for "
-                    f"batch={batch_id}, action={action_id}, chunk={chunk_idx}")
-                from schedule_runtime import _mark_done_chunk
-                _mark_done_chunk(batch_id, action_id, chunk_idx)
+            # Still record the event for timeline
+            self.events.append(
+                TraceEvent(
+                    batch_id, self.rank, action, stage_idx, mb_idx,
+                    start_ns, start_ns,  # Use start time as end time for now
+                    chunk=chunk_idx,
+                    status="posted",  # Mark as posted, not completed
+                    net_series=[],
+                )
+            )
+            return  # Exit early - don't start any wait threads
         
-        thread = threading.Thread(target=wait_and_mark, daemon=True)
-        thread.start()
-        
+        # For SEND operations and non-chunk operations, continue with the wait logic
         if need_net:
             def sampler():
                 prev_ts = time.time_ns()
@@ -149,7 +153,7 @@ class Recorder:
                     curr_ts = time.time_ns()
                     io = psutil.net_io_counters()
                     dt = (curr_ts - prev_ts) / 1e9 or 1e-9
-                    up   = (io.bytes_sent - prev_sent) * 8 / dt / 1e6  # Mbps
+                    up   = (io.bytes_sent - prev_sent) * 8 / dt / 1e6
                     down = (io.bytes_recv - prev_recv) * 8 / dt / 1e6
                     samples.append((curr_ts, up, down))
                     prev_ts, prev_sent, prev_recv = curr_ts, io.bytes_sent, io.bytes_recv
@@ -158,21 +162,25 @@ class Recorder:
         def waiter():
             status = "completed"
             try:
+                print(f"[{dist.get_rank()}] Waiting for {len(works)} works (action={action_id}, chunk={chunk_idx})")
                 while not all(w.is_completed() for w in works):
                     time.sleep(poll_interval)
                 end_ns = time.time_ns()
+                
                 if need_net:
                     stop_evt.set()
-                # === 修改：分块 or 整体 ===
+                
+                # Mark done after waiting completes
                 if chunk_idx is None:
                     _mark_done(batch_id=batch_id, action_id=action_id)
                 else:
-                    print(f"[{dist.get_rank()}] Recorder calling _mark_done_chunk for batch={batch_id}, action={action_id}, chunk={chunk_idx}")
+                    print(f"[{dist.get_rank()}] Marking done chunk for batch={batch_id}, action={action_id}, chunk={chunk_idx}")
                     _mark_done_chunk(batch_id=batch_id, action_id=action_id, chunk_idx=chunk_idx)
                     print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
-      f"works={len(works)}")
+                        f"works={len(works)}")
             except Exception as e:
                 status = f"error:{type(e).__name__}"
+                end_ns = time.time_ns()
             finally:
                 self.events.append(
                     TraceEvent(
@@ -183,12 +191,6 @@ class Recorder:
                         net_series=samples,
                     )
                 )
-
-            # dur_ms = (end_ns - start_ns) / 1e6
-            # print(
-            #     f"[Recorder] {action} stage={stage_idx} mb={mb_idx} "
-            #     f"done in {dur_ms:.2f} ms"
-            # )
 
         threading.Thread(target=waiter, daemon=True).start()
 
