@@ -149,7 +149,7 @@ class Recorder:
                     _mark_done(batch_id=batch_id, action_id=action_id)
                 else:
                     _mark_done_chunk(batch_id=batch_id, action_id=action_id, chunk_idx=chunk_idx)
-                print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
+                    print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
       f"works={len(works)}")
             except Exception as e:
                 status = f"error:{type(e).__name__}"
