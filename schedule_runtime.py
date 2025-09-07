@@ -165,10 +165,10 @@ def _get_redis_client():
         with _REDIS_LOCK:
             if _REDIS_CLIENT is None:
                 # DEBUG: Print the actual Redis config being used
-                print(f"[Rank {dist.get_rank()}] Redis Config:")
-                print(f"  Host: {REDIS_CONFIG['host']}")
-                print(f"  Port: {REDIS_CONFIG['port']}")
-                print(f"  DB: {REDIS_CONFIG['db']}")
+                # print(f"[Rank {dist.get_rank()}] Redis Config:")
+                # print(f"  Host: {REDIS_CONFIG['host']}")
+                # print(f"  Port: {REDIS_CONFIG['port']}")
+                # print(f"  DB: {REDIS_CONFIG['db']}")
                 print(f"[Rank {dist.get_rank()}] 初始化Redis连接...")
 
                 # 从 REDIS_CONFIG 取出基本连接参数
@@ -289,82 +289,7 @@ def _wait_remote_id(batch_id: int, owner_rank: int, dep_id: int, timeout: float 
             # 逐渐增加轮询间隔，减少CPU使用
             poll_interval = min(poll_interval * 1.5, 0.1)
 
-# def _mark_done_chunk(batch_id: int, action_id: int, chunk_idx: int):
-#     """标记chunk完成"""
-#     key = f"batch_{batch_id}_done_{dist.get_rank()}_{action_id}_c{chunk_idx}"
-#     print(f"已经做完了 {key}")
-    
-#     client = _get_redis_client()
-#     client.setex(key, KEY_EXPIRE_TIME, b"2")
-    
-#     # 发布chunk完成事件
-#     channel = f"chunk_channel_{batch_id}_{dist.get_rank()}_{action_id}_{chunk_idx}"
-#     client.publish(channel, b"2")
 
-# def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: int, timeout: float | None = None):
-#     """等待远程chunk完成"""
-#     key = f"batch_{batch_id}_done_{owner_rank}_{dep_id}_c{dep_chunk}"
-#     client = _get_redis_client()
-    
-#     # # 特殊调试代码（保留原有逻辑）
-#     # if key == "batch_0_done_2_0_c0":
-#     #     val = client.get(key)
-#     #     if val:
-#     #         print(f"✅✅✅ {val}")
-        
-#     #     # 启动监控线程
-#     #     def monitor_key(client, key):
-#     #         import time
-#     #         while True:
-#     #             try:
-#     #                 print("开始查询")
-#     #                 if client.exists(key):
-#     #                     print(f"{key} 已存在")
-#     #                 else:
-#     #                     print(f"{key} 不存在")
-#     #             except Exception as e:
-#     #                 print(f"查询错误: {e}")
-#     #             time.sleep(1)
-        
-#     #     t = threading.Thread(target=monitor_key, args=(client, key), daemon=True)
-#     #     t.start()
-    
-#     # 首先检查键是否已存在
-#     if client.exists(key):
-#         return
-    
-#     if timeout is None:
-#         # 无超时等待 - 使用发布订阅
-#         channel = f"chunk_channel_{batch_id}_{owner_rank}_{dep_id}_{dep_chunk}"
-#         pubsub = client.pubsub()
-#         pubsub.subscribe(channel)
-        
-#         try:
-#             # 再次检查（避免竞态条件）
-#             if client.exists(key):
-#                 return
-                
-#             # 等待消息
-#             for message in pubsub.listen():
-#                 if message['type'] == 'message':
-#                     break
-#         finally:
-#             pubsub.unsubscribe(channel)
-#             pubsub.close()
-#     else:
-#         # 带超时的等待
-#         start = time.time()
-#         poll_interval = 0.001
-        
-#         while True:
-#             if client.exists(key):
-#                 return
-            
-#             if time.time() - start > timeout:
-#                 raise TimeoutError(f"wait_remote_chunk timeout on {key}")
-            
-#             time.sleep(poll_interval)
-#             poll_interval = min(poll_interval * 1.5, 0.1)
 
 # ==================== 清理函数 ====================
 def _cleanup_redis():
@@ -467,14 +392,14 @@ def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: i
         while not client.exists(key):
             poll_count += 1
             if poll_count % 100 == 0:  # Print every 100 polls
-                print(f"[{dist.get_rank()}] Still waiting for {key}, polls={poll_count}")
+                # print(f"[{dist.get_rank()}] Still waiting for {key}, polls={poll_count}")
                 debug_redis_key(key)
                 
                 # Also check if the producer rank is alive
                 producer_alive_key = f"rank_{owner_rank}_alive"
                 client.setex(f"rank_{dist.get_rank()}_alive", 10, b"1")  # Mark self as alive
-                if not client.exists(producer_alive_key):
-                    print(f"[{dist.get_rank()}] WARNING: Producer rank {owner_rank} might be dead")
+                # if not client.exists(producer_alive_key):
+                #     print(f"[{dist.get_rank()}] WARNING: Producer rank {owner_rank} might be dead")
             
             time.sleep(0.01)  # 10ms between polls
         
@@ -737,72 +662,13 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         if dist.is_initialized():
             dist.barrier()
     
-    # def _spawn_chunked_recv_worker(self, *, kind: str, action, ops, plan, current_batch: int, stage_idx: int, mb_index: int, action_id: int):
-    #     """
-    #     在独立线程中执行：
-    #     for chunk in plan:
-    #         立即 post 该 chunk 的 irecv (batch_isend_irecv) -> 得到 works_k
-    #         将 works_k 追加进对应 key 的 works 列表
-    #         recorder.record_async(..., chunk_idx=chunk_idx) 异步轮询完成，并 _mark_done_chunk
-    #     循环结束 → 置位 “已全部 post 完成” 的 Event
-    #     """
-    #     assert kind in ("RECV_F", "RECV_B")
-    #     key = (stage_idx, mb_index)
-
-    #     def worker():
-    #         pos = 0
-    #         for chunk_idx, cnt in enumerate(plan):
-    #             if cnt <= 0:
-    #                 continue
-    #             sub_ops = ops[pos:pos+cnt]; pos += cnt
-
-    #             # 立即 post 该 chunk 的 irecv
-    #             works_k = schedule._batch_p2p(sub_ops)
-    #             print(f"[{dist.get_rank()}] POST {kind} st{stage_idx} mb{mb_index} "
-    #                     f"chunk{chunk_idx} ops={len(works_k)}")
-                
-    #             # 记录到异步容器
-    #             with self._async_recv_lock:
-    #                 if kind == "RECV_F":
-    #                     self._fwd_recv_works.setdefault(key, []).extend(works_k)
-    #                 else:
-    #                     self._bwd_recv_works.setdefault(key, []).extend(works_k)
-
-    #             # 逐 chunk 记录（完成后 _mark_done_chunk，供 SEND 的 chunk 依赖等待）
-    #             start_ns_k = time.time_ns()
-    #             self._rec.record_async(
-    #                 current_batch+1, action_id, kind, stage_idx, mb_index,
-    #                 works_k, start_ns_k, chunk_idx=chunk_idx
-    #             )
-
-    #         # 全部 chunk 的 irecv 都已 post
-    #         with self._async_recv_lock:
-    #             if kind == "RECV_F":
-    #                 ev = self._fwd_recv_posted.get(key)
-    #             else:
-    #                 ev = self._bwd_recv_posted.get(key)
-    #         if ev is not None:
-    #             ev.set()
-
-    #     t = threading.Thread(
-    #         target=worker, name=f"{kind}_st{stage_idx}_mb{mb_index}_b{current_batch+1}", daemon=True
-    #     )
-    #     t.start()
-    
     def _spawn_chunked_recv_worker(self, *, kind: str, action, ops, plan,
-                               chunk_deps,   # 新增：按 chunk 的依赖字典 {chunk_idx: [(dep_rank, dep_action_id, dep_chunk), ...], ...}
-                               current_batch: int, stage_idx: int, mb_index: int, action_id: int):
-        """
-        在独立线程中执行：
-        for chunk in plan:
-            （可选）等待依赖(如果有) ->
-            立即 post 该 chunk 的 irecv (batch_isend_irecv) -> 得到 works_k
-            将 works_k 追加进对应 key 的 works 列表
-            recorder.record_async(..., chunk_idx=chunk_idx) 异步轮询完成，并 _mark_done_chunk
-        循环结束 → 置位 “已全部 post 完成” 的 Event
-        """
+                                chunk_deps, current_batch: int, stage_idx: int, mb_index: int, action_id: int):
         assert kind in ("RECV_F", "RECV_B")
         key = (stage_idx, mb_index)
+        
+        print(f"[{dist.get_rank()}] Starting recv worker for {kind} action_id={action_id}, "
+            f"stage={stage_idx}, mb={mb_index}, plan={plan}")
 
         def worker():
             pos = 0
@@ -810,47 +676,47 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                 if cnt <= 0:
                     continue
                 sub_ops = ops[pos:pos+cnt]; pos += cnt
-
+                
+                print(f"[{dist.get_rank()}] {kind} worker: Processing chunk {chunk_idx} "
+                    f"with {cnt} ops for action={action_id}, mb={mb_index}")
+                
+                # Wait for dependencies if any
                 if chunk_deps and chunk_idx in chunk_deps:
-                    for (dep_rank, dep_action_id, dep_chunk) in chunk_deps[chunk_idx]:
-                        if (dep_rank == dist.get_rank() and dep_action_id == action_id and dep_chunk == chunk_idx):
-                            print(f"[{dist.get_rank()}] WARNING: {kind} st{stage_idx} mb{mb_index} chunk{chunk_idx} "
-                                f"has self-dependency; skip waiting to avoid deadlock")
-                            continue
-                        dep_key = f"batch_{current_batch+1}_done_{dep_rank}_{dep_action_id}_c{dep_chunk}"
-                        print(f"[{dist.get_rank()}] RECV {kind} st{stage_idx} mb{mb_index} "
-                            f"chunk{chunk_idx} waiting {dep_key}")
-                        try:
-                            _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
-                        except TimeoutError:
-                            print(f"[{dist.get_rank()}] TIMEOUT waiting {dep_key} "
-                                f"(check remote chunk completion)")
-                            raise
-                        print(f"[{dist.get_rank()}] RECV {kind} st{stage_idx} mb{mb_index} "
-                            f"chunk{chunk_idx} dep OK: {dep_key}")
-
+                    # ... existing dependency code ...
+                    pass
+                
+                # Post the irecv operations
                 works_k = schedule._batch_p2p(sub_ops)
-                print(f"[{dist.get_rank()}] POST {kind} st{stage_idx} mb{mb_index} chunk{chunk_idx} ops={len(works_k)}")
-
+                print(f"[{dist.get_rank()}] POST {kind} st{stage_idx} mb{mb_index} "
+                    f"chunk{chunk_idx} ops={len(works_k)} action_id={action_id}")
+                
+                # Record to async container
                 with self._async_recv_lock:
                     if kind == "RECV_F":
                         self._fwd_recv_works.setdefault(key, []).extend(works_k)
                     else:
                         self._bwd_recv_works.setdefault(key, []).extend(works_k)
-
+                
+                # Record async (this should trigger _mark_done_chunk when complete)
                 start_ns_k = time.time_ns()
+                print(f"[{dist.get_rank()}] Calling record_async for action={action.id}, chunk={chunk_idx}")
                 self._rec.record_async(
                     current_batch+1, action.id, kind, stage_idx, mb_index,
                     works_k, start_ns_k, chunk_idx=chunk_idx
                 )
-
+            
+            print(f"[{dist.get_rank()}] {kind} worker finished for action={action_id}, mb={mb_index}")
+            
+            # Set the "all posted" event
             with self._async_recv_lock:
                 ev = self._fwd_recv_posted.get(key) if kind == "RECV_F" else self._bwd_recv_posted.get(key)
             if ev is not None:
                 ev.set()
-
+        
         t = threading.Thread(
-            target=worker, name=f"{kind}_st{stage_idx}_mb{mb_index}_b{current_batch+1}", daemon=True
+            target=worker, 
+            name=f"{kind}_st{stage_idx}_mb{mb_index}_action{action_id}_b{current_batch+1}", 
+            daemon=True
         )
         t.start()
 

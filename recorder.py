@@ -120,6 +120,25 @@ class Recorder:
         need_net = self.measure_net and action in self.net_actions
         samples, stop_evt = [], threading.Event()
 
+        print(f"[{dist.get_rank()}] Recorder.record_async called: batch={batch_id}, action={action_id}, "
+            f"kind={action}, stage={stage_idx}, mb={mb_idx}, chunk={chunk_idx}, works={len(works)}")
+    
+        # Create a thread to wait for completion
+        def wait_and_mark():
+            print(f"[{dist.get_rank()}] Waiting for {len(works)} works to complete (action={action_id}, chunk={chunk_idx})")
+            for i, work in enumerate(works):
+                work.wait()
+                print(f"[{dist.get_rank()}] Work {i+1}/{len(works)} completed (action={action_id}, chunk={chunk_idx})")
+            
+            if chunk_idx is not None:
+                print(f"[{dist.get_rank()}] All works done, calling _mark_done_chunk for "
+                    f"batch={batch_id}, action={action_id}, chunk={chunk_idx}")
+                from schedule_runtime import _mark_done_chunk
+                _mark_done_chunk(batch_id, action_id, chunk_idx)
+        
+        thread = threading.Thread(target=wait_and_mark, daemon=True)
+        thread.start()
+        
         if need_net:
             def sampler():
                 prev_ts = time.time_ns()
