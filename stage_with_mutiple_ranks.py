@@ -22,13 +22,13 @@ from pipelining_source_code._utils import flatten_args
 from pipelining_source_code._backward import stage_backward, stage_backward_input, stage_backward_weight
 logger = logging.getLogger(__name__)
 
-# 位宽与移位
+# ===== TAG-ADD: tag 构造工具 =====
 _DIR_SHIFT, _MB_SHIFT, _SLOT_SHIFT, _SPLIT_SHIFT = 27, 17, 8, 0
 _MB_BITS, _SLOT_BITS, _SPLIT_BITS = 10, 9, 8
 _MB_MASK, _SLOT_MASK, _SPLIT_MASK = (1<<_MB_BITS)-1, (1<<_SLOT_BITS)-1, (1<<_SPLIT_BITS)-1
 
 def _mk_tag(direction: int, microbatch_id: int, slot_idx: int, split_idx: int) -> int:
-    """构造 31-bit tag，必要时回退到一致哈希。"""
+    """31-bit tag。若越界则回退到一致哈希（两端独立可复现）。"""
     need_fallback = (
         microbatch_id > _MB_MASK or
         slot_idx      > _SLOT_MASK or
@@ -40,18 +40,14 @@ def _mk_tag(direction: int, microbatch_id: int, slot_idx: int, split_idx: int) -
                ((slot_idx      & _SLOT_MASK) << _SLOT_SHIFT) | \
                ((split_idx     & _SPLIT_MASK) << _SPLIT_SHIFT)
 
-    # 回退：把四元组混合到 31-bit（两端独立可复现）
+    # fallback: 简单一致哈希压 31 bit
     v = (direction & 1) << 61
     v ^= (int(microbatch_id) & 0xFFFFFFFF) << 30
     v ^= (int(slot_idx)      & 0x3FFFFFFF) << 10
     v ^= (int(split_idx)     & 0x3FF)
-    # avalanching
-    v ^= (v >> 33)
-    v *= 0xff51afd7ed558ccd
-    v &= (1<<64)-1
-    v ^= (v >> 33)
-    # 压到 31 bit 正数
+    v ^= (v >> 33); v *= 0xff51afd7ed558ccd; v &= (1<<64)-1; v ^= (v >> 33)
     return int(v & 0x7fffffff)
+
 
 class PipelineStage_with_mutiple_ranks(PipelineStage):
     def __init__(
@@ -231,32 +227,34 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         peer_global_rank = (peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank))
 
         # 预计算每个张量的 1D 视图与切片表
-        plans = []  # [(flat, slices, dst_stages)]
+        # …前置不变…
+        plans = []  # [(slot_idx, flat, slices, dst_stages)]
+        slot_ctr = 0  # ===== TAG-ADD =====
         for idx, out in enumerate(output_tuple):
             dst_stages = self.act_send_info[idx]
-            print(f"✅✅✅dst_stages {dst_stages}")
             if dst_stages is None:
                 continue
             if not isinstance(out, torch.Tensor):
                 continue
             flat = out.contiguous().view(-1)
             slices = self._compute_1d_slices(flat.numel(), num_splits)
-            plans.append((idx, flat, slices, dst_stages))
+            plans.append((slot_ctr, flat, slices, dst_stages))  # ===== TAG-ADD =====
+            slot_ctr += 1                                       # ===== TAG-ADD =====
 
-        # 外层遍历 split，内层轮询张量与目的地
         for split_idx in range(max(1, num_splits)):
-            for slot_idx, flat, slices, dst_stages in plans:
+            for slot_idx, flat, slices, dst_stages in plans:    # ===== TAG-ADD (只改解包变量名) =====
                 if split_idx >= len(slices):
                     continue
                 off, ln = slices[split_idx]
-                chunk_view = flat.narrow(0, off, ln)  # 1D 连续别名
+                chunk_view = flat.narrow(0, off, ln)
                 for _dst in dst_stages:
                     if _dst is None:
                         continue
-                    # [SEND-GATE] 分块级阻塞/整形可写在这里
-                    tag = _mk_tag(0, fwd_chunk_id, slot_idx, split_idx)
-                    ops.append(dist.P2POp(dist.isend, chunk_view, peer_global_rank, self.group, tag=tag))
+                    # 只新增 tag，不改变你的发送逻辑
+                    tag = _mk_tag(0, fwd_chunk_id, slot_idx, split_idx)  # ===== TAG-ADD =====
+                    ops.append(dist.P2POp(dist.isend, chunk_view, peer_global_rank, self.group, tag=tag))  # ===== TAG-ADD =====
                     ops_per_chunk[split_idx] += 1
+
 
         # 记录“每分块 op 数”
         self._last_comm_plan[("SEND_F", fwd_chunk_id)] = ops_per_chunk
@@ -275,7 +273,8 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         peer_global_rank = (peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank))
 
         plans = []  # [(slot_idx, buf_flat, slices)]
-        for arg_idx, info in recv_infos:
+        slot_ctr = 0  # ===== TAG-ADD =====
+        for info in recv_infos:  # 保持你原来的写法，不读 arg_idx
             if not isinstance(info, _RecvInfo):
                 continue
             buf = info.buffer
@@ -283,18 +282,19 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                 continue
             buf_flat = buf.contiguous().view(-1)
             slices = self._compute_1d_slices(buf_flat.numel(), num_splits)
-            plans.append((arg_idx, buf_flat, slices))
+            plans.append((slot_ctr, buf_flat, slices))  # ===== TAG-ADD =====
+            slot_ctr += 1                               # ===== TAG-ADD =====
 
         for split_idx in range(max(1, num_splits)):
-            for slot_idx, buf_flat, slices in plans:
+            for slot_idx, buf_flat, slices in plans:    # ===== TAG-ADD (只改解包变量名) =====
                 if split_idx >= len(slices):
                     continue
                 off, ln = slices[split_idx]
                 view = buf_flat.narrow(0, off, ln)
-                # [RECV-GATE] 分块级背压/授信可写在这里
-                tag = _mk_tag(0, fwd_chunk_id, slot_idx, split_idx)
-                ops.append(dist.P2POp(dist.irecv, view, peer_global_rank, self.group, tag=tag))
+                tag = _mk_tag(0, fwd_chunk_id, slot_idx, split_idx)  # ===== TAG-ADD =====
+                ops.append(dist.P2POp(dist.irecv, view, peer_global_rank, self.group, tag=tag))  # ===== TAG-ADD =====
                 ops_per_chunk[split_idx] += 1
+
 
         self._last_comm_plan[("RECV_F", fwd_chunk_id)] = ops_per_chunk
         return ops
@@ -332,8 +332,10 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         peer_global_rank = (peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank))
 
         # 预计算每个梯度的 1D 视图与切片表（只发浮点/复数梯度，保持你原逻辑）
+        # …前置不变…
         plans = []  # [(slot_idx, flat, slices)]
-        for slot_idx, grad, grad_recv_stage in zip(grads_input, self.grad_send_info):
+        slot_ctr = 0  # ===== TAG-ADD =====
+        for grad, grad_recv_stage in zip(grads_input, self.grad_send_info):
             if grad_recv_stage is None:
                 continue
             if not isinstance(grad, torch.Tensor):
@@ -347,21 +349,21 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                 continue
             flat = grad.contiguous().view(-1)
             slices = self._compute_1d_slices(flat.numel(), num_splits)
-            plans.append((slot_idx, flat, slices))
+            plans.append((slot_ctr, flat, slices))  # ===== TAG-ADD =====
+            slot_ctr += 1                           # ===== TAG-ADD =====
 
         ops: list[dist.P2POp] = []
         ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
-
         for split_idx in range(max(1, num_splits)):
-            for slot_idx, flat, slices in plans:
+            for slot_idx, flat, slices in plans:    # ===== TAG-ADD (只改解包变量名) =====
                 if split_idx >= len(slices):
                     continue
                 off, ln = slices[split_idx]
                 chunk_view = flat.narrow(0, off, ln)
-                # [SEND-GATE] 分块级阻塞/整形可写在这里
-                tag = _mk_tag(1, bwd_chunk_id, slot_idx, split_idx)
-                ops.append(dist.P2POp(dist.isend, chunk_view, peer_global_rank, self.group, tag=tag))
+                tag = _mk_tag(1, bwd_chunk_id, slot_idx, split_idx)  # ===== TAG-ADD =====
+                ops.append(dist.P2POp(dist.isend, chunk_view, peer_global_rank, self.group, tag=tag))  # ===== TAG-ADD =====
                 ops_per_chunk[split_idx] += 1
+
 
         self._last_comm_plan[("SEND_B", bwd_chunk_id)] = ops_per_chunk
         return ops
@@ -383,22 +385,26 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         peer_global_rank = (peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank))
 
         plans = []  # [(slot_idx, buf_flat, slices)]
-        for arg_idx, info in recv_infos:
+        slot_ctr = 0  # ===== TAG-ADD =====
+        for info in recv_infos:  # 保持你原来的写法，不读 arg_idx
             if isinstance(info, _RecvInfo) and isinstance(info.buffer, torch.Tensor):
                 buf_flat = info.buffer.contiguous().view(-1)
                 slices = self._compute_1d_slices(buf_flat.numel(), num_splits)
-                plans.append((arg_idx, buf_flat, slices))
+                plans.append((slot_ctr, buf_flat, slices))  # ===== TAG-ADD =====
+                slot_ctr += 1                               # ===== TAG-ADD =====
 
+        ops: list[dist.P2POp] = []
+        ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
         for split_idx in range(max(1, num_splits)):
-            for slot_idx, buf_flat, slices in plans:
+            for slot_idx, buf_flat, slices in plans:        # ===== TAG-ADD (只改解包变量名) =====
                 if split_idx >= len(slices):
                     continue
                 off, ln = slices[split_idx]
                 view = buf_flat.narrow(0, off, ln)
-                # [RECV-GATE] 分块级背压/授信可写在这里
-                tag = _mk_tag(1, bwd_chunk_id, slot_idx, split_idx)
-                ops.append(dist.P2POp(dist.irecv, view, peer_global_rank, self.group, tag = tag))
+                tag = _mk_tag(1, bwd_chunk_id, slot_idx, split_idx)  # ===== TAG-ADD =====
+                ops.append(dist.P2POp(dist.irecv, view, peer_global_rank, self.group, tag=tag))  # ===== TAG-ADD =====
                 ops_per_chunk[split_idx] += 1
+
 
         self._last_comm_plan[("RECV_B", bwd_chunk_id)] = ops_per_chunk
         return ops
