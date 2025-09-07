@@ -728,6 +728,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     continue
                 sub_ops = ops[pos:pos+cnt]; pos += cnt
 
+                print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}等待之前\n")
                 # 只允许 SEND 依赖 RECV 的 chunk 完成
                 if chunk_deps and chunk_idx in chunk_deps:
                     for (dep_rank, dep_action_id, dep_chunk) in chunk_deps[chunk_idx]:
@@ -743,8 +744,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         print(f"[{dist.get_rank()}] SEND {kind} st{stage_idx} mb{mb_index} "
                             f"chunk{chunk_idx} dep OK: {dep_key}")
                 # 提交该 chunk 的发送
+                print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}发送命令之前\n")
                 works_k = schedule._batch_p2p(sub_ops)
-                print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}发送命令已创建")
+                print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}发送命令已创建\n")
                 # 记录到异步容器，批尾统一等待
                 with self._async_send_lock:
                     self._async_send_works[current_batch+1].append(works_k)
