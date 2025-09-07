@@ -284,82 +284,82 @@ def _wait_remote_id(batch_id: int, owner_rank: int, dep_id: int, timeout: float 
             # 逐渐增加轮询间隔，减少CPU使用
             poll_interval = min(poll_interval * 1.5, 0.1)
 
-def _mark_done_chunk(batch_id: int, action_id: int, chunk_idx: int):
-    """标记chunk完成"""
-    key = f"batch_{batch_id}_done_{dist.get_rank()}_{action_id}_c{chunk_idx}"
-    print(f"已经做完了 {key}")
+# def _mark_done_chunk(batch_id: int, action_id: int, chunk_idx: int):
+#     """标记chunk完成"""
+#     key = f"batch_{batch_id}_done_{dist.get_rank()}_{action_id}_c{chunk_idx}"
+#     print(f"已经做完了 {key}")
     
-    client = _get_redis_client()
-    client.setex(key, KEY_EXPIRE_TIME, b"2")
+#     client = _get_redis_client()
+#     client.setex(key, KEY_EXPIRE_TIME, b"2")
     
-    # 发布chunk完成事件
-    channel = f"chunk_channel_{batch_id}_{dist.get_rank()}_{action_id}_{chunk_idx}"
-    client.publish(channel, b"2")
+#     # 发布chunk完成事件
+#     channel = f"chunk_channel_{batch_id}_{dist.get_rank()}_{action_id}_{chunk_idx}"
+#     client.publish(channel, b"2")
 
-def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: int, timeout: float | None = None):
-    """等待远程chunk完成"""
-    key = f"batch_{batch_id}_done_{owner_rank}_{dep_id}_c{dep_chunk}"
-    client = _get_redis_client()
+# def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: int, timeout: float | None = None):
+#     """等待远程chunk完成"""
+#     key = f"batch_{batch_id}_done_{owner_rank}_{dep_id}_c{dep_chunk}"
+#     client = _get_redis_client()
     
-    # # 特殊调试代码（保留原有逻辑）
-    # if key == "batch_0_done_2_0_c0":
-    #     val = client.get(key)
-    #     if val:
-    #         print(f"✅✅✅ {val}")
+#     # # 特殊调试代码（保留原有逻辑）
+#     # if key == "batch_0_done_2_0_c0":
+#     #     val = client.get(key)
+#     #     if val:
+#     #         print(f"✅✅✅ {val}")
         
-    #     # 启动监控线程
-    #     def monitor_key(client, key):
-    #         import time
-    #         while True:
-    #             try:
-    #                 print("开始查询")
-    #                 if client.exists(key):
-    #                     print(f"{key} 已存在")
-    #                 else:
-    #                     print(f"{key} 不存在")
-    #             except Exception as e:
-    #                 print(f"查询错误: {e}")
-    #             time.sleep(1)
+#     #     # 启动监控线程
+#     #     def monitor_key(client, key):
+#     #         import time
+#     #         while True:
+#     #             try:
+#     #                 print("开始查询")
+#     #                 if client.exists(key):
+#     #                     print(f"{key} 已存在")
+#     #                 else:
+#     #                     print(f"{key} 不存在")
+#     #             except Exception as e:
+#     #                 print(f"查询错误: {e}")
+#     #             time.sleep(1)
         
-    #     t = threading.Thread(target=monitor_key, args=(client, key), daemon=True)
-    #     t.start()
+#     #     t = threading.Thread(target=monitor_key, args=(client, key), daemon=True)
+#     #     t.start()
     
-    # 首先检查键是否已存在
-    if client.exists(key):
-        return
+#     # 首先检查键是否已存在
+#     if client.exists(key):
+#         return
     
-    if timeout is None:
-        # 无超时等待 - 使用发布订阅
-        channel = f"chunk_channel_{batch_id}_{owner_rank}_{dep_id}_{dep_chunk}"
-        pubsub = client.pubsub()
-        pubsub.subscribe(channel)
+#     if timeout is None:
+#         # 无超时等待 - 使用发布订阅
+#         channel = f"chunk_channel_{batch_id}_{owner_rank}_{dep_id}_{dep_chunk}"
+#         pubsub = client.pubsub()
+#         pubsub.subscribe(channel)
         
-        try:
-            # 再次检查（避免竞态条件）
-            if client.exists(key):
-                return
+#         try:
+#             # 再次检查（避免竞态条件）
+#             if client.exists(key):
+#                 return
                 
-            # 等待消息
-            for message in pubsub.listen():
-                if message['type'] == 'message':
-                    break
-        finally:
-            pubsub.unsubscribe(channel)
-            pubsub.close()
-    else:
-        # 带超时的等待
-        start = time.time()
-        poll_interval = 0.001
+#             # 等待消息
+#             for message in pubsub.listen():
+#                 if message['type'] == 'message':
+#                     break
+#         finally:
+#             pubsub.unsubscribe(channel)
+#             pubsub.close()
+#     else:
+#         # 带超时的等待
+#         start = time.time()
+#         poll_interval = 0.001
         
-        while True:
-            if client.exists(key):
-                return
+#         while True:
+#             if client.exists(key):
+#                 return
             
-            if time.time() - start > timeout:
-                raise TimeoutError(f"wait_remote_chunk timeout on {key}")
+#             if time.time() - start > timeout:
+#                 raise TimeoutError(f"wait_remote_chunk timeout on {key}")
             
-            time.sleep(poll_interval)
-            poll_interval = min(poll_interval * 1.5, 0.1)
+#             time.sleep(poll_interval)
+#             poll_interval = min(poll_interval * 1.5, 0.1)
 
 # ==================== 清理函数 ====================
 def _cleanup_redis():
@@ -387,6 +387,146 @@ def _cleanup_redis():
 
 # 注册退出钩子
 atexit.register(_cleanup_redis)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Add this debug function at the top level in schedule_runtime.py, after the Redis client initialization
+
+def debug_redis_key(key: str):
+    """Debug function to check Redis key status"""
+    client = _get_redis_client()
+    exists = client.exists(key)
+    value = client.get(key) if exists else None
+    ttl = client.ttl(key) if exists else -2
+    print(f"[DEBUG-{dist.get_rank()}] Redis key '{key}': exists={exists}, value={value}, ttl={ttl}")
+    return exists
+
+# Modify _mark_done_chunk to add more debugging:
+def _mark_done_chunk(batch_id: int, action_id: int, chunk_idx: int):
+    key = f"batch_{batch_id}_done_{dist.get_rank()}_{action_id}_c{chunk_idx}"
+    print(f"[{dist.get_rank()}] MARKING DONE: {key}")
+    
+    client = _get_redis_client()
+    
+    # Debug: Check if key already exists
+    if client.exists(key):
+        print(f"[{dist.get_rank()}] WARNING: Key {key} already exists!")
+    
+    # Set with explicit confirmation
+    result = client.setex(key, KEY_EXPIRE_TIME, b"2")
+    print(f"[{dist.get_rank()}] Redis SETEX result for {key}: {result}")
+    
+    # Verify it was set
+    verify = client.get(key)
+    print(f"[{dist.get_rank()}] Verification GET {key}: {verify}")
+    
+    # Publish to channel
+    channel = f"chunk_channel_{batch_id}_{dist.get_rank()}_{action_id}_{chunk_idx}"
+    pub_count = client.publish(channel, b"2")
+    print(f"[{dist.get_rank()}] Published to {channel}, subscribers: {pub_count}")
+
+# Modify _wait_remote_chunk to add more debugging:
+def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: int, timeout: float | None = None):
+    key = f"batch_{batch_id}_done_{owner_rank}_{dep_id}_c{dep_chunk}"
+    client = _get_redis_client()
+    
+    print(f"[{dist.get_rank()}] WAITING for {key}")
+    
+    # Debug: Check key status before waiting
+    debug_redis_key(key)
+    
+    # First check if key exists
+    if client.exists(key):
+        print(f"[{dist.get_rank()}] Key {key} already exists, returning immediately")
+        return
+    
+    if timeout is None:
+        # Use polling with debug output instead of pub/sub for debugging
+        poll_count = 0
+        while not client.exists(key):
+            poll_count += 1
+            if poll_count % 100 == 0:  # Print every 100 polls
+                print(f"[{dist.get_rank()}] Still waiting for {key}, polls={poll_count}")
+                debug_redis_key(key)
+                
+                # Also check if the producer rank is alive
+                producer_alive_key = f"rank_{owner_rank}_alive"
+                client.setex(f"rank_{dist.get_rank()}_alive", 10, b"1")  # Mark self as alive
+                if not client.exists(producer_alive_key):
+                    print(f"[{dist.get_rank()}] WARNING: Producer rank {owner_rank} might be dead")
+            
+            time.sleep(0.01)  # 10ms between polls
+        
+        print(f"[{dist.get_rank()}] Key {key} found after {poll_count} polls")
+    else:
+        # Timeout version with debugging
+        start = time.time()
+        poll_interval = 0.001
+        
+        while True:
+            if client.exists(key):
+                print(f"[{dist.get_rank()}] Key {key} found")
+                return
+            
+            if time.time() - start > timeout:
+                debug_redis_key(key)
+                raise TimeoutError(f"wait_remote_chunk timeout on {key}")
+            
+            time.sleep(poll_interval)
+            poll_interval = min(poll_interval * 1.5, 0.1)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # ==================== 以下是原有的带宽控制相关代码（保持不变） ====================
 NIC = os.getenv("PP_BW_IF", "eth0")

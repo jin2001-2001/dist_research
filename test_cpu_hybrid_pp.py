@@ -222,6 +222,34 @@ args = parser.parse_args()
 def main():
 
     dist.init_process_group("gloo", init_method="env://")
+    
+    def test_redis_connection():
+        """Test Redis connectivity between ranks"""
+        import redis
+        from schedule_runtime import REDIS_CONFIG, _get_redis_client
+        
+        rank = dist.get_rank()
+        client = _get_redis_client()
+        
+        # Test write
+        test_key = f"test_rank_{rank}"
+        client.setex(test_key, 60, f"rank_{rank}_data".encode())
+        
+        # Sync point
+        dist.barrier()
+        
+        # Test read from other ranks
+        for r in range(dist.get_world_size()):
+            other_key = f"test_rank_{r}"
+            value = client.get(other_key)
+            print(f"[{rank}] Read {other_key}: {value}")
+        
+        # Cleanup
+        client.delete(test_key)
+        print(f"[{rank}] Redis connection test passed")
+
+    # Call it right after dist.init_process_group:
+    test_redis_connection()
 
     rank = int(os.environ["RANK"])
     world = int(os.environ["WORLD_SIZE"])
