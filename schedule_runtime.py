@@ -164,6 +164,11 @@ def _get_redis_client():
     if _REDIS_CLIENT is None:
         with _REDIS_LOCK:
             if _REDIS_CLIENT is None:
+                # DEBUG: Print the actual Redis config being used
+                print(f"[Rank {dist.get_rank()}] Redis Config:")
+                print(f"  Host: {REDIS_CONFIG['host']}")
+                print(f"  Port: {REDIS_CONFIG['port']}")
+                print(f"  DB: {REDIS_CONFIG['db']}")
                 print(f"[Rank {dist.get_rank()}] 初始化Redis连接...")
 
                 # 从 REDIS_CONFIG 取出基本连接参数
