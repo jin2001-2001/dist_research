@@ -636,10 +636,10 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         if not is_prev_stage_on_this_rank:
                             for mid in mb_ids:
                                 #Jin: as currently we use asyn sending&receiving...
-                                #assert (
-                                #    stage_idx,
-                                #    mid,
-                                #) in fwd_recv_ops, f"Computing {action=} before receiving input"
+                                assert (
+                                    stage_idx,
+                                    mid,
+                                ) in fwd_recv_ops, f"Computing {action=} before receiving input"
                                 schedule._wait_batch_p2p(fwd_recv_ops.pop((stage_idx, mid)))
                         
                         if len(mb_ids) == 1:
