@@ -316,7 +316,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                 for action in actions[rank]:
                     assert action is not None
                     self.pipeline_order_with_comms[rank].append(action)
-            # TODO what level of validation should we offer for compute+comms schedule?
+            # TODO what level of validation should we offer for compute+comms schedule? Jin: Question here...
         elif format == "compute_only":
             # Perform schedule lowering
             for rank in actions:
