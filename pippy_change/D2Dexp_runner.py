@@ -6,9 +6,6 @@ test_cpu_hybrid_pp.py
 This is the main experiment script for training Qwen-0.6B using a custom 
 Hybrid Pipeline Parallelism framework built on top of PiPPy.
 
-- Stage 0 (rank 0): embedding + layers 0–13
-- Stage 1 (ranks 1 & 2): layers 14–27 + norm + lm_head (with DDP)
-
 Key Features:
 - CPU-only execution with 3 ranks
 - Manual microbatch scheduling via custom action list
@@ -30,7 +27,7 @@ from pipelining_source_code.schedules import _Action, _ComputationType
 
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
-from simple_1F1B_Action import generate_1f1b_pipeline_actions
+from simple_1F1B_Action import generate_1f1b_pipeline_actions, generate_1f1b_pipeline_actions_pro
 
 class PartStart(nn.Module):                          # rank 0
     def __init__(self, model, end):
@@ -140,6 +137,8 @@ def plan_parser(rank: int, world: int, cfg: Union[str, Dict[str, Any]]) -> Dict[
     if world != cfg["total_devices"]:
         raise ValueError(f"Number of devices mismatch...")
     stages: List[Dict[str, Any]] = sorted(cfg["stage_info"], key=lambda s: s["index"])
+    total_stages = cfg["total_stages"]
+    total_batchs = cfg["total_batchs"]
     total_stage = cfg["total_stages"]
     # Find the stage containing the rank
     stage = next((s for s in stages if rank in s.get("ranks", [])), None)
@@ -159,18 +158,50 @@ def plan_parser(rank: int, world: int, cfg: Union[str, Dict[str, Any]]) -> Dict[
     shard_from = stages[idx]["shard_layer"][0]
     shard_to = stages[idx]["shard_layer"][1]
 
-    return is_group,is_final_stage, shard_stage, shard_from, shard_to, prev_g, this_g, next_g 
+    return is_group,is_final_stage, shard_stage, shard_from, shard_to, prev_g, this_g, next_g, total_stages, total_batchs
+
+
+def plan_batch_parser(cfg: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Given the pipeline config (dict or JSON path) and a rank id,
+    return the stage that contains this rank, plus the immediate
+    previous/next stages' rank groups.
+    """
+    cfg = load_config(cfg)
+    stages: List[Dict[str, Any]] = sorted(cfg["stage_info"], key=lambda s: s["index"])
+
+    # Find the stage containing the rank
+    # format of batch info: [[[0,1,2],[3,8,6]],...]
+
+    #final [[[0,[0,1,2]],[1,[3,4,5,6,7,8,9,10]]..],...]
+    final_batch_info = []
+    final_group_info = []
+    for s in stages:
+        rank_group = s["ranks"]
+        batch_alloc = s["batch_allocate"]
+        final_group_info.append(rank_group)
+        stage_l=[]
+        cur_sample_index = 0
+        for rank_index in rank_group:
+            cur_sample_chunk = list(range(cur_sample_index, cur_sample_index+batch_alloc[rank_index]))
+            cur_sample_index = cur_sample_index+batch_alloc[rank_index]
+            stage_l.append([rank_index, cur_sample_chunk])
+            
+
+        final_batch_info.append(stage_l)
+
+    return final_batch_info, final_group_info
 
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--train_steps", type=int, default=None,
+parser.add_argument("--train_steps", type=int, default=1,
                     help="The total number of steps for training. If omitted, run the entire DataLoader.")
 parser.add_argument("--batch_size", type=int,
-                    default=int(os.getenv("BATCH_SIZE", 16)),
+                    default=int(os.getenv("BATCH_SIZE", 20)),
                     help="The batch size of each rank (the environment variable BATCH_SIZE can be overridden)")
 parser.add_argument("--microbatch_num", type=int,
-                    default=int(os.getenv("MICROBATCH_NUM", 4)),
+                    default=int(os.getenv("MICROBATCH_NUM", 5)),
                     help="Micro-batch number (the environment variable MICROBATCH_NUM can be overridden)")
 parser.add_argument("--sudo_pass", default=os.getenv("SUDO_PASS"),
                     help='Write the password of root')
@@ -190,13 +221,13 @@ def main():
 
     device = torch.device("cpu")     
 
-    name = "Qwen/Qwen3-0.6B-Base"
+    name = "Qwen/Qwen3-0.6B"
     tok = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
     tok.pad_token = tok.eos_token
     full = AutoModelForCausalLM.from_pretrained(name, trust_remote_code=True)
 
 
-    is_group,is_final_stage, shard_stage, shard_from, shard_to, prev_g, this_g, next_g = plan_parser(rank, world, args.plan_loc)
+    is_group,is_final_stage, shard_stage, shard_from, shard_to, prev_g, this_g, next_g, total_stages, total_batchs = plan_parser(rank, world, args.plan_loc)
 
     if shard_stage == 0:
         stage_mod = PartStart(full,shard_to)
@@ -230,56 +261,12 @@ def main():
                                 group=dist.group.WORLD,  # Used for world pp 
                                 prev_group=prev_g, this_group=this_g, next_group=next_g)
 
-
-    if rank == 0:
-        stage_mod = Part0(full)
-        stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=0,
-                            num_stages=world, device=device,
-                            group=dist.group.WORLD,
-                            prev_group=None, this_group=[0], next_group=[1])
-        
-    elif rank == 1:
-        stage_mod = Part1(full)
-        stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=1,
-                            num_stages=world, device=device,
-                            group=dist.group.WORLD,
-                            prev_group=[0], this_group=[1], next_group=[2])
-    elif rank == 2:
-        stage_mod = Part2(full)
-        stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=2,
-                            num_stages=world, device=device,
-                            group=dist.group.WORLD,
-                            prev_group=[1], this_group=[2], next_group=[3])
-    elif rank == 3:
-        stage_mod = Part3(full)
-        stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=3,
-                            num_stages=world, device=device,
-                            group=dist.group.WORLD,
-                            prev_group=[2], this_group=[3], next_group=[4])
-    elif rank == 4:
-        stage_mod = Part4(full)
-        stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=4,
-                            num_stages=world, device=device,
-                            group=dist.group.WORLD,
-                            prev_group=[3], this_group=[4], next_group=[5])
-    elif rank == 5:
-        stage_mod = Part5(full)
-        stage_mod.to(device)
-        stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=5,
-                            num_stages=world, device=device,
-                            group=dist.group.WORLD,
-                            prev_group=[4], this_group=[5], next_group=None)
     
     del full                        
     import gc; gc.collect()
 
     raw = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
-    block = 128
+    block = 2048
     def tok_fn(ex): 
         return tok(ex["text"], return_attention_mask=False)
     def grp_fn(ex):
@@ -306,9 +293,16 @@ def main():
         target = target[:, 1:].reshape(-1)
         return F.cross_entropy(output, target)
 
+    #jin: we get the total_batchs from plans, but make sure args input is scynized...
+    if total_batchs!= int(args.batch_size/args.microbatch_num):
+        raise ValueError(f"Mbatch misbatch plan's assumption")
     
-    sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=microbatch_num, loss_fn=loss_fn, root_pass=args.sudo_pass)
-    actions = generate_1f1b_pipeline_actions(num_stages= 6, num_microbatches= 8, upstream = args.upstream)
+    sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=args.batch_size, loss_fn=loss_fn, root_pass=args.sudo_pass)
+
+    batch_info,group_info = plan_batch_parser(args.plan_loc)
+    actions = generate_1f1b_pipeline_actions_pro(num_stages= total_stages, total_samples = args.batch_size, num_microbatches= args.microbatch_num,
+                                                 group_info=group_info, batch_info=batch_info,
+                                                  upstream = args.upstream)
     sched._load_actions(actions, format="compute_comms")
     
     opt = optim.Adam(stage_mod.parameters(), lr=1e-4)            
@@ -429,5 +423,6 @@ def main():
 
 
 if __name__ == "__main__":
-    #main()
-    print(plan_parser(0, 4, "./D2Dexp_scratch.json"))
+    main()
+    #test correctness of plan_parser...
+    #print(plan_parser(0, 4, "./D2Dexp_scratch.json"))
