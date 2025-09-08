@@ -183,11 +183,12 @@ def plan_batch_parser(cfg: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
         final_group_info.append(rank_group)
         stage_l=[]
         cur_sample_index = 0
+        id = 0
         for rank_index in rank_group:
-            rank_index -=smallest_rank
-            cur_sample_chunk = list(range(cur_sample_index, cur_sample_index+batch_alloc[rank_index]))
-            cur_sample_index = cur_sample_index+batch_alloc[rank_index]
+            cur_sample_chunk = list(range(cur_sample_index, cur_sample_index+batch_alloc[id]))
+            cur_sample_index = cur_sample_index+batch_alloc[id]
             stage_l.append([rank_index, cur_sample_chunk])
+            id+=1
             
 
         final_batch_info.append(stage_l)

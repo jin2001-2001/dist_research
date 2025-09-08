@@ -66,6 +66,8 @@ def generate_1f1b_pipeline_actions_pro(num_stages: int,total_samples: int, num_m
 
     actions_per_rank = {}
 
+    print(batch_info)
+
     for stage_idx in range(num_stages):
         for cur_rank_batch_pair in batch_info[stage_idx]:
             cur_rank = cur_rank_batch_pair[0]  # get the current focused rank index...
