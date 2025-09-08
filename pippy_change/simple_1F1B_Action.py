@@ -61,7 +61,7 @@ def generate_1f1b_pipeline_actions(num_stages: int, num_microbatches: int, upstr
 
 def generate_1f1b_pipeline_actions_pro(num_stages: int,total_samples: int, num_microbatches: int,group_info, batch_info, upstream = None):
 
-    per_mbatch_size = total_samples/num_microbatches
+    per_mbatch_size = int(total_samples/num_microbatches)
     #each time, we should send/calculate a bunch of samples...
 
     actions_per_rank = {}
