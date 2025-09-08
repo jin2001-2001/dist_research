@@ -154,7 +154,7 @@ def generate_1f1b_pipeline_actions_pro(num_stages: int,total_samples: int, num_m
                 fwd_mb_index += 1
 
             # Cooldown
-            while bwd_mb < num_microbatches:
+            while bwd_mb_index < num_microbatches:
                 #if stage_idx < num_stages - 1:
                     #actions.append(make_action(stage_idx, rank, _ComputationType.RECV_B, bwd_mb, rank + 1))
                 #actions.append(make_action(stage_idx, rank, _ComputationType.FULL_BACKWARD, bwd_mb, None))
@@ -162,7 +162,7 @@ def generate_1f1b_pipeline_actions_pro(num_stages: int,total_samples: int, num_m
                 if stage_idx > 0:
                     #actions.append(make_action(stage_idx, rank, _ComputationType.SEND_B, bwd_mb, rank - 1))
                     actions.extend(make_comm_action(bwd_mb_index, _ComputationType.SEND_B, prev_group_info))
-                bwd_mb += 1
+                bwd_mb_index += 1
 
             if len(batch_info[stage_idx])>1:
                 actions.append(_Action(stage_idx, cur_rank, local_id, _ComputationType.ALL_REDUCE, None, None, None, None))
