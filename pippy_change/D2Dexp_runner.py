@@ -39,11 +39,11 @@ class PartStart(nn.Module):                          # rank 0
     def forward(self, input_ids):
         bsz, seqlen = input_ids.shape
         device = input_ids.device
-        position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1)
+        position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1).contiguous()
         hidden = self.embed_tokens(input_ids)
         pos_emb = self.rotary_emb(hidden, position_ids)
 
-        attn_mask = torch.triu(torch.full((seqlen, seqlen), float('-inf'), device=device), 1)
+        attn_mask = torch.triu(torch.full((seqlen, seqlen), float('-inf'), device=device), diagonal=1)
         attn_mask = attn_mask.unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
 
         for layer in self.layers:
@@ -71,6 +71,7 @@ class PartMiddle(nn.Module):
         pos_emb = self.rotary_emb(hidden, position_ids)
 
         if attn_mask.dim() == 2:                       # 兼容单矩阵传递
+            seqlen = attn_mask.shape[-1]
             attn_mask = torch.triu(
                 torch.full((seqlen, seqlen), float('-inf'), device=device), 1
             ).unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
@@ -102,8 +103,9 @@ class PartEnd(nn.Module):                                # rank 4：25-27 + norm
         pos_emb = self.rotary_emb(hidden, position_ids)
 
         if attn_mask.dim() == 2:
+            seqlen = attn_mask.shape[-1]
             attn_mask = torch.triu(
-                torch.full((seqlen, seqlen), float('-inf'), device=device), 1
+                torch.full((seqlen, seqlen), float('-inf'), device=device),diagonal= 1
             ).unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
         elif not attn_mask.is_contiguous():
             attn_mask = attn_mask.contiguous()
@@ -127,7 +129,7 @@ def load_config(cfg:str) -> Dict[str, Any]:
             cfg = json.load(f)
     return cfg
 
-def plan_parser(rank: int, world: int, cfg: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+def plan_parser(rank: int, world: int, cfg: Union[str, Dict[str, Any]]):
     """
     Given the pipeline config (dict or JSON path) and a rank id,
     return the stage that contains this rank, plus the immediate
@@ -224,7 +226,7 @@ def main():
 
     device = torch.device("cpu")     
 
-    name = "Qwen/Qwen3-0.6B"
+    name = "Qwen/Qwen3-0.6B-Base"
     tok = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
     tok.pad_token = tok.eos_token
     full = AutoModelForCausalLM.from_pretrained(name, trust_remote_code=True)
@@ -269,7 +271,7 @@ def main():
     import gc; gc.collect()
 
     raw = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
-    block = 2048
+    block = 128
     def tok_fn(ex): 
         return tok(ex["text"], return_attention_mask=False)
     def grp_fn(ex):
