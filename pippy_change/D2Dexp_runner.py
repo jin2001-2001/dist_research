@@ -41,6 +41,7 @@ class PartStart(nn.Module):                          # rank 0
         device = input_ids.device
         position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1).contiguous()
         hidden = self.embed_tokens(input_ids)
+
         pos_emb = self.rotary_emb(hidden, position_ids)
 
         attn_mask = torch.triu(torch.full((seqlen, seqlen), float('-inf'), device=device), diagonal=1)
@@ -55,6 +56,7 @@ class PartStart(nn.Module):                          # rank 0
                            use_cache=False)[0]
 
         return hidden.contiguous(), attn_mask.contiguous()
+
 
 
 class PartMiddle(nn.Module):
@@ -106,6 +108,7 @@ class PartEnd(nn.Module):                                # rank 4：25-27 + norm
             seqlen = attn_mask.shape[-1]
             attn_mask = torch.triu(
                 torch.full((seqlen, seqlen), float('-inf'), device=device),diagonal= 1
+
             ).unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
         elif not attn_mask.is_contiguous():
             attn_mask = attn_mask.contiguous()
@@ -129,7 +132,9 @@ def load_config(cfg:str) -> Dict[str, Any]:
             cfg = json.load(f)
     return cfg
 
+
 def plan_parser(rank: int, world: int, cfg: Union[str, Dict[str, Any]]):
+
     """
     Given the pipeline config (dict or JSON path) and a rank id,
     return the stage that contains this rank, plus the immediate
@@ -226,7 +231,9 @@ def main():
 
     device = torch.device("cpu")     
 
+
     name = "Qwen/Qwen3-0.6B-Base"
+
     tok = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
     tok.pad_token = tok.eos_token
     full = AutoModelForCausalLM.from_pretrained(name, trust_remote_code=True)
@@ -235,10 +242,14 @@ def main():
     is_group,is_final_stage, shard_stage, shard_from, shard_to, prev_g, this_g, next_g, total_stages, total_batchs = plan_parser(rank, world, args.plan_loc)
 
     if shard_stage == 0:
+        print(f"shard_to {shard_to}")
         stage_mod = PartStart(full,shard_to)
     elif is_final_stage == 1:
+        print(f"shard_from {shard_from}")
         stage_mod = PartEnd(full,shard_from)
     else:
+        print(f"shard_from {shard_from}")
+        print(f"shard_to {shard_to}")
         stage_mod = PartMiddle(full, shard_from, shard_to)
 
 
@@ -271,7 +282,9 @@ def main():
     import gc; gc.collect()
 
     raw = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+
     block = 128
+
     def tok_fn(ex): 
         return tok(ex["text"], return_attention_mask=False)
     def grp_fn(ex):
@@ -302,7 +315,37 @@ def main():
     if total_batchs!= int(args.batch_size/args.microbatch_num):
         raise ValueError(f"Mbatch misbatch plan's assumption")
     
+
+    print(f"n_microbatches {args.batch_size}")
     sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=args.batch_size, loss_fn=loss_fn, root_pass=args.sudo_pass)
+
+    # === Memory monitor: start & register containers (CPU/Gloo safe) ===
+
+    rank_env = int(os.environ.get("RANK", str(rank)))  # 若已定义 rank 变量，可直接用
+    # monitor = MemoryMonitor(
+    #     log_path=f"/tmp/mem_rank{rank_env}.jsonl",
+    #     interval_s=0.5,
+    #     include_tensors=True,      # 若性能有感知，可改为 False
+    #     top_tensors=50,            # 多列一些大对象
+    #     cuda_only_tensors=False,   # 关键：CPU-only 必须 False
+    # )
+    # 逐容器统计（尽量多挂一些你关心的 dict）
+    # try:
+    #     if hasattr(stage, "fwd_cache"):
+    #        # monitor.register_container("fwd_cache", stage.fwd_cache)
+    #     if hasattr(stage, "bwd_cache"):
+    #        # monitor.register_container("bwd_cache", stage.bwd_cache)
+    # except Exception as e:
+    #     print(f"[rank {rank_env}] register stage caches failed: {e}")
+
+    # sched 内部“打包后的前向缓存”（如果存在就监控）
+    # try:
+    #    # monitor.register_container("big_fwd_cache", getattr(sched, "_big_fwd_cache"))
+    # except Exception as e:
+    #     print(f"[rank {rank_env}] register sched big cache failed: {e}")
+
+   # monitor.start()
+    # === end ===
 
     batch_info,group_info = plan_batch_parser(args.plan_loc)
     actions = generate_1f1b_pipeline_actions_pro(num_stages= total_stages, total_samples = args.batch_size, num_microbatches= args.microbatch_num,
@@ -336,56 +379,70 @@ def main():
                        bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
             start_time = time.time()
         
-        for step in range(total_steps):
-            step_start_time = time.time()
-            opt.zero_grad(set_to_none=True)
-            
-            if rank == 0:
-                batch = next(data_iter)
-                inp = batch["input_ids"].to(device)
-                tgt = batch["labels"].to(device)
-                dist.broadcast(tgt, src=0)
-                sched.step(inp, target=tgt)
-            else:
-               
-                tgt = torch.empty(batch_size, block, dtype=torch.long, device=device)
-                dist.broadcast(tgt, src=0)
-                sched.step(target=tgt)
-            
-            if (step + 1) % 50 == 0:
-                sched.timeline_rec.events.clear()
-            opt.step()
-            
-            if rank == 0:
-                step_time = time.time() - step_start_time
-                tokens_processed = batch_size * block
-                tokens_per_second = tokens_processed / step_time
-                
-                pbar.set_postfix({
-                    'tokens/s': f'{tokens_per_second:.0f}',
-                    'step_time': f'{step_time:.2f}s',
-                    'lr': f'{opt.param_groups[0]["lr"]:.2e}'
-                })
-                pbar.update(1)
-                
-            cur_loss = getattr(sched, "last_step_loss", None)
-            
-            if cur_loss is not None:
-                delta = (cur_loss - prev_loss) if prev_loss is not None else None
 
-                print(f"[rank0] step {step+1} loss {cur_loss:.4f}"
-                        + ("" if prev_loss is None else (" down" if cur_loss < prev_loss else " up" if cur_loss > prev_loss else " flat")))
-                prev_loss = cur_loss
+        try:
+            for step in range(total_steps):
+                step_start_time = time.time()
+                opt.zero_grad(set_to_none=True)
+
+               # with monitor.section("sched.step"):
+                if rank == 0:
+                    batch = next(data_iter)
+                    inp = batch["input_ids"].to(device)
+                    tgt = batch["labels"].to(device)
+                    dist.broadcast(tgt, src=0)
+                    sched.step(inp, target=tgt)
+                else:
+                    tgt = torch.empty(batch_size, block, dtype=torch.long, device=device)
+                    dist.broadcast(tgt, src=0)
+                    sched.step(None, target=tgt)
+
+              #  with monitor.section("opt.step"):
+                    opt.step()
+
+                
+                if rank == 0:
+                    step_time = time.time() - step_start_time
+                    tokens_processed = batch_size * block
+                    tokens_per_second = tokens_processed / step_time
+                    
+                    pbar.set_postfix({
+                        'tokens/s': f'{tokens_per_second:.0f}',
+                        'step_time': f'{step_time:.2f}s',
+                        'lr': f'{opt.param_groups[0]["lr"]:.2e}'
+                    })
+                    pbar.update(1)
+                    
+                cur_loss = getattr(sched, "last_step_loss", None)
+                
+                if cur_loss is not None:
+                    delta = (cur_loss - prev_loss) if prev_loss is not None else None
+
+                    print(f"[rank0] step {step+1} loss {cur_loss:.4f}"
+                            + ("" if prev_loss is None else (" down" if cur_loss < prev_loss else " up" if cur_loss > prev_loss else " flat")))
+                    prev_loss = cur_loss
+                
+                
+                
+                dist.barrier()
+            # try:
+            #    # monitor.stop()
+            # except Exception:
+            #     pass    
             
-            
-            
-            dist.barrier()
+        except Exception as e:
+            # 出错时抓一份即时快照到 stdout / log
+          #  snap = monitor.snapshot()
+          #  print("[MEM-SNAPSHOT-ON-ERROR]", snap)
+            raise
+
         
         if rank == 0:
             pbar.close()
             total_time = time.time() - start_time
             print(f"\nEpoch {epoch+1} completed in {total_time:.2f}s")
             print(f"Average speed: {total_steps / total_time:.2f} steps/s")
+
 
     if rank == 0:
         print("\nMerging and saving model...")
