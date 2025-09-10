@@ -127,8 +127,8 @@ class Recorder:
             # print(f"[{dist.get_rank()}] RECV operation - marking chunk done immediately "
             #     f"(action={action_id}, chunk={chunk_idx})")
             _mark_done_chunk(batch_id, action_id, chunk_idx)
-            print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
-                f"works={len(works)}")
+            # print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
+            #     f"works={len(works)}")
             
             # Still record the event for timeline
             self.events.append(
