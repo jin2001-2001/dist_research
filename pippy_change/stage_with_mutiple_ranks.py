@@ -3,7 +3,8 @@
 import logging
 import operator
 from abc import ABC, abstractmethod
-from typing import Any, Callable, cast, Optional, Union
+from typing import Any, Callable, cast, Optional, Union, List
+from collections import defaultdict
 
 import torch
 import torch.distributed as dist
@@ -20,6 +21,33 @@ from pipelining_source_code._debug import map_debug_info
 from pipelining_source_code._utils import flatten_args
 from pipelining_source_code._backward import stage_backward, stage_backward_input, stage_backward_weight
 logger = logging.getLogger(__name__)
+
+# ===== TAG-ADD: tag 构造工具 =====
+_DIR_SHIFT, _MB_SHIFT, _SLOT_SHIFT, _SPLIT_SHIFT = 27, 17, 8, 0
+_MB_BITS, _SLOT_BITS, _SPLIT_BITS = 10, 9, 8
+_MB_MASK, _SLOT_MASK, _SPLIT_MASK = (1<<_MB_BITS)-1, (1<<_SLOT_BITS)-1, (1<<_SPLIT_BITS)-1
+
+def _mk_tag(direction: int, microbatch_id: int, slot_idx: int, split_idx: int) -> int:
+    """31-bit tag。若越界则回退到一致哈希（两端独立可复现）。"""
+    need_fallback = (
+        microbatch_id > _MB_MASK or
+        slot_idx      > _SLOT_MASK or
+        split_idx     > _SPLIT_MASK
+    )
+    if not need_fallback:
+        return ((direction & 1) << _DIR_SHIFT) | \
+               ((microbatch_id & _MB_MASK) << _MB_SHIFT) | \
+               ((slot_idx      & _SLOT_MASK) << _SLOT_SHIFT) | \
+               ((split_idx     & _SPLIT_MASK) << _SPLIT_SHIFT)
+
+    # fallback: 简单一致哈希压 31 bit
+    v = (direction & 1) << 61
+    v ^= (int(microbatch_id) & 0xFFFFFFFF) << 30
+    v ^= (int(slot_idx)      & 0x3FFFFFFF) << 10
+    v ^= (int(split_idx)     & 0x3FF)
+    v ^= (v >> 33); v *= 0xff51afd7ed558ccd; v &= (1<<64)-1; v ^= (v >> 33)
+    return int(v & 0x7fffffff)
+
 
 class PipelineStage_with_mutiple_ranks(PipelineStage):
     def __init__(
@@ -44,6 +72,10 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         self.leader   = min(this_group)
 
         self.is_leader = dist.get_rank() == self.leader
+        self._fwd_post_recv: dict[int, list[tuple[torch.Tensor, torch.Tensor]]] = {}
+        self._last_comm_plan = {}   # key: (kind, mb_index) -> List[int] (每分块的 op 数量)
+        
+        self.is_print = 0
         
         super().__init__(submodule, stage_index, num_stages, device, input_args, output_args, group, dw_builder)
         
@@ -133,6 +165,8 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         return outputs_meta
 
+
+
     
     def _get_recv_ops(
         self,
@@ -161,102 +195,269 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         return ops
     
-    def get_fwd_recv_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
+    def _compute_1d_slices(self, numel: int, num_splits: int) -> list[tuple[int, int]]:
         """
-        Returns a list of ops that are needed to receive the input arguments
-        for this stage.
+        在 1D 长度为 numel 的序列上等量切分成 <= num_splits 份。
+        如果 num_splits > numel，则最多只切 numel 份（每份至少 1 个元素）。
+        返回 [(start, length), ...]，按元素序覆盖整个向量。
         """
-        recv_infos: tuple[InputInfo, ...] = self.args_recv_info[fwd_chunk_id]
+        if num_splits <= 1 or numel <= 0:
+            return [(0, numel)]
+        k = min(num_splits, numel)
+        base = numel // k
+        rem = numel % k
+        slices = []
+        start = 0
+        for i in range(k):
+            length = base + (1 if i < rem else 0)
+            slices.append((start, length))
+            start += length
+        return slices
 
-        return self._get_recv_ops(recv_infos, rank, dest_rank)
-
-    def get_bwd_recv_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
+    def get_fwd_send_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int = 1) -> list[dist.P2POp]:
         """
-        Returns a list of ops that are needed to receive the gradients
-        for this stage.
-        """
-        if not self.has_backward or self.is_last:
-            return []
-
-        recv_infos = self.grad_recv_info[bwd_chunk_id]
-        return self._get_recv_ops(recv_infos, rank, dest_rank)
-
-    def get_fwd_send_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
-        """
-        Get the activation send ops for current stage's forward.
+        Forward activations: 1D-flat chunking.
+        生成顺序：外层 split_idx，内层轮询所有张量；同时统计每个分块的 P2POp 数量。
         """
         output_tuple, _ = self.fwd_cache[fwd_chunk_id]
-
         ops: list[dist.P2POp] = []
+        ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
 
+        peer_rank = dest_rank
+        peer_global_rank = (peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank))
+
+        # 预计算每个张量的 1D 视图与切片表
+        # …前置不变…
+        plans = []  # [(slot_idx, flat, slices, dst_stages)]
+        slot_ctr = 0  # ===== TAG-ADD =====
         for idx, out in enumerate(output_tuple):
             dst_stages = self.act_send_info[idx]
-            for dst in dst_stages:
-                if dst is None:
-                    continue
-                logger.debug(
-                    "%s Sending tensor to Stage %s: %s",
-                    self.log_prefix,
-                    dst,
-                    out.size(),
-                )
-                peer_rank = dest_rank
-                peer_global_rank = (
-                    peer_rank
-                    if self.group is None
-                    else dist.get_global_rank(self.group, peer_rank)
-                )
-                ops.append(dist.P2POp(dist.isend, out, peer_global_rank, self.group))
+            if dst_stages is None:
+                continue
+            if not isinstance(out, torch.Tensor):
+                continue
+            flat = out.contiguous().view(-1)
+            slices = self._compute_1d_slices(flat.numel(), num_splits)
+            plans.append((slot_ctr, flat, slices, dst_stages))  # ===== TAG-ADD =====
+            slot_ctr += 1                                       # ===== TAG-ADD =====
 
+        for split_idx in range(max(1, num_splits)):
+            for slot_idx, flat, slices, dst_stages in plans:    # ===== TAG-ADD (只改解包变量名) =====
+                if split_idx >= len(slices):
+                    continue
+                off, ln = slices[split_idx]
+                chunk_view = flat.narrow(0, off, ln)
+                for _dst in dst_stages:
+                    if _dst is None:
+                        continue
+                    # 只新增 tag，不改变你的发送逻辑
+                    tag = _mk_tag(0, fwd_chunk_id, slot_idx, split_idx)  # ===== TAG-ADD =====
+                    ops.append(dist.P2POp(dist.isend, chunk_view, peer_global_rank, self.group, tag=tag))  # ===== TAG-ADD =====
+                    ops_per_chunk[split_idx] += 1
+
+
+        # 记录“每分块 op 数”
+        self._last_comm_plan[("SEND_F", fwd_chunk_id)] = ops_per_chunk
+        return ops
+            
+    def get_fwd_recv_ops(self, fwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int = 1) -> list[dist.P2POp]:
+        """
+        Forward activations: 1D-flat irecv into final buffers.
+        生成顺序：外层 split_idx，内层轮询所有目标缓冲；同时统计每个分块的 P2POp 数量。
+        """
+        recv_infos: tuple[InputInfo, ...] = self.args_recv_info[fwd_chunk_id]
+        ops: list[dist.P2POp] = []
+        ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
+
+        peer_rank = dest_rank
+        peer_global_rank = (peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank))
+
+        plans = []  # [(slot_idx, buf_flat, slices)]
+        slot_ctr = 0  # ===== TAG-ADD =====
+        for info in recv_infos:  # 保持你原来的写法，不读 arg_idx
+            if not isinstance(info, _RecvInfo):
+                continue
+            buf = info.buffer
+            if not isinstance(buf, torch.Tensor):
+                continue
+            buf_flat = buf.contiguous().view(-1)
+            slices = self._compute_1d_slices(buf_flat.numel(), num_splits)
+            plans.append((slot_ctr, buf_flat, slices))  # ===== TAG-ADD =====
+            slot_ctr += 1                               # ===== TAG-ADD =====
+
+        for split_idx in range(max(1, num_splits)):
+            for slot_idx, buf_flat, slices in plans:    # ===== TAG-ADD (只改解包变量名) =====
+                if split_idx >= len(slices):
+                    continue
+                off, ln = slices[split_idx]
+                view = buf_flat.narrow(0, off, ln)
+                tag = _mk_tag(0, fwd_chunk_id, slot_idx, split_idx)  # ===== TAG-ADD =====
+                ops.append(dist.P2POp(dist.irecv, view, peer_global_rank, self.group, tag=tag))  # ===== TAG-ADD =====
+                ops_per_chunk[split_idx] += 1
+
+
+        self._last_comm_plan[("RECV_F", fwd_chunk_id)] = ops_per_chunk
         return ops
 
-    def get_bwd_send_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
+
+    
+    def finish_fwd_recv(self, fwd_chunk_id: int) -> None:
         """
-        Get the gradient send ops for current stage's backward.
+        完成接收后的“粘合”：把每个 tmp copy_ 到最终的 target_view。
+        """
+        post_list = self._fwd_post_recv.pop(fwd_chunk_id, None)
+        if not post_list:
+            return
+        for tmp, view in post_list:
+            # 这里用 copy_，目标 view 可能是非连续的窄视图，但 copy_ 支持
+            with torch.no_grad():
+                view.copy_(tmp)
+
+    def get_bwd_send_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int = 1) -> list[dist.P2POp]:
+        """
+        Backward grads: 1D-flat chunking.
+        生成顺序：外层 split_idx，内层轮询所有梯度张量；同时统计每个分块的 P2POp 数量。
         """
         self._check_chunk_id(bwd_chunk_id)
-
         if not self.has_backward or self.is_first:
             return []
 
         if self.grad_send_info is None:
             self.grad_send_info = self._create_grad_send_info(self.args_recv_info[0])
 
-        ops: list[dist.P2POp] = []
         grads_input = self.bwd_cache.pop(bwd_chunk_id)
         self.fwd_cache.pop(bwd_chunk_id, None)
-        
+
+        peer_rank = dest_rank
+        peer_global_rank = (peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank))
+
+        # 预计算每个梯度的 1D 视图与切片表（只发浮点/复数梯度，保持你原逻辑）
+        # …前置不变…
+        plans = []  # [(slot_idx, flat, slices)]
+        slot_ctr = 0  # ===== TAG-ADD =====
         for grad, grad_recv_stage in zip(grads_input, self.grad_send_info):
-            # 跳过 None 的梯度接收阶段（对应于整数类型的tensor）
             if grad_recv_stage is None:
                 continue
-                
-            if isinstance(grad, torch.Tensor):
-                # 额外检查：只发送浮点类型的梯度
-                if not (grad.is_floating_point() or torch.is_complex(grad)):
-                    print(f"[{dist.get_rank()}] Skipping non-floating grad send: dtype={grad.dtype}")
+            if not isinstance(grad, torch.Tensor):
+                if grad is not None:
+                    raise RuntimeError(
+                        f"[{self.stage_index}] expecting a gradient tensor for an input "
+                        f"coming from stage {grad_recv_stage}, but got {type(grad)}"
+                    )
+                continue
+            if not (grad.is_floating_point() or torch.is_complex(grad)):
+                continue
+            flat = grad.contiguous().view(-1)
+            slices = self._compute_1d_slices(flat.numel(), num_splits)
+            plans.append((slot_ctr, flat, slices))  # ===== TAG-ADD =====
+            slot_ctr += 1                           # ===== TAG-ADD =====
+
+        ops: list[dist.P2POp] = []
+        ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
+        for split_idx in range(max(1, num_splits)):
+            for slot_idx, flat, slices in plans:    # ===== TAG-ADD (只改解包变量名) =====
+                if split_idx >= len(slices):
                     continue
-                    
-                logger.debug(
-                    "%s Sending gradient to Stage %s: %s",
-                    self.log_prefix,
-                    grad_recv_stage,
-                    grad.size(),
-                )
-                peer_rank = dest_rank
-                peer_global_rank = (
-                    peer_rank
-                    if self.group is None
-                    else dist.get_global_rank(self.group, peer_rank)
-                )
-                ops.append(dist.P2POp(dist.isend, grad, peer_global_rank, self.group))
-            elif grad is not None:
-                raise RuntimeError(
-                    f"[{self.stage_index}] expecting a gradient tensor for an input "
-                    f"coming from stage {grad_recv_stage}, but got {type(grad)}"
-                )
-        
+                off, ln = slices[split_idx]
+                chunk_view = flat.narrow(0, off, ln)
+                tag = _mk_tag(1, bwd_chunk_id, slot_idx, split_idx)  # ===== TAG-ADD =====
+                ops.append(dist.P2POp(dist.isend, chunk_view, peer_global_rank, self.group, tag=tag))  # ===== TAG-ADD =====
+                ops_per_chunk[split_idx] += 1
+
+
+        self._last_comm_plan[("SEND_B", bwd_chunk_id)] = ops_per_chunk
         return ops
+
+
+    def get_bwd_recv_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int, num_splits: int = 1) -> list[dist.P2POp]:
+        """
+        Backward grads: 1D-flat irecv into final buffers.
+        生成顺序：外层 split_idx，内层轮询所有目标缓冲；同时统计每个分块的 P2POp 数量。
+        """
+        if not self.has_backward or self.is_last:
+            return []
+
+        recv_infos = self.grad_recv_info[bwd_chunk_id]
+        ops: list[dist.P2POp] = []
+        ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
+
+        peer_rank = dest_rank
+        peer_global_rank = (peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank))
+
+        plans = []  # [(slot_idx, buf_flat, slices)]
+        slot_ctr = 0  # ===== TAG-ADD =====
+        for info in recv_infos:  # 保持你原来的写法，不读 arg_idx
+            if isinstance(info, _RecvInfo) and isinstance(info.buffer, torch.Tensor):
+                buf_flat = info.buffer.contiguous().view(-1)
+                slices = self._compute_1d_slices(buf_flat.numel(), num_splits)
+                plans.append((slot_ctr, buf_flat, slices))  # ===== TAG-ADD =====
+                slot_ctr += 1                               # ===== TAG-ADD =====
+
+        ops: list[dist.P2POp] = []
+        ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
+        for split_idx in range(max(1, num_splits)):
+            for slot_idx, buf_flat, slices in plans:        # ===== TAG-ADD (只改解包变量名) =====
+                if split_idx >= len(slices):
+                    continue
+                off, ln = slices[split_idx]
+                view = buf_flat.narrow(0, off, ln)
+                tag = _mk_tag(1, bwd_chunk_id, slot_idx, split_idx)  # ===== TAG-ADD =====
+                ops.append(dist.P2POp(dist.irecv, view, peer_global_rank, self.group, tag=tag))  # ===== TAG-ADD =====
+                ops_per_chunk[split_idx] += 1
+
+
+        self._last_comm_plan[("RECV_B", bwd_chunk_id)] = ops_per_chunk
+        return ops
+
+    
+    
+    # def get_bwd_send_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
+    #     """
+    #     Get the gradient send ops for current stage's backward.
+    #     """
+    #     self._check_chunk_id(bwd_chunk_id)
+
+    #     if not self.has_backward or self.is_first:
+    #         return []
+
+    #     if self.grad_send_info is None:
+    #         self.grad_send_info = self._create_grad_send_info(self.args_recv_info[0])
+
+    #     ops: list[dist.P2POp] = []
+    #     grads_input = self.bwd_cache.pop(bwd_chunk_id)
+    #     self.fwd_cache.pop(bwd_chunk_id, None)
+        
+    #     for grad, grad_recv_stage in zip(grads_input, self.grad_send_info):
+    #         # 跳过 None 的梯度接收阶段（对应于整数类型的tensor）
+    #         if grad_recv_stage is None:
+    #             continue
+                
+    #         if isinstance(grad, torch.Tensor):
+    #             # 额外检查：只发送浮点类型的梯度
+    #             if not (grad.is_floating_point() or torch.is_complex(grad)):
+    #                 #print(f"[{dist.get_rank()}] Skipping non-floating grad send: dtype={grad.dtype}")
+    #                 continue
+                    
+    #             logger.debug(
+    #                 "%s Sending gradient to Stage %s: %s",
+    #                 self.log_prefix,
+    #                 grad_recv_stage,
+    #                 grad.size(),
+    #             )
+    #             peer_rank = dest_rank
+    #             peer_global_rank = (
+    #                 peer_rank
+    #                 if self.group is None
+    #                 else dist.get_global_rank(self.group, peer_rank)
+    #             )
+    #             ops.append(dist.P2POp(dist.isend, grad, peer_global_rank, self.group))
+    #         elif grad is not None:
+    #             raise RuntimeError(
+    #                 f"[{self.stage_index}] expecting a gradient tensor for an input "
+    #                 f"coming from stage {grad_recv_stage}, but got {type(grad)}"
+    #             )
+        
+    #     return ops
     
     def _execute_allreduce(self):
         """
@@ -843,5 +1044,432 @@ def _make_tensor_from_meta(
         layout=example.layout,
         device=device,
     )
+
+class PipelineStage_Multimodality_Head(PipelineStage_with_mutiple_ranks):
+    def __init__(
+        self,
+        submodule: nn.Module,
+        stage_index: int,
+        num_stages: int,
+        device: torch.device,
+        input_args: Optional[Union[torch.Tensor, tuple[torch.Tensor, ...]]] = None,
+        output_args: Optional[Union[torch.Tensor, tuple[torch.Tensor, ...]]] = None,
+        group: Optional[dist.ProcessGroup] = None,
+        dw_builder: Optional[Callable[[], Callable[..., None]]] = None,
+        prev_group: list[int] = None, 
+        this_group: list[int] = None, 
+        next_group: list[int] = None,
+        modal_type: str = None,
+        fuse_stage: bool = False,
+        fuse_function: Optional[Callable[..., Any]] = None,
+        split_function: Optional[Callable[..., Any]] = None,
+    ):  
+        self.modal_type = modal_type
+        self.fuse_stage = fuse_stage
+        if fuse_function is not None and not callable(fuse_function):
+            raise TypeError("fuse_function must be a callable object or pass None.")
+        if split_function is not None and not callable(split_function):
+            raise TypeError("fuse_function must be a callable object or pass None.")
+        self.fuse_function = fuse_function
+        self.split_function = split_function
+        
+        # forward 接收信息（按 mb、模态 → tuple[_RecvInfo,...]）
+        self.mm_args_recv_info: dict[int, dict[str, tuple[_RecvInfo, ...]]] = defaultdict(dict)
+        # backward 接收信息（按 mb、模态 → tuple[_RecvInfo,...]）
+        self.mm_grad_recv_info: dict[int, dict[str, tuple[_RecvInfo, ...]]] = defaultdict(dict)
+
+        # forward 未融合缓存（按 mb、模态 → tuple[Tensor,...] 或者 dict）
+        self.mm_fwd_cache: dict[int, dict[str, tuple[torch.Tensor, ...]]] = defaultdict(dict)
+        # backward 拆分后的梯度缓存（按 mb、模态 → tuple[Tensor,...]）
+        self.mm_bwd_cache: dict[int, dict[str, tuple[torch.Tensor, ...]]] = defaultdict(dict)
+
+        # 发送路由（可选：若你不想每次调用传 routes，可以预注册，这里给出占位）
+        # 例如：{"vision": stage_id_3, "audio": stage_id_4}
+        self.mm_act_send_routes: dict[str, list[int]] = defaultdict(list)
+        self.mm_grad_send_routes: dict[str, list[int]] = defaultdict(list)
+        
+        super().__init__(submodule, stage_index, num_stages, device, input_args, output_args, group, dw_builder, prev_group,  this_group, next_group)
+        
+    def forward_one_chunk(
+        self,
+        fwd_chunk_id: int,
+        args: tuple[Any, ...],
+        kwargs: Optional[dict[str, Any]] = None,
+        pack_size: int = 1
+    ):
+        """
+        Perform forward pass on the stage with one microbatch.
+        `args` and `kwargs` are the inputs from *external* to this stage.
+        As of Sept 2024:
+        - `args` applies to the first stage only, other stages receives args
+        through activation transmission.
+        - `kwargs` can be passed to all stages via respective `step` calls.
+        """
+
+        def _is_first_stage_dp(self):
+            try:
+                dp_size = dist.get_world_size(self.dp_group)
+            except Exception:
+                dp_size = 1
+            return (self.prev_group is None) and (dp_size > 1)
+
+        need_rt_bcast = _is_first_stage_dp(self)
+
+        composite_args = None
+
+        if need_rt_bcast:
+            if self.is_leader:
+                if not args or len(args) == 0:
+                    raise RuntimeError(
+                        f"[rank{dist.get_rank()}] First-stage leader got empty args at "
+                        f"fwd_chunk_id={fwd_chunk_id}. Scheduler must pass root inputs to leader."
+                    )
+                dist.broadcast_object_list([args], src=self.leader, group=self.dp_group)
+                composite_args = args
+            else:
+                buf = [None]
+                dist.broadcast_object_list(buf, src=self.leader, group=self.dp_group)
+                composite_args = buf[0]
+        else:
+            if args:
+                composite_args = args
+            else:
+                composite_args = self._retrieve_recv_activations(fwd_chunk_id)
+
+        if composite_args is None or len(composite_args) == 0:
+            raise RuntimeError(
+                f"[rank{dist.get_rank()}] Empty composite_args after dispatch at "
+                f"stage={self.stage_index}, fwd_chunk_id={fwd_chunk_id}, "
+                f"is_first={self.prev_group is None}."
+            )
+
+        composite_kwargs = kwargs or {}
+
+        if (
+            pack_size > 1
+            and composite_args
+            and isinstance(composite_args[0], torch.Tensor)
+        ):
+            mb_bs = composite_args[0].shape[0] // pack_size
+            args_for_val = tuple(
+                (t[:mb_bs] if isinstance(t, torch.Tensor) else t)
+                for t in composite_args
+            )
+            kwargs_for_val = {
+                k: (v[:mb_bs] if isinstance(v, torch.Tensor) else v)
+                for k, v in composite_kwargs.items()
+            }
+        else:
+            args_for_val = composite_args
+            kwargs_for_val = composite_kwargs
+
+        self._validate_fwd_input(args_for_val, kwargs_for_val)
+
+        # 1) 本地前向
+        try:
+            output = self.forward_maybe_with_nosync(*composite_args, **composite_kwargs)
+        except Exception as e:
+            exc_msg = f"""
+            {self.log_prefix} failed to run forward:
+            args: {map_debug_info(composite_args)}
+            kwargs: {map_debug_info(composite_kwargs)}
+            """
+            raise RuntimeError(exc_msg) from e
+
+        # 2) 末端融合（可选）
+        # >>>> 在这里插入融合：只依赖 stage 与当前 output，避免无关依赖
+        if self.fuse_stage and (self.fuse_function is not None):
+            try:
+                fused_output = self.fuse_function(self, output)
+            except Exception as e:
+                exc_msg = f"""
+                {self.log_prefix} fuse_function failed at forward:
+                raw_output: {map_debug_info(output)}
+                """
+                raise RuntimeError(exc_msg) from e
+
+            if fused_output is None:
+                raise RuntimeError(f"{self.log_prefix} fuse_function returned None.")
+            output = fused_output  # 用融合后的结果替换原输出，保留计算图
+
+        # 3) 规范化输出，供缓存与校验（以融合后的 output 为准）
+        output_tuple = _normalize_model_output_as_tuple(output)
+
+        # 4) 仅最后一段会合并最终输出：应收集融合后的结果
+        if self.is_last:
+            self.output_chunks.append(output)
+
+        # 5) 保存前向缓存（用于 backward）
+        flat_args = flatten_args(composite_args)
+        flat_kwargs = flatten_args(composite_kwargs)
+        flatten_input_tensors = flat_args + flat_kwargs
+        self.fwd_cache[fwd_chunk_id] = (
+            output_tuple,            # stage_output（已融合，并规范为 tuple）
+            flatten_input_tensors,   # input_values
+        )
+
+        logger.debug(
+            "%s Forwarded chunk %s, outputs: %s",
+            self.log_prefix,
+            fwd_chunk_id,
+            map_debug_info(output),
+        )
+
+        # 6) 抽样校验（依旧基于融合后的 output_tuple）
+        if pack_size > 1 and isinstance(output_tuple, tuple) and len(output_tuple):
+            outputs_for_val = tuple(
+                t[:mb_bs] if isinstance(t, torch.Tensor) else t
+                for t in output_tuple
+            )
+        elif pack_size > 1 and isinstance(output_tuple, torch.Tensor):
+            outputs_for_val = output_tuple[:mb_bs]
+        else:
+            outputs_for_val = output_tuple
+
+        self._validate_fwd_outputs(outputs_for_val)
+
+        # 7) 返回融合后的原始对象，而非 tuple
+        return output
+
+    def backward_one_chunk(
+        self,
+        bwd_chunk_id: int,
+        loss=None,
+        full_backward: bool = True,
+        last_backward=False,
+        retain_graph_for_packed_mbs: bool = False,
+    ):
+        self._check_chunk_id(bwd_chunk_id)
+
+        (stage_output, input_values,) = self.fwd_cache.pop(bwd_chunk_id)
+
+        # Compute backward
+        if self.is_last:
+            bwd_kwargs = {
+                "stage_output": loss,
+                "output_grads": None,
+                "input_values": input_values,
+            }
+            split_out = None  # >>> NEW: 最后一个 stage 一般不需要拆分
+        else:
+            # Otherwise, receive gradients from next stage
+            grads_output = self._retrieve_recv_grads(bwd_chunk_id)
+
+            # Average upstream grads across the next stage's DP replicas
+            grads_output = self._avg_next_stage_grads(grads_output)
+
+            # >>> NEW: 在这里调用 split_function（仅当是融合阶段且用户提供了函数）
+            split_out = None
+            if getattr(self, "fuse_stage", False) and (getattr(self, "split_function", None) is not None):
+                try:
+                    split_out = self.split_function(self, stage_output, grads_output)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"{self.log_prefix} split_function failed at backward (chunk {bwd_chunk_id})."
+                    ) from e
+
+                if split_out is None or ("grads_output_local" not in split_out):
+                    raise RuntimeError(f"{self.log_prefix} split_function must return 'grads_output_local'.")
+
+                # 用用户提供的 grads_output_local 驱动本地 autograd
+                grads_output = split_out["grads_output_local"]
+
+                # 若用户要求保留图，转给后面的 backward 路径
+                if bool(split_out.get("retain_graph", False)):
+                    retain_graph_for_packed_mbs = True
+
+            # 继续按原逻辑组装 bwd_kwargs
+            bwd_kwargs = {
+                "stage_output": stage_output,
+                "output_grads": grads_output,
+                "input_values": input_values,
+            }
+
+        grads_input: tuple[Optional[torch.Tensor], ...] = ()
+
+        # Custom backward function（保持不变）
+        if self.dw_builder:
+            grads_input, _ = self.backward_maybe_with_nosync(
+                "full",
+                bwd_kwargs,
+                last_backward=last_backward,
+                retain_graph_for_packed_mbs=retain_graph_for_packed_mbs
+            )
+            if full_backward:
+                self.dw_builder()()
+            else:
+                self.dw_runner[bwd_chunk_id] = self.dw_builder()
+        else:
+            if full_backward:
+                grads_input, _ = self.backward_maybe_with_nosync(
+                    "full", bwd_kwargs, last_backward=last_backward,
+                    retain_graph_for_packed_mbs=retain_graph_for_packed_mbs
+                )
+            else:
+                param_groups: list[dict[str, Any]] | None = None
+                if not self.is_first:
+                    if isinstance(bwd_kwargs["stage_output"], torch.Tensor):
+                        bwd_kwargs["stage_output"] = (bwd_kwargs["stage_output"],)
+                    grads_input, param_groups = self.backward_maybe_with_nosync(
+                        "input", bwd_kwargs, last_backward=last_backward
+                    )
+                self.backward_state[bwd_chunk_id] = (
+                    bwd_kwargs["input_values"],
+                    param_groups,
+                    bwd_kwargs["stage_output"],
+                    bwd_kwargs["output_grads"],
+                )
+                self.dw_runner[bwd_chunk_id] = lambda: None
+
+        # >>> NEW: 若 split_function 给了 grads_input_overrides，则对 autograd 产出的 grads_input 做按位覆盖
+        #          这样“回给上游的各模态梯度”就能复用你现有的发送通道（args_recv_info/grad_send_info）而无需改通信层。
+        if split_out is not None:
+            overrides = split_out.get("grads_input_overrides", None)
+            if overrides is not None:
+                if not isinstance(overrides, (list, tuple)):
+                    raise RuntimeError(f"{self.log_prefix} grads_input_overrides must be a list/tuple.")
+                if len(overrides) != len(grads_input):
+                    raise RuntimeError(
+                        f"{self.log_prefix} grads_input_overrides length {len(overrides)} "
+                        f"!= grads_input length {len(grads_input)}."
+                    )
+                grads_input = tuple(
+                    (overrides[i] if overrides[i] is not None else grads_input[i])
+                    for i in range(len(grads_input))
+                )
+
+        # 原逻辑：为发送到 prev stage 做掩码与占位
+        if self.grad_send_info is None:
+            self.grad_send_info = self._create_grad_send_info(self.args_recv_info[0])
+
+        grads_input = tuple(
+            (g if dst is not None and isinstance(g, torch.Tensor) else None)
+            for g, dst in zip(grads_input, self.grad_send_info)
+        )
+
+        self.bwd_cache[bwd_chunk_id] = grads_input
+
+        if self.is_last and not self.is_first:
+            for t in stage_output:
+                if not t._is_view():
+                    t.detach_()
+
+        logger.debug("%s Backwarded chunk %s", self.log_prefix, bwd_chunk_id)
+        
+    def _to_global(self, peer_rank: int) -> int:
+        if self.group is None:
+            return peer_rank
+        return dist.get_global_rank(self.group, peer_rank)
+
+    def _append_ops(self, ops: list[dist.P2POp], tensors: tuple[torch.Tensor, ...], peer_rank: int, is_send: bool):
+        g = self._to_global(peer_rank)
+        for t in tensors:
+            if is_send:
+                ops.append(dist.P2POp(dist.isend, t, g, self.group))
+            else:
+                ops.append(dist.P2POp(dist.irecv, t, g, self.group))
+                
+    def get_fwd_recv_ops_modal(
+        self,
+        fwd_chunk_id: int,
+        routes: dict[str, int]  # {"vision": src_rank_local, "audio": src_rank_local, ...}
+    ) -> list[dist.P2POp]:
+        """
+        为同一 microbatch 的多个模态生成 irecv ops。
+        routes 中的 rank 是 group 内 rank；函数内部会转 global rank。
+        """
+        ops: list[dist.P2POp] = []
+
+        modal_infos = self.mm_args_recv_info.get(fwd_chunk_id, {})
+        for modal, src_rank in routes.items():
+            infos = modal_infos.get(modal, ())
+            for info in infos:
+                if not isinstance(info, _RecvInfo):
+                    continue
+                peer_global_rank = self._to_global(src_rank)
+                ops.append(dist.P2POp(dist.irecv, info.buffer, peer_global_rank, self.group))
+        return ops
+    
+    def get_fwd_send_ops_modal(
+        self,
+        fwd_chunk_id: int,
+        routes: dict[str, int]  # {"vision": dst_rank_local, ...}
+    ) -> list[dist.P2POp]:
+        """
+        发送尚未融合的模态 payload（很少用；通常融合后才走标准 act 通道）。
+        若需要把某模态先转发到另一 rank 做预处理，可以用这个。
+        """
+        ops: list[dist.P2POp] = []
+        modal_cache = self.mm_fwd_cache.get(fwd_chunk_id, {})
+        for modal, dst_rank in routes.items():
+            payload = modal_cache.get(modal, None)
+            if payload is None:
+                continue
+            g = self._to_global(dst_rank)
+            for t in payload:
+                ops.append(dist.P2POp(dist.isend, t, g, self.group))
+        return ops
+
+    def set_modal_grad_recv_infos(self, bwd_chunk_id: int, modal: str, recv_infos: tuple[_RecvInfo, ...]) -> None:
+        self.mm_grad_recv_info[bwd_chunk_id][modal] = recv_infos
+
+    def stash_modal_bwd_grads(self, bwd_chunk_id: int, modal: str, grads: tuple[torch.Tensor, ...]) -> None:
+        # 例如 grads = (grad_vision_tokens, grad_vision_lens_optional, ...)
+        self.mm_bwd_cache[bwd_chunk_id][modal] = grads
+        
+    def get_bwd_recv_ops_modal(
+        self,
+        bwd_chunk_id: int,
+        routes: dict[str, int]  # {"vision": src_rank_local, ...}
+    ) -> list[dist.P2POp]:
+        if not self.has_backward or self.is_last:
+            return []
+        ops: list[dist.P2POp] = []
+        modal_infos = self.mm_grad_recv_info.get(bwd_chunk_id, {})
+        for modal, src_rank in routes.items():
+            infos = modal_infos.get(modal, ())
+            for info in infos:
+                if not isinstance(info, _RecvInfo):
+                    continue
+                ops.append(dist.P2POp(dist.irecv, info.buffer, self._to_global(src_rank), self.group))
+        return ops
+    
+    def get_bwd_send_ops_modal(
+        self,
+        bwd_chunk_id: int,
+        routes: dict[str, int]  # {"vision": dst_rank_local, "audio": dst_rank_local, ...}
+    ) -> list[dist.P2POp]:
+        """
+        发送拆分后的各模态梯度。与现有 get_bwd_send_ops 并存：
+        - get_bwd_send_ops：负责“主通道”的 grads_input（对应融合后三元组上一段）
+        - 本函数：负责“模态通道”的 grads（对应各 encoder 上一段）
+        """
+        if not self.has_backward or self.is_first:
+            return []
+
+        ops: list[dist.P2POp] = []
+        modal_cache = self.mm_bwd_cache.pop(bwd_chunk_id, {})  # 用完即清
+        for modal, dst_rank in routes.items():
+            grads_pack = modal_cache.get(modal, None)
+            if grads_pack is None:
+                continue
+            for g in grads_pack:
+                if isinstance(g, torch.Tensor):
+                    # 仅发送浮点/复数梯度，跳过整型长度等
+                    if not (g.is_floating_point() or torch.is_complex(g)):
+                        # 允许存在非浮点（如 lens）；忽略即可
+                        continue
+                    ops.append(dist.P2POp(dist.isend, g, self._to_global(dst_rank), self.group))
+                else:
+                    raise RuntimeError(
+                        f"[{self.stage_index}] modal={modal} expects tensor grad, got {type(g)}"
+                    )
+        return ops
+    
+    
+    #下一步处理forwad和backward中cache或mmcache的管理
+
+
+
 
 

@@ -488,11 +488,6 @@ def main():
             "vision_inputs": vision_inputs,
         }
 
-
-
-
-
-
     batch_size = args.batch_size
     microbatch_num = args.microbatch_num
     block = 512
