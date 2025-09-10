@@ -1031,27 +1031,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     else:
                         print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}")
                     
-                    # num_splits = action.split_parts or 1
-
-                    # ops = (
-                    #     stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
-                    #     if rank is not None and dest_rank is not None
-                    #     else stage.get_fwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
-                    # )
-                    # # 读取 stage 填写的计划（每块的 op 数）
-                    # plan = stage._last_comm_plan.get(("SEND_F", mb_index), [len(ops)])  # 后备：一整块
-                    # pos = 0
-                    # for chunk_idx, cnt in enumerate(plan):
-                    #     sub_ops = ops[pos:pos+cnt]; pos += cnt
-
-                    #     # === 二级依赖：只允许依赖 RECV_* 的“分块完成” ===
-                    #     if action.chunk_deps and chunk_idx in action.chunk_deps:
-                    #         for (dep_rank, dep_action_id, dep_chunk) in action.chunk_deps[chunk_idx]:
-                    #             _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
-
-                    #     # [SEND-GATE] 你的阻塞/整形逻辑可继续写在 stage 的 send 循环里（不冲突）
-                    #     works_k = schedule._batch_p2p(sub_ops)
-                    #     send_ops.append(works_k)
                     num_splits = action.split_parts or 1
                     ops = (
                         stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
@@ -1060,10 +1039,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     )
                     plan = stage._last_comm_plan.get(("SEND_F", mb_index), [len(ops)])
 
-                    # 带宽限速的设置仍在主线程做（如果你这里有 _tc_set_rate）
-                    # self._tc_set_rate(action.upstream)  # 若你已有这行，保留；没有可忽略
-
-                    # 起线程，里面按 chunk 等依赖 -> 发送 -> 落 self._async_send_works
                     self._spawn_chunked_send_worker(
                         kind="SEND_F", action=action, ops=ops, plan=plan, chunk_deps=(action.chunk_deps or {}),
                         current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index
