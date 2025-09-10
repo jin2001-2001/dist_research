@@ -350,7 +350,7 @@ def debug_redis_key(key: str):
 # Modify _mark_done_chunk to add more debugging:
 def _mark_done_chunk(batch_id: int, action_id: int, chunk_idx: int):
     key = f"batch_{batch_id}_done_{dist.get_rank()}_{action_id}_c{chunk_idx}"
-    print(f"[{dist.get_rank()}] MARKING DONE: {key}")
+    #print(f"[{dist.get_rank()}] MARKING DONE: {key}")
     
     client = _get_redis_client()
     
@@ -687,8 +687,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                 
                 # Post the irecv operations
                 works_k = schedule._batch_p2p(sub_ops)
-                print(f"[{dist.get_rank()}] POST {kind} st{stage_idx} mb{mb_index} "
-                    f"chunk{chunk_idx} ops={len(works_k)} action_id={action_id}")
+                # print(f"[{dist.get_rank()}] POST {kind} st{stage_idx} mb{mb_index} "
+                #     f"chunk{chunk_idx} ops={len(works_k)} action_id={action_id}")
                 
                 # Record to async container
                 with self._async_recv_lock:
@@ -705,7 +705,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     works_k, start_ns_k, chunk_idx=chunk_idx
                 )
             
-            print(f"[{dist.get_rank()}] {kind} worker finished for action={action_id}, mb={mb_index}")
+            #print(f"[{dist.get_rank()}] {kind} worker finished for action={action_id}, mb={mb_index}")
             
             # Set the "all posted" event
             with self._async_recv_lock:
@@ -739,7 +739,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     continue
                 sub_ops = ops[pos:pos+cnt]; pos += cnt
 
-                print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}等待之前\n")
+                #print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}等待之前\n")
                 # 只允许 SEND 依赖 RECV 的 chunk 完成
                 if chunk_deps and chunk_idx in chunk_deps:
                     for (dep_rank, dep_action_id, dep_chunk) in chunk_deps[chunk_idx]:
@@ -1258,9 +1258,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                 
                                 # Now actually wait for the works
                                 if works:
-                                    print(f"[{dist.get_rank()}] FORWARD actually waiting for {len(works)} works")
+                                    #print(f"[{dist.get_rank()}] FORWARD actually waiting for {len(works)} works")
                                     schedule._wait_batch_p2p(works)
-                                    print(f"[{dist.get_rank()}] FORWARD done waiting for mb{mid}")
+                                    #print(f"[{dist.get_rank()}] FORWARD done waiting for mb{mid}")
                                 
                                 # Clean up event
                                 self._fwd_recv_posted.pop(key, None)
