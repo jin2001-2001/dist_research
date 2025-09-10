@@ -118,14 +118,14 @@ class Recorder:
         need_net = self.measure_net and action in self.net_actions
         samples, stop_evt = [], threading.Event()
 
-        print(f"[{dist.get_rank()}] Recorder.record_async called: batch={batch_id}, action={action_id}, "
-            f"kind={action}, stage={stage_idx}, mb={mb_idx}, chunk={chunk_idx}, works={len(works)}")
+        # print(f"[{dist.get_rank()}] Recorder.record_async called: batch={batch_id}, action={action_id}, "
+        #     f"kind={action}, stage={stage_idx}, mb={mb_idx}, chunk={chunk_idx}, works={len(works)}")
         
         # CRITICAL FIX: For RECV operations, mark done immediately without waiting
         # The actual wait will happen in FORWARD/BACKWARD
         if action in ("RECV_F", "RECV_B") and chunk_idx is not None:
-            print(f"[{dist.get_rank()}] RECV operation - marking chunk done immediately "
-                f"(action={action_id}, chunk={chunk_idx})")
+            # print(f"[{dist.get_rank()}] RECV operation - marking chunk done immediately "
+            #     f"(action={action_id}, chunk={chunk_idx})")
             _mark_done_chunk(batch_id, action_id, chunk_idx)
             print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
                 f"works={len(works)}")
@@ -174,10 +174,10 @@ class Recorder:
                 if chunk_idx is None:
                     _mark_done(batch_id=batch_id, action_id=action_id)
                 else:
-                    print(f"[{dist.get_rank()}] Marking done chunk for batch={batch_id}, action={action_id}, chunk={chunk_idx}")
+                    # print(f"[{dist.get_rank()}] Marking done chunk for batch={batch_id}, action={action_id}, chunk={chunk_idx}")
                     _mark_done_chunk(batch_id=batch_id, action_id=action_id, chunk_idx=chunk_idx)
-                    print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
-                        f"works={len(works)}")
+                    # print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
+                    #     f"works={len(works)}")
             except Exception as e:
                 status = f"error:{type(e).__name__}"
                 end_ns = time.time_ns()

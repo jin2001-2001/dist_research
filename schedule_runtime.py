@@ -360,16 +360,16 @@ def _mark_done_chunk(batch_id: int, action_id: int, chunk_idx: int):
     
     # Set with explicit confirmation
     result = client.setex(key, KEY_EXPIRE_TIME, b"2")
-    print(f"[{dist.get_rank()}] Redis SETEX result for {key}: {result}")
+    #print(f"[{dist.get_rank()}] Redis SETEX result for {key}: {result}")
     
     # Verify it was set
     verify = client.get(key)
-    print(f"[{dist.get_rank()}] Verification GET {key}: {verify}")
+    #print(f"[{dist.get_rank()}] Verification GET {key}: {verify}")
     
     # Publish to channel
     channel = f"chunk_channel_{batch_id}_{dist.get_rank()}_{action_id}_{chunk_idx}"
     pub_count = client.publish(channel, b"2")
-    print(f"[{dist.get_rank()}] Published to {channel}, subscribers: {pub_count}")
+    #print(f"[{dist.get_rank()}] Published to {channel}, subscribers: {pub_count}")
 
 # Modify _wait_remote_chunk to add more debugging:
 def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: int, timeout: float | None = None):
@@ -667,8 +667,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
         assert kind in ("RECV_F", "RECV_B")
         key = (stage_idx, mb_index)
         
-        print(f"[{dist.get_rank()}] Starting recv worker for {kind} action_id={action_id}, "
-            f"stage={stage_idx}, mb={mb_index}, plan={plan}")
+        # print(f"[{dist.get_rank()}] Starting recv worker for {kind} action_id={action_id}, "
+        #     f"stage={stage_idx}, mb={mb_index}, plan={plan}")
 
         def worker():
             pos = 0
@@ -677,8 +677,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     continue
                 sub_ops = ops[pos:pos+cnt]; pos += cnt
                 
-                print(f"[{dist.get_rank()}] {kind} worker: Processing chunk {chunk_idx} "
-                    f"with {cnt} ops for action={action_id}, mb={mb_index}")
+                # print(f"[{dist.get_rank()}] {kind} worker: Processing chunk {chunk_idx} "
+                #     f"with {cnt} ops for action={action_id}, mb={mb_index}")
                 
                 # Wait for dependencies if any
                 if chunk_deps and chunk_idx in chunk_deps:
@@ -699,7 +699,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                 
                 # Record async (this should trigger _mark_done_chunk when complete)
                 start_ns_k = time.time_ns()
-                print(f"[{dist.get_rank()}] Calling record_async for action={action.id}, chunk={chunk_idx}")
+                #print(f"[{dist.get_rank()}] Calling record_async for action={action.id}, chunk={chunk_idx}")
                 self._rec.record_async(
                     current_batch+1, action.id, kind, stage_idx, mb_index,
                     works_k, start_ns_k, chunk_idx=chunk_idx
@@ -744,11 +744,11 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                 if chunk_deps and chunk_idx in chunk_deps:
                     for (dep_rank, dep_action_id, dep_chunk) in chunk_deps[chunk_idx]:
                         dep_key = f"batch_{current_batch+1}_done_{dep_rank}_{dep_action_id}_c{dep_chunk}"
-                        print(f"[{dist.get_rank()}] SEND {kind} st{stage_idx} mb{mb_index} "
-                            f"chunk{chunk_idx} waiting {dep_key}")
+                        # print(f"[{dist.get_rank()}] SEND {kind} st{stage_idx} mb{mb_index} "
+                        #     f"chunk{chunk_idx} waiting {dep_key}")
                         try:
                             _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
-                            print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}等待之后\n")
+                            #print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}等待之后\n")
                         except TimeoutError:
                             print(f"[{dist.get_rank()}] TIMEOUT waiting {dep_key} "
                                 f"(check remote RECV posting/completion)")
@@ -756,9 +756,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         print(f"[{dist.get_rank()}] SEND {kind} st{stage_idx} mb{mb_index} "
                             f"chunk{chunk_idx} dep OK: {dep_key}")
                 # 提交该 chunk 的发送
-                print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}发送命令之前\n")
+                #print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}发送命令之前\n")
                 works_k = schedule._batch_p2p(sub_ops)
-                print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}发送命令已创建\n")
+                #print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}发送命令已创建\n")
                 # 记录到异步容器，批尾统一等待
                 with self._async_send_lock:
                     self._async_send_works[current_batch+1].append(works_k)
