@@ -828,7 +828,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                 for action in actions[rank]:
                     assert action is not None
                     self.pipeline_order_with_comms[rank].append(action)
-            # TODO what level of validation should we offer for compute+comms schedule?
+            # TODO what level of validation should we offer for compute+comms schedule? Jin: Question here...
         elif format == "compute_only":
             # Perform schedule lowering
             for rank in actions:
@@ -1243,6 +1243,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         # In _step_microbatches, fix the FORWARD section:
                         if not is_prev_stage_on_this_rank:
                             for mid in mb_ids:
+
                                 key = (stage_idx, mid)
                                 # Wait for "all irecv posted"
                                 assert key in self._fwd_recv_posted, f"Computing {action=} before RECV_F posted"

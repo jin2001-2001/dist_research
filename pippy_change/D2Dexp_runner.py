@@ -41,24 +41,22 @@ class PartStart(nn.Module):                          # rank 0
         device = input_ids.device
         position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1).contiguous()
         hidden = self.embed_tokens(input_ids)
-        position_embeddings = self.rotary_emb(hidden, position_ids)
-        attention_mask = torch.triu(
-            torch.full((seqlen, seqlen), float('-inf'), device=device),
-            diagonal=1
-        ).unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
+
+        pos_emb = self.rotary_emb(hidden, position_ids)
+
+        attn_mask = torch.triu(torch.full((seqlen, seqlen), float('-inf'), device=device), diagonal=1)
+        attn_mask = attn_mask.unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
 
         for layer in self.layers:
-            layer_outputs = layer(
-                hidden_states=hidden,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                position_embeddings=position_embeddings,
-                output_attentions=False,
-                use_cache=False,
-            )
-            hidden = layer_outputs[0]
+            hidden = layer(hidden_states=hidden,
+                           attention_mask=attn_mask,
+                           position_ids=position_ids,
+                           position_embeddings=pos_emb,
+                           output_attentions=False,
+                           use_cache=False)[0]
 
-        return hidden.contiguous(), attention_mask.contiguous()
+        return hidden.contiguous(), attn_mask.contiguous()
+
 
 
 class PartMiddle(nn.Module):
@@ -75,6 +73,7 @@ class PartMiddle(nn.Module):
         pos_emb = self.rotary_emb(hidden, position_ids)
 
         if attn_mask.dim() == 2:                       # 兼容单矩阵传递
+            seqlen = attn_mask.shape[-1]
             attn_mask = torch.triu(
                 torch.full((seqlen, seqlen), float('-inf'), device=device), 1
             ).unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
@@ -106,8 +105,10 @@ class PartEnd(nn.Module):                                # rank 4：25-27 + norm
         pos_emb = self.rotary_emb(hidden, position_ids)
 
         if attn_mask.dim() == 2:
+            seqlen = attn_mask.shape[-1]
             attn_mask = torch.triu(
-                torch.full((seqlen, seqlen), float('-inf'), device=device), 1
+                torch.full((seqlen, seqlen), float('-inf'), device=device),diagonal= 1
+
             ).unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
         elif not attn_mask.is_contiguous():
             attn_mask = attn_mask.contiguous()
@@ -131,7 +132,9 @@ def load_config(cfg:str) -> Dict[str, Any]:
             cfg = json.load(f)
     return cfg
 
-def plan_parser(rank: int, world: int, cfg: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+
+def plan_parser(rank: int, world: int, cfg: Union[str, Dict[str, Any]]):
+
     """
     Given the pipeline config (dict or JSON path) and a rank id,
     return the stage that contains this rank, plus the immediate
@@ -228,7 +231,9 @@ def main():
 
     device = torch.device("cpu")     
 
-    name = "Qwen/Qwen3-0.6B"
+
+    name = "Qwen/Qwen3-0.6B-Base"
+
     tok = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
     tok.pad_token = tok.eos_token
     full = AutoModelForCausalLM.from_pretrained(name, trust_remote_code=True)
@@ -277,7 +282,9 @@ def main():
     import gc; gc.collect()
 
     raw = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
-    block = 1024
+
+    block = 128
+
     def tok_fn(ex): 
         return tok(ex["text"], return_attention_mask=False)
     def grp_fn(ex):
@@ -308,6 +315,7 @@ def main():
     if total_batchs!= int(args.batch_size/args.microbatch_num):
         raise ValueError(f"Mbatch misbatch plan's assumption")
     
+
     print(f"n_microbatches {args.batch_size}")
     sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=args.batch_size, loss_fn=loss_fn, root_pass=args.sudo_pass)
 
@@ -339,8 +347,6 @@ def main():
    # monitor.start()
     # === end ===
 
-    
-    
     batch_info,group_info = plan_batch_parser(args.plan_loc)
     actions = generate_1f1b_pipeline_actions_pro(num_stages= total_stages, total_samples = args.batch_size, num_microbatches= args.microbatch_num,
                                                  group_info=group_info, batch_info=batch_info,
@@ -373,6 +379,7 @@ def main():
                        bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
             start_time = time.time()
         
+
         try:
             for step in range(total_steps):
                 step_start_time = time.time()
@@ -428,14 +435,14 @@ def main():
           #  snap = monitor.snapshot()
           #  print("[MEM-SNAPSHOT-ON-ERROR]", snap)
             raise
+
         
         if rank == 0:
             pbar.close()
             total_time = time.time() - start_time
             print(f"\nEpoch {epoch+1} completed in {total_time:.2f}s")
             print(f"Average speed: {total_steps / total_time:.2f} steps/s")
-            
-    
+
 
     if rank == 0:
         print("\nMerging and saving model...")
