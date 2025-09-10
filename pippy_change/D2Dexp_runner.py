@@ -283,7 +283,7 @@ def main():
 
     raw = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
 
-    block = 128
+    block = 512
 
     def tok_fn(ex): 
         return tok(ex["text"], return_attention_mask=False)
