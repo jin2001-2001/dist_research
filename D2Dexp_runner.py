@@ -11,7 +11,6 @@ Key Features:
 - Manual microbatch scheduling via custom action list
 - Used for testing correctness and loss behavior of the hybrid PP runtime
 """
-from memory_monitor import MemoryMonitor
 import json
 from typing import Any, Dict, List, Union
 import argparse, os, torch, torch.nn as nn, torch.nn.functional as F, torch.optim as optim
