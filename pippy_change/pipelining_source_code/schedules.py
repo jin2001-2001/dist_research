@@ -9,7 +9,7 @@ import re
 from abc import ABC, abstractmethod
 from collections import Counter, defaultdict
 from enum import Enum
-from typing import Any, Callable, NamedTuple, Optional, Union, Iterable, Dict, List
+from typing import Any, Callable, NamedTuple, Optional, Union, Iterable, Dict, List, Tuple
 
 import torch
 import torch.distributed as dist
@@ -172,8 +172,10 @@ class _Action():
     upstream: Optional[int]
     id: int
     dependency: Optional[Dict[int, tuple[int, ...]]]
+    split_parts: Optional[int] 
+    chunk_deps: Optional[Dict[int, List[Tuple[int,int,int]]]]
     
-    def __init__(self, stage_index, rank, id, computation_type, microbatch_index, dest_rank=None, upstream=None, dependency=None):
+    def __init__(self, stage_index, rank, id, computation_type, microbatch_index, dest_rank=None, upstream=None, dependency=None, split_parts=None, chunk_deps=None):
         self.stage_index = stage_index
         self.rank = rank
         self.id = id
@@ -182,6 +184,8 @@ class _Action():
         self.dest_rank = dest_rank
         self.upstream = upstream
         self.dependency = dependency
+        self.split_parts = split_parts
+        self.chunk_deps  = chunk_deps
 
     # -----------------------------------------------------------------------
     # NOTE: The order here matches the from_str method parameter order:
@@ -1337,208 +1341,6 @@ class PipelineScheduleMulti(_PipelineSchedule):
         target: target for the loss function.
         losses: a list to store the losses for each microbatch.
         """
-        
-        
-        
-        
-        
-        
-        
-        # def _cat_if_tensor_list(xs, dim=0):
-        #     # xs 可能是 None / list[Tensor] / list[None]
-        #     if xs is None:
-        #         return None
-        #     xs = [x for x in xs if x is not None]
-        #     if not xs:
-        #         return None
-        #     return torch.cat(xs, dim=dim)
-
-        # def _kw_cat_tensors(kwargs_split, key, dim=0):
-        #     parts = []
-        #     for kw in kwargs_split:
-        #         v = kw.get(key, None)
-        #         if v is None:
-        #             parts.append(None)
-        #         else:
-        #             parts.append(v)
-        #     return _cat_if_tensor_list(parts, dim=dim)
-
-        # def _kw_collect_vision(kwargs_split):
-        #     # 拼回 vision_inputs
-        #     full_grid_list = []
-        #     full_pv_list = []
-        #     for kw in kwargs_split:
-        #         vi = kw.get("vision_inputs", None)
-        #         if vi is None:
-        #             continue
-        #         if "grid_thw" in vi and vi["grid_thw"] is not None:
-        #             full_grid_list.append(vi["grid_thw"])
-        #         if "pixel_values_list" in vi and vi["pixel_values_list"] is not None:
-        #             full_pv_list.extend(vi["pixel_values_list"])
-        #     cat_grid = torch.cat(full_grid_list, dim=0) if full_grid_list else None
-        #     return cat_grid, full_pv_list
-
-        # def _ensure_same_mb_size(args_split, kwargs_split, targets_split):
-        #     # 每个 microbatch 的样本数要一致
-        #     def mb_size_from_any(mb_args, mb_kwargs, mb_tgt):
-        #         # 优先从 input_ids / attention_mask / labels 等 2D 张量推样本维
-        #         cands = []
-        #         for a in mb_args:
-        #             if torch.is_tensor(a) and a.dim() >= 1:
-        #                 cands.append(a.size(0))
-        #         for k in ("input_ids", "attention_mask", "labels"):
-        #             v = mb_kwargs.get(k, None)
-        #             if torch.is_tensor(v) and v.dim() >= 1:
-        #                 cands.append(v.size(0))
-        #         if mb_tgt is not None and torch.is_tensor(mb_tgt) and mb_tgt.dim() >= 1:
-        #             cands.append(mb_tgt.size(0))
-        #         if not cands:
-        #             return None
-        #         # 全部相等
-        #         assert all(s == cands[0] for s in cands), f"Microbatch内部样本数不一致: {cands}"
-        #         return cands[0]
-
-        #     for i, (mb_args, mb_kwargs, mb_tgt) in enumerate(zip(args_split, kwargs_split, targets_split or [None]*len(args_split))):
-        #         _ = mb_size_from_any(mb_args, mb_kwargs, mb_tgt)  # 触发断言即可
-
-        # def check_split_correctness(
-        #     args, kwargs, target,
-        #     args_split, kwargs_split, targets_split,
-        #     special_ids=None, rtol=0.0, atol=0.0
-        # ):
-        #     """
-        #     检测分割是否正确：
-        #     1) 将分割后的各部分在 batch 维拼回，并与分割前逐元素比较
-        #     2) 检查 vision_inputs 的 grid_thw / pixel_values_list 顺序与形状
-        #     3) 校验每个 microbatch 的样本数在 args/kwargs/target 三者间一致
-        #     4) 可选：检查 labels == -100 仅出现在 special_ids 处（若提供）
-        #     """
-        #     with torch.no_grad():
-        #         # 0) microbatch 基本一致性
-        #         _ensure_same_mb_size(args_split, kwargs_split, targets_split)
-
-        #         # 1) args：按维度0拼回（仅对Tensor）
-        #         recon_args = []
-        #         for col in zip(*args_split):
-        #             # col 是该位置上所有 microbatch 的值
-        #             if torch.is_tensor(col[0]):
-        #                 recon_args.append(torch.cat(list(col), dim=0))
-        #             else:
-        #                 recon_args.append(col[0])  # 非Tensor跳过强校验
-
-        #         # 原始 args 中 Tensor 与 recon 对比
-        #         for i, (a0, a1) in enumerate(zip(args, recon_args)):
-        #             if torch.is_tensor(a0):
-        #                 assert a0.shape == a1.shape, f"args[{i}] 形状不一致: {a0.shape} vs {a1.shape}"
-        #                 if a0.dtype.is_floating_point:
-        #                     assert torch.allclose(a0, a1, rtol=rtol, atol=atol), f"args[{i}] 数值不一致"
-        #                 else:
-        #                     assert torch.equal(a0, a1), f"args[{i}] 数值不一致（整型/布尔）"
-
-        #         # 2) kwargs：常规键逐个拼回
-        #         for k, v in kwargs.items():
-        #             if k == "vision_inputs":
-        #                 continue
-        #             if torch.is_tensor(v):
-        #                 v_rec = _kw_cat_tensors(kwargs_split, k, dim=0)
-        #                 assert v_rec is not None, f"缺少微批 {k}"
-        #                 assert v.shape == v_rec.shape, f"{k} 形状不一致: {v.shape} vs {v_rec.shape}"
-        #                 if v.dtype.is_floating_point:
-        #                     assert torch.allclose(v, v_rec, rtol=rtol, atol=atol), f"{k} 数值不一致"
-        #                 else:
-        #                     assert torch.equal(v, v_rec), f"{k} 数值不一致（整型/布尔）"
-
-        #         # 3) target：拼回
-        #         if target is not None and targets_split is not None:
-        #             t_rec = torch.cat(list(targets_split), dim=0)
-        #             assert t_rec.shape == target.shape, f"target 形状不一致: {t_rec.shape} vs {target.shape}"
-        #             if target.dtype.is_floating_point:
-        #                 assert torch.allclose(target, t_rec, rtol=rtol, atol=atol), "target 数值不一致"
-        #             else:
-        #                 assert torch.equal(target, t_rec), "target 数值不一致（整型）"
-
-        #         # 4) vision_inputs：grid_thw 拼回、pixel_values_list 顺序/形状
-        #         vis0 = kwargs.get("vision_inputs", None)
-        #         if vis0 is not None:
-        #             grid0 = vis0.get("grid_thw", None)
-        #             pv0   = vis0.get("pixel_values_list", None)
-        #             grid_rec, pv_rec = _kw_collect_vision(kwargs_split)
-
-        #             # grid_thw
-        #             if grid0 is not None:
-        #                 assert grid_rec is not None, "缺少微批 grid_thw"
-        #                 assert torch.equal(grid0, grid_rec), "grid_thw 拼回后与原始不一致"
-
-        #             # pixel_values_list（长度+逐样本形状+数值）
-        #             if pv0 is not None:
-        #                 assert len(pv0) == len(pv_rec), f"pixel_values_list 样本数不一致: {len(pv0)} vs {len(pv_rec)}"
-        #                 for i, (a, b) in enumerate(zip(pv0, pv_rec)):
-        #                     assert a.shape == b.shape, f"pixel_values_list[{i}] 形状不一致: {a.shape} vs {b.shape}"
-        #                     # 浮点对比用 allclose
-        #                     assert torch.allclose(a, b, rtol=rtol, atol=atol), f"pixel_values_list[{i}] 数值不一致"
-
-        #             # 视觉 token 数量与 grid_thw 对齐
-        #             if grid0 is not None and pv0 is not None:
-        #                 for i, g in enumerate(grid0):
-        #                     t, h, w = g.tolist()
-        #                     assert pv0[i].size(0) == int(t*h*w), f"样本 {i} 视觉token数 {pv0[i].size(0)} ≠ t*h*w={t*h*w}"
-
-        #         # 5) 可选：labels 的 -100 仅出现在 special_ids
-        #         if special_ids is not None:
-        #             ids = None
-        #             # 从 args 或 kwargs 中找 input_ids
-        #             # 你的调用通常把 input_ids 放在 args[0]，也可能在 kwargs["input_ids"]
-        #             if len(args) > 0 and torch.is_tensor(args[0]):
-        #                 ids = args[0]
-        #             elif "input_ids" in kwargs and torch.is_tensor(kwargs["input_ids"]):
-        #                 ids = kwargs["input_ids"]
-        #             labels = kwargs.get("labels", None)
-        #             if labels is None:
-        #                 # 有些实现把 labels 只作为 target 传入
-        #                 labels = target
-        #             if ids is not None and labels is not None:
-        #                 spec = torch.tensor(list(special_ids), device=ids.device, dtype=ids.dtype)
-        #                 is_special = torch.isin(ids, spec)
-        #                 wrong_mask = (labels == -100) & (~is_special)
-        #                 assert not wrong_mask.any(), "发现文本 token 被误标为 -100"
-
-        #     return True
-        # def debug_split_vision_list(pv0, pv_rec):
-        #     print(f"[DEBUG] pixel_values_list mismatch: 原始 {len(pv0)} vs 拼回 {len(pv_rec)}")
-        #     min_len = min(len(pv0), len(pv_rec))
-        #     for i in range(min_len):
-        #         if pv0[i].shape != pv_rec[i].shape:
-        #             print(f"  样本 {i}: 原始 {pv0[i].shape}, 拼回 {pv_rec[i].shape}")
-        #     if len(pv_rec) > len(pv0):
-        #         print(f"  拼回多出来 {len(pv_rec)-len(pv0)} 个元素")
-        #         extra_shapes = [p.shape for p in pv_rec[len(pv0):]]
-        #         print(f"  这些额外元素的形状: {extra_shapes}")
-
-        # def check_split_correctness_verbose(
-        #     args, kwargs, target,
-        #     args_split, kwargs_split, targets_split
-        # ):
-        #     # === 拼回 vision_inputs ===
-        #     vis0 = kwargs.get("vision_inputs", None)
-        #     grid_rec, pv_rec = _kw_collect_vision(kwargs_split)
-        #     if vis0 is not None:
-        #         pv0 = vis0.get("pixel_values_list", None)
-        #         grid0 = vis0.get("grid_thw", None)
-
-        #         if pv0 is not None:
-        #             if len(pv0) != len(pv_rec):
-        #                 debug_split_vision_list(pv0, pv_rec)
-        #             else:
-        #                 for i, (a, b) in enumerate(zip(pv0, pv_rec)):
-        #                     if a.shape != b.shape:
-        #                         print(f"[DEBUG] 样本 {i} 形状不一致: {a.shape} vs {b.shape}")
-        #             # grid 检查
-        #             if grid0 is not None and grid_rec is not None:
-        #                 if not torch.equal(grid0, grid_rec):
-        #                     print("[DEBUG] grid_thw 拼回后和原始不一致")
-        #                     print(f"原始 grid:\n{grid0}")
-        #                     print(f"拼回 grid:\n{grid_rec}")
-        #     print("[DEBUG] check_split_correctness_verbose 执行完毕")
 
         # Clean per iteration
         for stage in self._stages:
@@ -1555,25 +1357,6 @@ class PipelineScheduleMulti(_PipelineSchedule):
         else:
             targets_split = None
 
-        # print(f"after split args {args_split}")
-        # print(f"after split kwargs {kwargs_split}")
-        # print(f'after split target {targets_split}')
-        # _ = check_split_correctness_verbose(
-        #     args, kwargs, target,
-        #     args_split, kwargs_split, targets_split
-        # )
-        
-        # _ = check_split_correctness(
-        #     args=args,
-        #     kwargs=kwargs,
-        #     target=target,
-        #     args_split=args_split,
-        #     kwargs_split=kwargs_split,
-        #     targets_split=targets_split,
-        #     special_ids=None  # 如果你知道 pad/image/eos 的 id，可以传如 {151643,151644,151645}
-        # )
-        # print("Split correctness: OK")
-        # Run microbatches
         self._step_microbatches(args_split, kwargs_split, targets_split, losses)
 
         # Return merged results per original format
