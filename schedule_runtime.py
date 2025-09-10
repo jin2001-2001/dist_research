@@ -1252,9 +1252,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                     # Check length BEFORE popping
                                     works_count = len(self._fwd_recv_works.get(key, []))
                                     works = self._fwd_recv_works.pop(key, [])
-                                print(f"[{dist.get_rank()}] FORWARD wait st{stage_idx} mb{mid} "
-                                        f"posted={self._fwd_recv_posted[key].is_set()} "
-                                        f"works={works_count}")  # Use the saved count
+                                # print(f"[{dist.get_rank()}] FORWARD wait st{stage_idx} mb{mid} "
+                                #         f"posted={self._fwd_recv_posted[key].is_set()} "
+                                #         f"works={works_count}")  # Use the saved count
                                 
                                 # Now actually wait for the works
                                 if works:
