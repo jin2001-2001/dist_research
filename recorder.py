@@ -118,31 +118,19 @@ class Recorder:
         need_net = self.measure_net and action in self.net_actions
         samples, stop_evt = [], threading.Event()
 
-        # print(f"[{dist.get_rank()}] Recorder.record_async called: batch={batch_id}, action={action_id}, "
-        #     f"kind={action}, stage={stage_idx}, mb={mb_idx}, chunk={chunk_idx}, works={len(works)}")
+        if action in ("SEND_F", "SEND_B"):
+
+            self.events.append(
+                TraceEvent(
+                    batch_id, self.rank, action, stage_idx, mb_idx,
+                    start_ns, start_ns,  # Use start time as end time for now
+                    chunk=chunk_idx,
+                    status="posted",  
+                    net_series=[],
+                )
+            )
+            return  # Exit early
         
-        # CRITICAL FIX: For RECV operations, mark done immediately without waiting
-        # The actual wait will happen in FORWARD/BACKWARD
-        # if action in ("RECV_F", "RECV_B") and chunk_idx is not None:
-        #     # print(f"[{dist.get_rank()}] RECV operation - marking chunk done immediately "
-        #     #     f"(action={action_id}, chunk={chunk_idx})")
-        #     _mark_done_chunk(batch_id, action_id, chunk_idx)
-        #     # print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
-        #     #     f"works={len(works)}")
-            
-        #     # Still record the event for timeline
-        #     self.events.append(
-        #         TraceEvent(
-        #             batch_id, self.rank, action, stage_idx, mb_idx,
-        #             start_ns, start_ns,  # Use start time as end time for now
-        #             chunk=chunk_idx,
-        #             status="posted",  # Mark as posted, not completed
-        #             net_series=[],
-        #         )
-        #     )
-        #     return  # Exit early - don't start any wait threads
-        
-        # For SEND operations and non-chunk operations, continue with the wait logic
         if need_net:
             def sampler():
                 prev_ts = time.time_ns()

@@ -755,18 +755,15 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             raise
                         print(f"[{dist.get_rank()}] SEND {kind} st{stage_idx} mb{mb_index} "
                             f"chunk{chunk_idx} dep OK: {dep_key}")
-                # 提交该 chunk 的发送
-                #print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}发送命令之前\n")
+
                 works_k = schedule._batch_p2p(sub_ops)
-                #print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}发送命令已创建\n")
-                # 记录到异步容器，批尾统一等待
+
                 with self._async_send_lock:
                     self._async_send_works[current_batch+1].append(works_k)
 
-                # （可选）如果你也想记录发送侧 chunk 的时间线，可解开下面注释
-                # start_ns_k = time.time_ns()
-                # schedule._rec.record_async(current_batch+1, action.id, kind, stage_idx, mb_index,
-                #                            works_k, start_ns_k, chunk_idx=None)  # 注意 None：不写 mark_done_chunk
+                start_ns_k = time.time_ns()
+                schedule._rec.record_async(current_batch+1, action.id, kind, stage_idx, mb_index,
+                                           works_k, start_ns_k, chunk_idx=chunk_idx) 
 
         t = threading.Thread(
             target=worker, name=f"{kind}_st{stage_idx}_mb{mb_index}_b{current_batch+1}", daemon=True
