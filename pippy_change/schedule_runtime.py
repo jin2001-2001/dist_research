@@ -232,10 +232,8 @@ def _mark_done(batch_id: int, action_id: int | None):
         key = f"batch_{batch_id}_done_{dist.get_rank()}_{action_id}"
         client = _get_redis_client()
         
-        # 设置键值并设置过期时间
         client.setex(key, KEY_EXPIRE_TIME, b"1")
         
-        # 发布完成事件（用于通知等待的进程）
         channel = f"done_channel_{batch_id}_{dist.get_rank()}_{action_id}"
         client.publish(channel, b"1")
 
@@ -686,7 +684,14 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     pass
                 
                 # Post the irecv operations
+                start_ns_k = time.time_ns()
+                
                 works_k = schedule._batch_p2p(sub_ops)
+                
+                self._rec.record_async(
+                    current_batch+1, action.id, kind, stage_idx, mb_index,
+                    works_k, start_ns_k, chunk_idx=chunk_idx
+                )
                 # print(f"[{dist.get_rank()}] POST {kind} st{stage_idx} mb{mb_index} "
                 #     f"chunk{chunk_idx} ops={len(works_k)} action_id={action_id}")
                 
@@ -697,13 +702,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     else:
                         self._bwd_recv_works.setdefault(key, []).extend(works_k)
                 
-                # Record async (this should trigger _mark_done_chunk when complete)
-                start_ns_k = time.time_ns()
-                #print(f"[{dist.get_rank()}] Calling record_async for action={action.id}, chunk={chunk_idx}")
-                self._rec.record_async(
-                    current_batch+1, action.id, kind, stage_idx, mb_index,
-                    works_k, start_ns_k, chunk_idx=chunk_idx
-                )
+                
+                
             
             #print(f"[{dist.get_rank()}] {kind} worker finished for action={action_id}, mb={mb_index}")
             
@@ -755,18 +755,15 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             raise
                         print(f"[{dist.get_rank()}] SEND {kind} st{stage_idx} mb{mb_index} "
                             f"chunk{chunk_idx} dep OK: {dep_key}")
-                # 提交该 chunk 的发送
-                #print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}发送命令之前\n")
+
                 works_k = schedule._batch_p2p(sub_ops)
-                #print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}发送命令已创建\n")
-                # 记录到异步容器，批尾统一等待
+
                 with self._async_send_lock:
                     self._async_send_works[current_batch+1].append(works_k)
 
-                # （可选）如果你也想记录发送侧 chunk 的时间线，可解开下面注释
-                # start_ns_k = time.time_ns()
-                # schedule._rec.record_async(current_batch+1, action.id, kind, stage_idx, mb_index,
-                #                            works_k, start_ns_k, chunk_idx=None)  # 注意 None：不写 mark_done_chunk
+                start_ns_k = time.time_ns()
+                self._rec.record_async(current_batch+1, action.id, kind, stage_idx, mb_index,
+                                           works_k, start_ns_k, chunk_idx=chunk_idx) 
 
         t = threading.Thread(
             target=worker, name=f"{kind}_st{stage_idx}_mb{mb_index}_b{current_batch+1}", daemon=True
