@@ -56,14 +56,14 @@ def get_vocab_hidden(model: nn.Module):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model_path", type=str, default="Qwen/Qwen3-0.6B", help="HF name or local path")
-    ap.add_argument("--seq_len", type=int, default=2048)
+    ap.add_argument("--model_path", type=str, required=True, help="HF name or local path")
+    ap.add_argument("--seq_len", type=int, required=True)
     ap.add_argument("--batch", type=int, required=True)
     ap.add_argument("--dtype", type=str, default="float32", choices=["float32","bfloat16","float16"])
     ap.add_argument("--iters", type=int, default=5)
     ap.add_argument("--warmup", type=int, default=2)
     ap.add_argument("--out", type=str, required=True)
-    ap.add_argument("--host", type=str, default="cpu1", help="Identifier for this machine, e.g., cpu1")
+    ap.add_argument("--host", type=str, required=True, help="Identifier for this machine, e.g., cpu1")
     args = ap.parse_args()
 
     # Resolve dtype
