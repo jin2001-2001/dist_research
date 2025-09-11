@@ -762,7 +762,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     self._async_send_works[current_batch+1].append(works_k)
 
                 start_ns_k = time.time_ns()
-                schedule._rec.record_async(current_batch+1, action.id, kind, stage_idx, mb_index,
+                self._rec.record_async(current_batch+1, action.id, kind, stage_idx, mb_index,
                                            works_k, start_ns_k, chunk_idx=chunk_idx) 
 
         t = threading.Thread(
