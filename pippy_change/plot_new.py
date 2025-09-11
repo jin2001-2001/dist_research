@@ -21,6 +21,7 @@ mbatch_size = 5
 rows = []
 stage_info = {}
 
+
 base_ns = records[0]["start_ns"]
 for record in records:
     mb = record.get("mb_idx", -1)
@@ -37,15 +38,30 @@ for record in records:
     else:
         stage_info[stage_idx] = [rank]
 
-    rows.append({
+    send_start = record["start_ns"]
+
+    if action in {"RECV_F", "RECV_B"}:
+        for start_record in records:
+            cand_mb = start_record.get("mb_idx", -1)
+            cand_action = start_record["action"]
+            cand_stage_idx = start_record["stage_idx"]
+            h,_,t0 = cand_action.partition('_')
+            _,_, t1 = action.partition('_')
+            if h == 'SEND' and t0==t1 and cand_mb == mb:
+                if (t1 == 'F' and cand_stage_idx == stage_idx-1) or (t1 == 'B' and cand_stage_idx == stage_idx+1):
+                    send_start = start_record["start_ns"]
+                    break
+
+    if action not in {"SEND_F", "SEND_B"}:
+        rows.append({
         "y_tag": y_tag,
         "stage_idx": stage_idx,
         "rank": rank,
         "action": action,
-        "start": (record["start_ns"] - base_ns) / 1e6,
+        "start": (send_start - base_ns) / 1e6,
         "end": (record["end_ns"] - base_ns) / 1e6,
         "mb_idx": mb_str
-    })
+        })
 
 df = pd.DataFrame(rows)
 
@@ -128,26 +144,26 @@ for _, row in df.iterrows():
         f'MB{reduced_mb_index}',
         va='center',
         ha='center',
-        fontsize=12,
+        fontsize=3,
         weight='bold',
         color='black'
     )
 
 # Overlay smoothed bandwidth lines
-for record in records:
-    if record["action"].startswith("RECV") and record["net_series"]:
-        y_tag = f"{record['rank']}-{record['action']}"
-        y_base = y_map[y_tag]
-        x_vals = [(ts - base_ns) / 1e6 for ts, _, _ in record["net_series"]]
-        up_vals = [up for _, up, _ in record["net_series"]]
-        down_vals = [down for _, _, down in record["net_series"]]
-        up_smooth = smooth_series(up_vals, window_size=5)
-        down_smooth = smooth_series(down_vals, window_size=5)
-        bw_max = max(max(up_smooth), max(down_smooth), 1)
-        up_scaled = [y_base + 0.3 * (u / bw_max) for u in up_smooth]
-        down_scaled = [y_base - 0.3 * (d / bw_max) for d in down_smooth]
-        ax.plot(x_vals, up_scaled, color='red', linewidth=1.5, label="Up Mbps" if 'Up Mbps' not in ax.get_legend_handles_labels()[1] else "")
-        ax.plot(x_vals, down_scaled, color='blue', linewidth=1.5, label="Down Mbps" if 'Down Mbps' not in ax.get_legend_handles_labels()[1] else "")
+#for record in records:
+#    if record["action"].startswith("RECV") and record["net_series"]:
+#        y_tag = f"{record['rank']}-{record['action']}"
+#        y_base = y_map[y_tag]
+#        x_vals = [(ts - base_ns) / 1e6 for ts, _, _ in record["net_series"]]
+#        up_vals = [up for _, up, _ in record["net_series"]]
+#        down_vals = [down for _, _, down in record["net_series"]]
+#        up_smooth = smooth_series(up_vals, window_size=5)
+#        down_smooth = smooth_series(down_vals, window_size=5)
+#        bw_max = max(max(up_smooth), max(down_smooth), 1)
+#        up_scaled = [y_base + 0.3 * (u / bw_max) for u in up_smooth]
+#        down_scaled = [y_base - 0.3 * (d / bw_max) for d in down_smooth]
+#        ax.plot(x_vals, up_scaled, color='red', linewidth=1.5, label="Up Mbps" if 'Up Mbps' not in ax.get_legend_handles_labels()[1] else "")
+#        ax.plot(x_vals, down_scaled, color='blue', linewidth=1.5, label="Down Mbps" if 'Down Mbps' not in ax.get_legend_handles_labels()[1] else "")
 
 # Final touches
 ax.set_yticks(list(y_map.values()))

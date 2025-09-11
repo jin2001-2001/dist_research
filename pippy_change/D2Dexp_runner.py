@@ -131,7 +131,7 @@ def load_config(cfg:str) -> Dict[str, Any]:
             cfg = json.load(f)
     return cfg
 
-def plan_parser(rank: int, world: int, cfg: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+def plan_parser(rank: int, world: int, cfg: Union[str, Dict[str, Any]]):
     """
     Given the pipeline config (dict or JSON path) and a rank id,
     return the stage that contains this rank, plus the immediate
@@ -277,7 +277,7 @@ def main():
     import gc; gc.collect()
 
     raw = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
-    block = 1024
+    block = 192
     def tok_fn(ex): 
         return tok(ex["text"], return_attention_mask=False)
     def grp_fn(ex):
