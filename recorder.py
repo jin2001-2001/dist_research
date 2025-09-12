@@ -151,8 +151,10 @@ class Recorder:
             status = "completed"
             try:
                 # print(f"[{dist.get_rank()}] Waiting for {len(works)} works (action={action_id}, chunk={chunk_idx})")
-                while not all(w.is_completed() for w in works):
-                    time.sleep(poll_interval)
+                # while not all(w.is_completed() for w in works):
+                #     time.sleep(poll_interval)
+                for w in works:
+                    w.wait()
                     
                 end_ns = time.time_ns()
                 if need_net:
