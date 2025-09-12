@@ -5,6 +5,7 @@ from typing import List, Tuple, Iterable, Optional
 import psutil          
 import torch.distributed as dist
 from schedule_runtime import _mark_done, _mark_done_chunk
+from datetime import timedelta
 
 @dataclass
 @dataclass
@@ -151,12 +152,32 @@ class Recorder:
             status = "completed"
             try:
                 # print(f"[{dist.get_rank()}] Waiting for {len(works)} works (action={action_id}, chunk={chunk_idx})")
-                while not all(w.is_completed() for w in works):
-                    time.sleep(poll_interval)
+                # while not all(w.is_completed() for w in works):
+                #     time.sleep(poll_interval)
                 # for w in works:
                 #     w.wait()
                     
+                # end_ns = time.time_ns()
+                
+                def _tick_wait(w):
+                    try:
+                        # 1ms 超时，推动进度；若已完成返回 True，未完成通常返回 False 或抛 RuntimeError（视版本而定）
+                        return bool(w.wait(timedelta(milliseconds=1)))
+                    except Exception:
+                        # 视版本而定：有的会在超时时抛异常，这里当作“未完成”处理
+                        return False
+
+                # —— waiter 主循环 ——
+                while True:
+                    done = True
+                    for w in works:
+                        if not _tick_wait(w):   # 推进 + 探测
+                            done = False
+                    if done:
+                        break
+                    time.sleep(poll_interval)   # 例如 0.2~1.0 ms；不要设为 0
                 end_ns = time.time_ns()
+                
                 if need_net:
                     stop_evt.set()
                 
