@@ -189,7 +189,8 @@ class _Action():
         self.chunk_deps  = chunk_deps
         self.multimodality = multimodality
         
-        assert all(m in ["text","vision","audio","packing"] for m in self.multimodality), "multimodality only allow text, vision, audio, packing"
+        if self.multimodality is not None:
+            assert all(m in ["text","vision","audio","packing"] for m in self.multimodality), "multimodality only allow text, vision, audio, packing"
         
 
     # -----------------------------------------------------------------------
