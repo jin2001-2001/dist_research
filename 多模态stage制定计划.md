@@ -13,7 +13,7 @@
 
 # 1. 新类的定位：`PipelineStage_Multimodality`
 
-目标：兼容**4 种 stage 类型**（`modal_type in {"text","vision","audio","packing"}`），其中前三个是“单源输出、单向下游”，`packing` 是**多源汇聚**（来自 text/audio/vision 的同一个 microbatch 的三路分支），然后把打包后的三元组（hidden, attn\_4d, position\_ids/或 None + kwargs）交给后续 Transformer stages。
+目标：兼容**4 种 stage 类型**（`model_type in {"text","vision","audio","packing"}`），其中前三个是“单源输出、单向下游”，`packing` 是**多源汇聚**（来自 text/audio/vision 的同一个 microbatch 的三路分支），然后把打包后的三元组（hidden, attn\_4d, position\_ids/或 None + kwargs）交给后续 Transformer stages。
 
 你已经给新类预留了 4 个重要字典：
 
@@ -82,7 +82,7 @@
 
 ## 5.2 packing stage
 
-新增一个**多源版**的执行逻辑（可在 `PipelineStage_Multimodality.forward_one_chunk` 内判断 `self.modal_type=="packing"` 分支执行）：
+新增一个**多源版**的执行逻辑（可在 `PipelineStage_Multimodality.forward_one_chunk` 内判断 `self.model_type=="packing"` 分支执行）：
 
 1. **接收激活**：
 
@@ -186,8 +186,8 @@
 
 2. `_shape_inference(args, kwargs)`（**packing 覆盖版**）
 
-   * 若 `modal_type!="packing"`：直接 `return super()._shape_inference(args, kwargs)`。
-   * 若 `modal_type=="packing"`：
+   * 若 `model_type!="packing"`：直接 `return super()._shape_inference(args, kwargs)`。
+   * 若 `model_type=="packing"`：
 
      1. 依次从三个上游 leader `recv_object_list` 三份 **meta inputs**；
      2. 解析出每模态的 `recv_infos` 数量，计算 `S_text/S_audio/S_vision` 与 `slot_offset`；
@@ -207,8 +207,8 @@
 
 5. `forward_one_chunk(...)`（**packing 仅在“聚合/触发时机”加一层**）
 
-   * 若 `modal_type!="packing"`：`return super().forward_one_chunk(...)`。
-   * 若 `modal_type=="packing"`：
+   * 若 `model_type!="packing"`：`return super().forward_one_chunk(...)`。
+   * 若 `model_type=="packing"`：
 
      1. 本次 step 若只是“其中一个模态到货”，先 `finish_fwd_recv` → 填 `mm_fwd_cache[mb][mod]`，**但不触发前向**，直接返回一个“占位标记”给调度（你的调度 already 支持 compute/comms 分离，确保只在 3 路都 ready 时才安排 compute）；
      2. 当 3 路齐了，由 packing stage 在下一条 compute 动作里**真正调用**子模块：把三模态缓存拼成 `composite_args/kwargs`，再调用 `forward_maybe_with_nosync`，并把（输出，输入扁平）存入 `self.fwd_cache[mb]`，供反传用。

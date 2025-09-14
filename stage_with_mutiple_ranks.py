@@ -3,7 +3,7 @@
 import logging
 import operator
 from abc import ABC, abstractmethod
-from typing import Any, Callable, cast, Optional, Union, List
+from typing import Any, Callable, cast, Optional, Union, List, Dict
 from collections import defaultdict
 
 import torch
@@ -24,29 +24,40 @@ logger = logging.getLogger(__name__)
 
 # ===== TAG-ADD: tag 构造工具 =====
 _DIR_SHIFT, _MB_SHIFT, _SLOT_SHIFT, _SPLIT_SHIFT = 27, 17, 8, 0
-_MB_BITS, _SLOT_BITS, _SPLIT_BITS = 10, 9, 8
-_MB_MASK, _SLOT_MASK, _SPLIT_MASK = (1<<_MB_BITS)-1, (1<<_SLOT_BITS)-1, (1<<_SPLIT_BITS)-1
+_MB_BITS,  _SLOT_BITS,  _SPLIT_BITS  = 10, 9, 8
+_MB_MASK,  _SLOT_MASK,  _SPLIT_MASK  = (1<<_MB_BITS)-1, (1<<_SLOT_BITS)-1, (1<<_SPLIT_BITS)-1
 
-def _mk_tag(direction: int, microbatch_id: int, slot_idx: int, split_idx: int) -> int:
-    """31-bit tag。若越界则回退到一致哈希（两端独立可复现）。"""
+MOD2ID = {"text":0, "audio":1, "vision":2, "packing":3}
+# New: 2-bit modality 放在更高位（28~29 位），还余 1 bit 备用（第 30 位）
+_MOD_SHIFT, _MOD_BITS = 28, 2
+_MOD_MASK = (1 << _MOD_BITS) - 1
+
+
+def _mk_tag(direction: int, microbatch_id: int, slot_idx: int, split_idx: int, modality: int = 0) -> int:
+    """31-bit tag；高 2bit 编码 modality（0..3）。若越界则回退到一致哈希（两端独立可复现）。"""
     need_fallback = (
         microbatch_id > _MB_MASK or
         slot_idx      > _SLOT_MASK or
-        split_idx     > _SPLIT_MASK
+        split_idx     > _SPLIT_MASK or
+        modality      > _MOD_MASK     # 新增：检查模态是否越界
     )
     if not need_fallback:
-        return ((direction & 1) << _DIR_SHIFT) | \
-               ((microbatch_id & _MB_MASK) << _MB_SHIFT) | \
-               ((slot_idx      & _SLOT_MASK) << _SLOT_SHIFT) | \
-               ((split_idx     & _SPLIT_MASK) << _SPLIT_SHIFT)
+        # 将 modality 放在最高位区间（28~29），保持你原有 4 段布局不变
+        return ((modality      & _MOD_MASK)  << _MOD_SHIFT) | \
+               ((direction     & 1)          << _DIR_SHIFT) | \
+               ((microbatch_id & _MB_MASK)   << _MB_SHIFT)  | \
+               ((slot_idx      & _SLOT_MASK) << _SLOT_SHIFT)| \
+               ((split_idx     & _SPLIT_MASK)<< _SPLIT_SHIFT)
 
-    # fallback: 简单一致哈希压 31 bit
+    # fallback: 简单一致哈希压 31 bit（把 modality 一并混入）
     v = (direction & 1) << 61
-    v ^= (int(microbatch_id) & 0xFFFFFFFF) << 30
-    v ^= (int(slot_idx)      & 0x3FFFFFFF) << 10
-    v ^= (int(split_idx)     & 0x3FF)
+    v ^= (int(modality)     & 0x3)        << 59   # 新增：混入 2-bit 模态
+    v ^= (int(microbatch_id)& 0xFFFFFFFF) << 30
+    v ^= (int(slot_idx)     & 0x3FFFFFFF) << 10
+    v ^= (int(split_idx)    & 0x3FF)
     v ^= (v >> 33); v *= 0xff51afd7ed558ccd; v &= (1<<64)-1; v ^= (v >> 33)
     return int(v & 0x7fffffff)
+
 
 
 class PipelineStage_with_mutiple_ranks(PipelineStage):
@@ -1059,9 +1070,10 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         prev_group: list[int] = None, 
         this_group: list[int] = None, 
         next_group: list[int] = None,
-        modal_type: str = None,
+        model_type: str = None,
+        mm_prev_groups: Dict[str, List[int]] = None
     ):  
-        self.modal_type = modal_type # four types: text, vision, audio, packing
+        self.model_type = model_type # four types: text, vision, audio, packing
         
         # forward 接收信息（按 mb、模态 → tuple[_RecvInfo,...]）
         self.mm_args_recv_info: dict[int, dict[str, tuple[_RecvInfo, ...]]] = defaultdict(dict)
@@ -1072,10 +1084,652 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         self.mm_fwd_cache: dict[int, dict[str, tuple[torch.Tensor, ...]]] = defaultdict(dict)
         # backward 拆分后的梯度缓存（按 mb、模态 → tuple[Tensor,...]）
         self.mm_bwd_cache: dict[int, dict[str, tuple[torch.Tensor, ...]]] = defaultdict(dict)
+        self._mm_pack_map: dict[int, dict[str, Any]] = {}  # {mb: {"order": List[Optional[tuple(mod, idx)]], "sizes": {"text":N,"audio":M,"vision":K}}}
+        
+        self.mm_prev_groups: Dict[str, List[int]] = mm_prev_groups or {}
+        assert all(k in ["text","vision","audio","packing"] for k in self.mm_prev_groups.keys())
+
 
         
         super().__init__(submodule, stage_index, num_stages, device, input_args, output_args, group, dw_builder, prev_group,  this_group, next_group)
         
+        
+    def _shape_inference(self, args, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
+        assert args is not None
+
+        # --- Common ---
+        dp_size = dist.get_world_size(self.dp_group)
+        is_multi_dp = dp_size > 1
+
+        # =============== packing 分支 ===============
+        if getattr(self, "model_type", None) == "packing":
+            # 1) 只处理 leader 与多上游交互；组内 DP 成员由 leader 广播
+            if self.is_leader:
+                # ---- 1.1 从多路上游 leader 收 object meta ----
+                # 约定：self.mm_prev_groups 是一个 dict: modality -> List[int] (world ranks)
+                mm_prev = getattr(self, "mm_prev_groups", None)
+                if not mm_prev or not isinstance(mm_prev, dict):
+                    raise RuntimeError(
+                        "packing stage requires self.mm_prev_groups = {'text': [...], 'audio': [...], 'vision': [...]} "
+                        "with each list being the WORLD group ranks of that modality's previous stage."
+                    )
+
+                # 收齐各模态的 outputs_meta（object）
+                mm_args_meta = {}
+                for mod in ("text", "audio", "vision"):
+                    if mod not in mm_prev or not mm_prev[mod]:
+                        continue  # 该模态缺省
+                    src_leader = min(mm_prev[mod])
+                    buf = [None]
+                    dist.recv_object_list(buf, src=src_leader, group=dist.group.WORLD)
+                    # buf[0] 是上游该模态 stage 的 outputs_meta（可能是 tuple/list，含 meta tensor 和/或标量元信息）
+                    mm_args_meta[mod] = buf[0]
+
+                if "text" not in mm_args_meta:
+                    # 对于我们的 Stage1 设计，positional inputs 依赖 text 的 (hidden, attn_4d, position_ids/None)
+                    raise RuntimeError("packing stage expects 'text' modality upstream meta for positional inputs.")
+
+                # ---- 1.2 设定本 stage 的 positional inputs_meta（使用 text 的三元组）----
+                text_meta = mm_args_meta["text"]
+                if isinstance(text_meta, (list, tuple)):
+                    # 只保留 tensor 型 meta（非 tensor 项保持原状不会参与 zeros_like）
+                    positional_meta = tuple(text_meta)
+                else:
+                    positional_meta = (text_meta,)
+
+                # 基础 sanity：positional_meta 一定是 tuple
+                assert isinstance(positional_meta, tuple), f"shape-infer args must be tuple, got {type(positional_meta)}"
+
+                # ---- 1.3 用 zeros 跑一次子模块，得到 outputs_meta ----
+                self.inputs_meta = positional_meta
+                zeros_args = tree_map_only(torch.Tensor, lambda x: torch.zeros_like(x, device=self.device), positional_meta)
+                with torch.no_grad():
+                    outputs = self.submod(*zeros_args, **kwargs)
+                if isinstance(outputs, torch.Tensor):
+                    outputs = [outputs]
+                outputs_meta = tuple(tree_map_only(torch.Tensor, lambda x: x.to('meta'), outputs))
+                self._configure_outputs_meta(outputs_meta)
+
+                # 额外：把三路上游 meta/规划信息缓存到对象上，供后续收发/切分使用
+                # - 这些对象不参与 DP 通信时的 zeros 构造，仅作通信计划依据
+                self.mm_inputs_meta = mm_args_meta  # e.g., {'text': (...), 'audio': (...), 'vision': (...)}
+
+                # ---- 1.4 把 outputs_meta 发给下游 leader（若存在），并在本 DP 组内广播 ----
+                if self.next_group is not None:
+                    next_leader = min(self.next_group)
+                    dist.send_object_list([outputs_meta], dst=next_leader, group=dist.group.WORLD)
+
+                # 广播 positional_meta 与 outputs_meta（保证本 DP 组一致）
+                if is_multi_dp:
+                    dist.broadcast_object_list([positional_meta], src=self.leader, group=self.dp_group)
+                    dist.broadcast_object_list([outputs_meta],   src=self.leader, group=self.dp_group)
+                    # 建议再把多模态 meta（仅对象、非张量）广播一次，便于本组成员拿到规划
+                    dist.broadcast_object_list([self.mm_inputs_meta], src=self.leader, group=self.dp_group)
+
+                return outputs_meta
+
+            else:
+                # 非 leader：等待 leader 广播
+                if is_multi_dp:
+                    buf_pos = [None]
+                    buf_out = [None]
+                    buf_mm  = [None]
+                    dist.broadcast_object_list(buf_pos, src=self.leader, group=self.dp_group)
+                    dist.broadcast_object_list(buf_out, src=self.leader, group=self.dp_group)
+                    dist.broadcast_object_list(buf_mm,  src=self.leader, group=self.dp_group)
+                    self.inputs_meta   = buf_pos[0]
+                    outputs_meta       = buf_out[0]
+                    self.mm_inputs_meta = buf_mm[0]     # {'text': meta, 'audio': meta, 'vision': meta} 或缺省键
+                    return outputs_meta
+                else:
+                    # dp_size == 1 且非 leader 不会发生
+                    raise RuntimeError("Unexpected non-leader with dp_size==1 at packing stage")
+        else: # text, vision, audio沿用原逻辑
+            return super()._shape_inference(self, args, kwargs)
+
+    def _ensure_mm_tables(self):
+        if not hasattr(self, "_mm_fwd_post_recv"):
+            self._mm_fwd_post_recv = defaultdict(list)
+        if not hasattr(self, "_mm_bwd_post_recv"):
+            self._mm_bwd_post_recv = defaultdict(list)
+
+    def _peer_global_rank(self, peer_rank: int) -> int:
+        return peer_rank if self.group is None else dist.get_global_rank(self.group, peer_rank)
+
+    def _recv_peer_from_info(self, info, fallback_rank: int) -> int:
+        # 多源场景：优先从 recv_info 里拿源 rank（若有），否则使用传入的 fallback
+        # 你现有 _RecvInfo 通常包含源 stage/rank，可按你的字段名替换：peer_rank / src_rank / src_stage_rank
+        if hasattr(info, "peer_rank") and info.peer_rank is not None:
+            return int(info.peer_rank)
+        if hasattr(info, "src_rank") and info.src_rank is not None:
+            return int(info.src_rank)
+        return int(fallback_rank)
+
+    # =============== Forward: SEND（head → packing）================
+    def get_fwd_send_ops_mm(
+        self,
+        fwd_chunk_id: int,
+        rank: int,
+        dest_rank: int,         # packing 的 leader rank（或本组对端 rank）
+        modality: str,
+        num_splits: int = 1
+    ) -> list[dist.P2POp]:
+        """
+        单模态 head 的 FWD 发送：本模态内 slot 从 0 计数；tag = (0, mb, slot, split)。
+        output_tuple 取自 self.fwd_cache[mb]，与基类一致。
+        """
+        output_tuple, _ = self.fwd_cache[fwd_chunk_id]
+        ops: list[dist.P2POp] = []
+        ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
+
+        peer_global_rank = self._peer_global_rank(dest_rank)
+
+        # 预计算每个张量的 1D 视图与切片表
+        plans = []  # [(slot_idx, flat, slices)]
+        slot_ctr = 0
+        for idx, out in enumerate(output_tuple):
+            dst_stages = self.act_send_info[idx] if hasattr(self, "act_send_info") else (dest_rank,)
+            if dst_stages is None:
+                continue
+            if not isinstance(out, torch.Tensor):
+                continue
+            flat = out.contiguous().view(-1)
+            slices = self._compute_1d_slices(flat.numel(), num_splits)
+            plans.append((slot_ctr, flat, slices))
+            slot_ctr += 1
+
+        for split_idx in range(max(1, num_splits)):
+            for slot_idx, flat, slices in plans:
+                if split_idx >= len(slices):
+                    continue
+                off, ln = slices[split_idx]
+                chunk_view = flat.narrow(0, off, ln)
+                tag = _mk_tag(0, fwd_chunk_id, slot_idx, split_idx, MOD2ID[modality])
+                ops.append(dist.P2POp(dist.isend, chunk_view, peer_global_rank, self.group, tag=tag))
+                ops_per_chunk[split_idx] += 1
+
+        self._last_comm_plan[("SEND_F", fwd_chunk_id, modality)] = ops_per_chunk
+        return ops
+
+
+    # =============== Forward: RECV（packing ← heads）================
+    def get_fwd_recv_ops_mm(
+        self,
+        fwd_chunk_id: int,
+        rank: int,
+        src_rank_fallback: int,  # 若 info 内未携带 peer 信息，用该 rank
+        modality: str,
+        num_splits: int = 1
+    ) -> list[dist.P2POp]:
+        """
+        packing 端按“单模态”生成一批 irecv；将每个 recv buffer 收到一个临时 flat 张量里，
+        等全部完成后由 finish_fwd_recv_mm() 合并落到 self.mm_fwd_cache[mb][modality]。
+        """
+        self._ensure_mm_tables()
+
+        recv_infos = tuple(self.mm_args_recv_info.get(fwd_chunk_id, {}).get(modality, ()))
+        ops: list[dist.P2POp] = []
+        ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
+
+        # 计划：每个 info 分配一个“整块 flat 缓冲”，分片 irecv 到其相应窄视图
+        plans = []  # [(slot_idx, tmp_full_flat, slices, peer_global_rank, shape, dtype, device)]
+        slot_ctr = 0
+        for info in recv_infos:
+            if not isinstance(info, _RecvInfo):
+                continue
+            buf = info.buffer
+            if not isinstance(buf, torch.Tensor):
+                continue
+            # 目标形状/属性
+            shape = tuple(buf.shape)
+            dtype = buf.dtype
+            device = buf.device
+            numel = buf.numel()
+
+            # 为该 info 分配一块完整 flat 缓冲（避免直接写最终 args；稍后统一落盘到 mm_fwd_cache）
+            tmp_full_flat = torch.empty(numel, dtype=dtype, device=device)
+            slices = self._compute_1d_slices(numel, num_splits)
+
+            peer_rank = self._recv_peer_from_info(info, src_rank_fallback)
+            peer_global_rank = self._peer_global_rank(peer_rank)
+
+            plans.append((slot_ctr, tmp_full_flat, slices, peer_global_rank, shape, dtype, device))
+            # 记录到“完成后处理”
+            self._mm_fwd_post_recv[(fwd_chunk_id, modality)].append((tmp_full_flat, shape, dtype, device))
+            slot_ctr += 1
+
+        for split_idx in range(max(1, num_splits)):
+            for slot_idx, tmp_full_flat, slices, peer_global_rank, shape, dtype, device in plans:
+                if split_idx >= len(slices):
+                    continue
+                off, ln = slices[split_idx]
+                view = tmp_full_flat.narrow(0, off, ln)
+                tag = _mk_tag(0, fwd_chunk_id, slot_idx, split_idx, MOD2ID[modality])
+                ops.append(dist.P2POp(dist.irecv, view, peer_global_rank, self.group, tag=tag))
+                ops_per_chunk[split_idx] += 1
+
+        self._last_comm_plan[("RECV_F", fwd_chunk_id, modality)] = ops_per_chunk
+        return ops
+
+
+    def finish_fwd_recv_mm(self, fwd_chunk_id: int, modality: str) -> None:
+        """
+        将 get_fwd_recv_ops_mm 中各 tmp_full_flat 重组为张量列表，落到 self.mm_fwd_cache[mb][modality]。
+        不修改 self.input_args，pack 前由 packing 直接从 mm_fwd_cache 取数据。
+        """
+        self._ensure_mm_tables()
+        post_list = self._mm_fwd_post_recv.pop((fwd_chunk_id, modality), None)
+        if not post_list:
+            return
+        tensors = []
+        for tmp_full_flat, shape, dtype, device in post_list:
+            tensors.append(tmp_full_flat.view(*shape))
+        self.mm_fwd_cache[fwd_chunk_id][modality] = tuple(tensors)
+
+
+    # =============== Backward: SEND（packing → heads）================
+    def get_bwd_send_ops_mm(
+        self,
+        bwd_chunk_id: int,
+        rank: int,
+        dest_rank: int,         # 对应某个模态 head 的 leader
+        modality: str,
+        num_splits: int = 1
+    ) -> list[dist.P2POp]:
+        """
+        packing 端把“已按模态切分好”的 grads（来自 self.mm_bwd_cache[mb][modality]）逐分片 isend。
+        """
+        if not self.has_backward or self.is_first:
+            return []
+
+        grads_tuple = self.mm_bwd_cache.get(bwd_chunk_id, {}).get(modality, None)
+        if not grads_tuple:
+            # 该模态在本 mb 上可能为空（如该 batch 无音频）
+            self._last_comm_plan[("SEND_B", bwd_chunk_id, modality)] = [0 for _ in range(max(1, num_splits))]
+            return []
+
+        peer_global_rank = self._peer_global_rank(dest_rank)
+
+        plans = []  # [(slot_idx, flat, slices)]
+        slot_ctr = 0
+        for grad in grads_tuple:
+            if grad is None or not isinstance(grad, torch.Tensor):
+                slot_ctr += 1
+                continue
+            if not (grad.is_floating_point() or torch.is_complex(grad)):
+                slot_ctr += 1
+                continue
+            flat = grad.contiguous().view(-1)
+            slices = self._compute_1d_slices(flat.numel(), num_splits)
+            plans.append((slot_ctr, flat, slices))
+            slot_ctr += 1
+
+        ops: list[dist.P2POp] = []
+        ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
+        for split_idx in range(max(1, num_splits)):
+            for slot_idx, flat, slices in plans:
+                if split_idx >= len(slices):
+                    continue
+                off, ln = slices[split_idx]
+                chunk_view = flat.narrow(0, off, ln)
+                tag = _mk_tag(1, bwd_chunk_id, slot_idx, split_idx, MOD2ID[modality])
+                ops.append(dist.P2POp(dist.isend, chunk_view, peer_global_rank, self.group, tag=tag))
+                ops_per_chunk[split_idx] += 1
+
+        self._last_comm_plan[("SEND_B", bwd_chunk_id, modality)] = ops_per_chunk
+        # 选择是否在此处 pop 掉缓存；通常等三模态都发完后再清理上层字典更安全
+        return ops
+
+
+    # =============== Backward: RECV（heads ← packing）================
+    def get_bwd_recv_ops_mm(
+        self,
+        bwd_chunk_id: int,
+        rank: int,
+        src_rank_fallback: int,   # packing 的 leader rank（或对端 rank）
+        modality: str,
+        num_splits: int = 1
+    ) -> list[dist.P2POp]:
+        """
+        head 端从 packing 接收本模态的输入梯度；先收进临时 flat，finish_bwd_recv_mm 后落入 self.mm_bwd_cache[mb][modality]。
+        """
+        self._ensure_mm_tables()
+        if not self.has_backward or self.is_last:
+            return []
+
+        recv_infos = tuple(self.mm_grad_recv_info.get(bwd_chunk_id, {}).get(modality, ()))
+        if not recv_infos:
+            self._last_comm_plan[("RECV_B", bwd_chunk_id, modality)] = [0 for _ in range(max(1, num_splits))]
+            return []
+
+        plans = []  # [(slot_idx, tmp_full_flat, slices, peer_global_rank, shape, dtype, device)]
+        slot_ctr = 0
+        for info in recv_infos:
+            if not isinstance(info, _RecvInfo):
+                continue
+            buf = info.buffer
+            if not isinstance(buf, torch.Tensor):
+                continue
+            shape = tuple(buf.shape)
+            dtype = buf.dtype
+            device = buf.device
+            numel = buf.numel()
+            tmp_full_flat = torch.empty(numel, dtype=dtype, device=device)
+            slices = self._compute_1d_slices(numel, num_splits)
+
+            peer_rank = self._recv_peer_from_info(info, src_rank_fallback)
+            peer_global_rank = self._peer_global_rank(peer_rank)
+
+            plans.append((slot_ctr, tmp_full_flat, slices, peer_global_rank, shape, dtype, device))
+            self._mm_bwd_post_recv[(bwd_chunk_id, modality)].append((tmp_full_flat, shape, dtype, device))
+            slot_ctr += 1
+
+        ops: list[dist.P2POp] = []
+        ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
+        for split_idx in range(max(1, num_splits)):
+            for slot_idx, tmp_full_flat, slices, peer_global_rank, shape, dtype, device in plans:
+                if split_idx >= len(slices):
+                    continue
+                off, ln = slices[split_idx]
+                view = tmp_full_flat.narrow(0, off, ln)
+                tag = _mk_tag(1, bwd_chunk_id, slot_idx, split_idx, MOD2ID[modality])
+                ops.append(dist.P2POp(dist.irecv, view, peer_global_rank, self.group, tag=tag))
+                ops_per_chunk[split_idx] += 1
+
+        self._last_comm_plan[("RECV_B", bwd_chunk_id, modality)] = ops_per_chunk
+        return ops
+
+
+    def finish_bwd_recv_mm(self, bwd_chunk_id: int, modality: str) -> None:
+        """
+        将临时 flat 重组为张量列表，落入 self.mm_bwd_cache[mb][modality]（供本模态 head 的 backward 使用）。
+        """
+        self._ensure_mm_tables()
+        post_list = self._mm_bwd_post_recv.pop((bwd_chunk_id, modality), None)
+        if not post_list:
+            return
+        tensors = []
+        for tmp_full_flat, shape, dtype, device in post_list:
+            tensors.append(tmp_full_flat.view(*shape))
+        self.mm_bwd_cache[bwd_chunk_id][modality] = tuple(tensors)
+        
+    def forward_one_chunk(
+        self,
+        fwd_chunk_id: int,
+        args: tuple[Any, ...],
+        kwargs: Optional[dict[str, Any]] = None,
+        pack_size: int = 1
+    ):
+        """
+        对于 text/vision/audio：走父类逻辑。
+        对于 packing：从 mm_fwd_cache[mb] 取三个模态的缓存，组装成 (args, kwargs) 送入子模块；
+                    并记录 flat 输入到 (modality, local_idx) 的映射，供 backward 拆分用。
+        """
+        if getattr(self, "model_type", None) != "packing":
+            return super().forward_one_chunk(fwd_chunk_id, args, kwargs, pack_size)
+
+        # ---------- helpers（局部，无外部依赖） ----------
+        def _is_float_tensor(x):
+            return isinstance(x, torch.Tensor) and (x.is_floating_point() or torch.is_complex(x))
+
+        def _is_int_like_tensor(x):
+            return isinstance(x, torch.Tensor) and (x.dtype in (torch.int64, torch.int32, torch.int16, torch.int8, torch.bool))
+
+        def _parse_text_bundle(tensors: tuple[torch.Tensor, ...]):
+            """返回: hidden, attn_4d, position_ids(or None), input_ids(or None), attention_mask_2d(or None)"""
+            hidden = attn_4d = pos_ids = inp_ids = attn2d = None
+            if not tensors:
+                return hidden, attn_4d, pos_ids, inp_ids, attn2d
+            if len(tensors) >= 1 and _is_float_tensor(tensors[0]): hidden = tensors[0]
+            if len(tensors) >= 2 and _is_float_tensor(tensors[1]): attn_4d = tensors[1]
+            idx = 2
+            if len(tensors) > idx and isinstance(tensors[idx], torch.Tensor) and tensors[idx].dim() in (2, 3):
+                pos_ids = tensors[idx]; idx += 1
+            B = hidden.shape[0] if isinstance(hidden, torch.Tensor) and hidden.dim() >= 2 else None
+            T = hidden.shape[1] if isinstance(hidden, torch.Tensor) and hidden.dim() >= 2 else None
+            for j in range(idx, len(tensors)):
+                t = tensors[j]
+                if not isinstance(t, torch.Tensor): continue
+                if _is_int_like_tensor(t) and t.dim() == 2:
+                    if B is not None and T is not None and (t.shape[0] == B and t.shape[1] == T):
+                        if inp_ids is None: inp_ids = t
+                        elif attn2d is None: attn2d = t
+            return hidden, attn_4d, pos_ids, inp_ids, attn2d
+
+        def _parse_vision_bundle(tensors: tuple[torch.Tensor, ...]):
+            """返回: image_embeds(or None), grid_thw(or None)"""
+            if not tensors: return None, None
+            image_embeds = None
+            for t in tensors:
+                if _is_float_tensor(t): image_embeds = t; break
+            grid_thw = None
+            for t in tensors:
+                if t is image_embeds: continue
+                if isinstance(t, torch.Tensor) and (not t.is_floating_point()):
+                    grid_thw = t; break
+            return image_embeds, grid_thw
+
+        def _parse_audio_bundle(tensors: tuple[torch.Tensor, ...]):
+            """返回: audio_embeds(or None)"""
+            if not tensors: return None
+            for t in tensors:
+                if _is_float_tensor(t): return t
+            return None
+
+        # ---------- 从模态缓存取数据 ----------
+        mm = self.mm_fwd_cache.get(fwd_chunk_id, {})
+        text_tuple   = mm.get("text",   tuple())
+        vision_tuple = mm.get("vision", tuple())
+        audio_tuple  = mm.get("audio",  tuple())
+
+        hidden, attn_4d, position_ids, input_ids, attention_mask_2d = _parse_text_bundle(text_tuple)
+        if hidden is None or attn_4d is None:
+            raise RuntimeError(
+                f"[rank{dist.get_rank()}] packing stage missing required text tensors at mb={fwd_chunk_id}: "
+                f"hidden={type(hidden)}, attn_4d={type(attn_4d)}"
+            )
+        image_embeds, grid_thw = _parse_vision_bundle(vision_tuple)
+        audio_embeds = _parse_audio_bundle(audio_tuple)
+
+        # ---------- 组装子模块 (args, kwargs) ----------
+        # 若 position_ids 为空，为了通过输入校验，这里传空张量；Stage1 内部可选择重算
+        pos_arg = position_ids if position_ids is not None else hidden.new_empty(0)
+        composite_args = (hidden, attn_4d, pos_arg)
+        composite_kwargs: dict[str, Any] = {}
+        if input_ids is not None:          composite_kwargs["input_ids"] = input_ids
+        if attention_mask_2d is not None:  composite_kwargs["attention_mask_2d"] = attention_mask_2d
+        if image_embeds is not None:       composite_kwargs["image_embeds"] = image_embeds
+        if audio_embeds is not None:       composite_kwargs["audio_embeds"] = audio_embeds
+        if grid_thw is not None:           composite_kwargs["grid_thw"] = grid_thw
+
+        # ---------- 验证（与父类一致） ----------
+        kwargs_for_val = composite_kwargs
+        args_for_val = composite_args
+        if (
+            pack_size > 1
+            and isinstance(hidden, torch.Tensor)
+            and hidden.dim() >= 1
+            and hidden.shape[0] % pack_size == 0
+        ):
+            mb_bs = hidden.shape[0] // pack_size
+            args_for_val = (
+                hidden[:mb_bs],
+                attn_4d,  # 你的 attn_4d 已是 [B,1,T,T]，如需裁剪可按需改
+                (position_ids[:, :mb_bs, :] if (isinstance(position_ids, torch.Tensor) and position_ids.dim()==3) else position_ids)
+            )
+            kwargs_for_val = {}
+            for k, v in composite_kwargs.items():
+                if isinstance(v, torch.Tensor) and v.dim() >= 2 and v.shape[0] == hidden.shape[0]:
+                    kwargs_for_val[k] = v[:mb_bs]
+                else:
+                    kwargs_for_val[k] = v
+
+        self._validate_fwd_input(args_for_val, kwargs_for_val)
+
+        # ---------- 真正前向 ----------
+        try:
+            output = self.forward_maybe_with_nosync(*composite_args, **composite_kwargs)
+        except Exception as e:
+            exc_msg = f"""
+            {self.log_prefix} failed to run packing forward:
+            args: hidden={tuple(hidden.shape)}, attn_4d={tuple(attn_4d.shape)}, pos={'None' if position_ids is None else tuple(position_ids.shape)}
+            kwargs: { {k: (tuple(v.shape) if isinstance(v, torch.Tensor) else type(v)) for k,v in composite_kwargs.items()} }
+            """
+            raise RuntimeError(exc_msg) from e
+
+        output_tuple = _normalize_model_output_as_tuple(output)
+        if self.is_last:
+            self.output_chunks.append(output)
+
+        # ---------- 第二点：记录 flat 输入到 (modality, local_idx) 的映射（供 backward 用） ----------
+        def _find_idx_in_tuple(tup, ten):
+            for i, x in enumerate(tup):
+                if isinstance(x, torch.Tensor) and (x is ten):
+                    return i
+            return None
+
+        flat_args = flatten_args(composite_args)
+        flat_kwargs = flatten_args(composite_kwargs)
+        flatten_input_tensors = flat_args + flat_kwargs
+
+        order_map: list[Optional[tuple[str, int]]] = []
+        for ten in flatten_input_tensors:
+            if not isinstance(ten, torch.Tensor):
+                order_map.append(None); continue
+            j = _find_idx_in_tuple(text_tuple, ten)
+            if j is not None: order_map.append(("text", j));  continue
+            j = _find_idx_in_tuple(audio_tuple, ten)
+            if j is not None: order_map.append(("audio", j)); continue
+            j = _find_idx_in_tuple(vision_tuple, ten)
+            if j is not None: order_map.append(("vision", j)); continue
+            order_map.append(None)  # 非 head 来源（如新建的空 pos 张量等），无需回传
+
+        if not hasattr(self, "_mm_pack_map"):
+            self._mm_pack_map = {}
+        self._mm_pack_map[fwd_chunk_id] = {
+            "order": order_map,
+            "sizes": {
+                "text":   len(text_tuple),
+                "audio":  len(audio_tuple),
+                "vision": len(vision_tuple),
+            },
+        }
+
+        # ---------- 保存 fwd_cache，并验证输出 ----------
+        self.fwd_cache[fwd_chunk_id] = (output_tuple, flatten_input_tensors)
+
+        outputs_for_val = output_tuple
+        if pack_size > 1 and isinstance(output_tuple, tuple) and len(output_tuple):
+            mb_bs = hidden.shape[0] // pack_size
+            outputs_for_val = tuple(
+                t[:mb_bs] if isinstance(t, torch.Tensor) else t
+                for t in output_tuple
+            )
+        self._validate_fwd_outputs(outputs_for_val)
+
+        return output
+
+    def backward_one_chunk(
+        self,
+        bwd_chunk_id: int,
+        loss=None,
+        full_backward: bool = True,
+        last_backward=False,
+        retain_graph_for_packed_mbs: bool = False,
+    ):
+        """
+        packing: 计算 grads_input 后，按 forward 记录的映射把梯度拆到 mm_bwd_cache[mb][modality]；
+                其它模态 stage 直接用父类实现。
+        """
+        if getattr(self, "model_type", None) != "packing":
+            # 头部 stage：沿用父类逻辑
+            return super().backward_one_chunk(
+                bwd_chunk_id, loss, full_backward, last_backward, retain_graph_for_packed_mbs
+            )
+
+        # ========== packing backward ==========
+        self._check_chunk_id(bwd_chunk_id)
+
+        # 从 forward 的 fwd_cache 拿回 stage_output 和“扁平输入列表”
+        stage_output, input_values = self.fwd_cache.pop(bwd_chunk_id)
+
+        # 1) 组装 backward 输入
+        if self.is_last:
+            # packing 通常不是最后一段；保留完整性
+            bwd_kwargs = {"stage_output": loss, "output_grads": None, "input_values": input_values}
+        else:
+            grads_output = self._retrieve_recv_grads(bwd_chunk_id)
+            grads_output = self._avg_next_stage_grads(grads_output)
+            bwd_kwargs = {"stage_output": stage_output, "output_grads": grads_output, "input_values": input_values}
+
+        # 2) 真正 backward（保持与父类一致，但确保保留计算图，因同一图要给三路上游发送）
+        if full_backward:
+            grads_input, _ = self.backward_maybe_with_nosync(
+                "full",
+                bwd_kwargs,
+                last_backward=last_backward,
+                retain_graph_for_packed_mbs=True  # 关键：packing 汇聚的图别提前释放
+            )
+        else:
+            # packing 一般不会拆成 input/weight 两段；如需支持，可参照父类写法加 input/weight 分支
+            grads_input, _ = self.backward_maybe_with_nosync(
+                "full",
+                bwd_kwargs,
+                last_backward=last_backward,
+                retain_graph_for_packed_mbs=True
+            )
+
+        # 3) 把 grads_input（按 flat 顺序）拆回三路模态 -> mm_bwd_cache[mb][mod]
+        #    - 目标长度：与 forward 时对应模态 mm_fwd_cache[mb][mod] 的 tuple 长度一致
+        pack_map = self._mm_pack_map.pop(bwd_chunk_id, None)
+        if pack_map is None:
+            raise RuntimeError(f"[rank{dist.get_rank()}] packing backward missing pack_map for mb={bwd_chunk_id}")
+
+        order: list[Optional[tuple[str, int]]] = pack_map["order"]
+        sizes: dict[str, int] = pack_map["sizes"]
+        per_mod_lists = {
+            "text":  [None] * sizes.get("text", 0),
+            "audio": [None] * sizes.get("audio", 0),
+            "vision":[None] * sizes.get("vision", 0),
+        }
+
+        # grads_input 的顺序与 input_values（即 forward 里 flatten_input_tensors）一致
+        for gi, tag in zip(grads_input, order):
+            if tag is None:
+                continue  # 非 head 来的张量（如 position_ids 占位）或非 tensor
+            mod, local_idx = tag
+            # 只回传浮点/复数梯度，保持发送端过滤一致性
+            if isinstance(gi, torch.Tensor) and (gi.is_floating_point() or torch.is_complex(gi)):
+                # 安全：越界忽略
+                if 0 <= local_idx < len(per_mod_lists[mod]):
+                    per_mod_lists[mod][local_idx] = gi
+
+        # 写入 mm_bwd_cache（tuple 形式，供 get_bwd_send_ops_mm 使用）
+        for mod in ("text", "audio", "vision"):
+            if len(per_mod_lists[mod]) > 0:
+                self.mm_bwd_cache[bwd_chunk_id][mod] = tuple(per_mod_lists[mod])
+
+        # 4) 兼容：也把 grads_input 留在 bwd_cache，避免外部调用到基类 send 流程时出错
+        if self.grad_send_info is None:
+            # 与父类对齐：基于首次 args_recv_info[0] 推导；packing 实际不会用到
+            try:
+                self.grad_send_info = self._create_grad_send_info(self.args_recv_info[0])
+            except Exception:
+                self.grad_send_info = []
+        self.bwd_cache[bwd_chunk_id] = grads_input
+
+        # 5) 与父类保持相同行为：last stage detach（packing 非最后一段通常不会触发）
+        if self.is_last and not self.is_first:
+            for t in stage_output:
+                if not t._is_view():
+                    t.detach_()
+
+        logger.debug("%s Backwarded (packing) chunk %s", self.log_prefix, bwd_chunk_id)
+
+    
+
 
 
 

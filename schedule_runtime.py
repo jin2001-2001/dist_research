@@ -25,6 +25,7 @@ from pipelining_source_code.stage import _normalize_model_output_as_tuple
 from pipelining_source_code._utils import flatten_args
 from torch.distributed.distributed_c10d import _get_default_store
 import atexit, signal, threading, json
+from stage_with_mutiple_ranks import PipelineStage_with_mutiple_ranks, PipelineStage_Multimodality
 logger = logging.getLogger(__name__)
 
 FORWARD = _ComputationType.FORWARD
@@ -661,12 +662,11 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
             dist.barrier()
     
     def _spawn_chunked_recv_worker(self, *, kind: str, action, ops, plan,
-                                chunk_deps, current_batch: int, stage_idx: int, mb_index: int, action_id: int):
+                               chunk_deps, current_batch: int, stage_idx: int,
+                               mb_index: int, action_id: int, modality: Optional[str] = None):
         assert kind in ("RECV_F", "RECV_B")
-        key = (stage_idx, mb_index)
-        
-        # print(f"[{dist.get_rank()}] Starting recv worker for {kind} action_id={action_id}, "
-        #     f"stage={stage_idx}, mb={mb_index}, plan={plan}")
+        # 多模态：key 带上 modality；旧路径 modality=None 退化为原键
+        key = (stage_idx, mb_index) if modality is None else (stage_idx, mb_index, modality)
 
         def worker():
             pos = 0
@@ -674,56 +674,46 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                 if cnt <= 0:
                     continue
                 sub_ops = ops[pos:pos+cnt]; pos += cnt
-                
-                # print(f"[{dist.get_rank()}] {kind} worker: Processing chunk {chunk_idx} "
-                #     f"with {cnt} ops for action={action_id}, mb={mb_index}")
-                
-                # Wait for dependencies if any
+
+                # 这里预留依赖等待（如需按模态区分，外层已传入 chunk_deps）
                 if chunk_deps and chunk_idx in chunk_deps:
-                    # ... existing dependency code ...
+                    # …保留/按需实现…
                     pass
-                
-                # Post the irecv operations
+
                 start_ns_k = time.time_ns()
-                
                 works_k = schedule._batch_p2p(sub_ops)
-                
+
+                # 仅记录，保持向后兼容；如你扩展了 recorder，可也传 modality
                 self._rec.record_async(
                     current_batch+1, action.id, kind, stage_idx, mb_index,
                     works_k, start_ns_k, chunk_idx=chunk_idx
                 )
-                # print(f"[{dist.get_rank()}] POST {kind} st{stage_idx} mb{mb_index} "
-                #     f"chunk{chunk_idx} ops={len(works_k)} action_id={action_id}")
-                
-                # Record to async container
+
                 with self._async_recv_lock:
                     if kind == "RECV_F":
                         self._fwd_recv_works.setdefault(key, []).extend(works_k)
                     else:
                         self._bwd_recv_works.setdefault(key, []).extend(works_k)
-                
-                
-                
-            
-            #print(f"[{dist.get_rank()}] {kind} worker finished for action={action_id}, mb={mb_index}")
-            
-            # Set the "all posted" event
+
+            # 全部分块 ops 已 post 的事件
             with self._async_recv_lock:
                 ev = self._fwd_recv_posted.get(key) if kind == "RECV_F" else self._bwd_recv_posted.get(key)
             if ev is not None:
                 ev.set()
-        
+
         t = threading.Thread(
-            target=worker, 
-            name=f"{kind}_st{stage_idx}_mb{mb_index}_action{action_id}_b{current_batch+1}", 
+            target=worker,
+            name=f"{kind}_st{stage_idx}_mb{mb_index}_action{action_id}_b{current_batch+1}" + (f"_{modality}" if modality else ""),
             daemon=True
         )
         t.start()
 
 
+
     
     def _spawn_chunked_send_worker(self, *, kind: str, action, ops, plan, chunk_deps,
-                                current_batch: int, stage_idx: int, mb_index: int):
+                               current_batch: int, stage_idx: int, mb_index: int,
+                               modality: Optional[str] = None):
         """
         在独立线程中执行：
         for chunk in plan:
@@ -739,22 +729,18 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     continue
                 sub_ops = ops[pos:pos+cnt]; pos += cnt
 
-                #print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}等待之前\n")
                 # 只允许 SEND 依赖 RECV 的 chunk 完成
                 if chunk_deps and chunk_idx in chunk_deps:
                     for (dep_rank, dep_action_id, dep_chunk) in chunk_deps[chunk_idx]:
-                        dep_key = f"batch_{current_batch+1}_done_{dep_rank}_{dep_action_id}_c{dep_chunk}"
-                        # print(f"[{dist.get_rank()}] SEND {kind} st{stage_idx} mb{mb_index} "
-                        #     f"chunk{chunk_idx} waiting {dep_key}")
+                        # 如后续增加了 _wait_remote_chunk_mm，可在此改用带 modality 的等待
                         try:
                             _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
-                            #print(f"\nSEND_F mb {mb_index} chunk {chunk_idx}等待之后\n")
                         except TimeoutError:
-                            print(f"[{dist.get_rank()}] TIMEOUT waiting {dep_key} "
-                                f"(check remote RECV posting/completion)")
+                            print(f"[{dist.get_rank()}] TIMEOUT waiting "
+                                f"(dep_rank={dep_rank}, dep_action_id={dep_action_id}, dep_chunk={dep_chunk}, mod={modality})")
                             raise
                         print(f"[{dist.get_rank()}] SEND {kind} st{stage_idx} mb{mb_index} "
-                            f"chunk{chunk_idx} dep OK: {dep_key}")
+                            f"chunk{chunk_idx} dep OK (mod={modality})")
 
                 works_k = schedule._batch_p2p(sub_ops)
 
@@ -762,13 +748,17 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     self._async_send_works[current_batch+1].append(works_k)
 
                 start_ns_k = time.time_ns()
+                # 记录器保持向后兼容；如果你扩展了 recorder，可把 modality 加为额外字段
                 self._rec.record_async(current_batch+1, action.id, kind, stage_idx, mb_index,
-                                           works_k, start_ns_k, chunk_idx=chunk_idx) 
+                                    works_k, start_ns_k, chunk_idx=chunk_idx)
 
         t = threading.Thread(
-            target=worker, name=f"{kind}_st{stage_idx}_mb{mb_index}_b{current_batch+1}", daemon=True
+            target=worker,
+            name=f"{kind}_st{stage_idx}_mb{mb_index}_b{current_batch+1}" + (f"_{modality}" if modality else ""),
+            daemon=True
         )
         t.start()
+
 
     
     
@@ -1027,19 +1017,67 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}, upstream bandwidth {action.upstream} mbps")
                     else:
                         print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}")
-                    
-                    num_splits = action.split_parts or 1
-                    ops = (
-                        stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
-                        if rank is not None and dest_rank is not None
-                        else stage.get_fwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
-                    )
-                    plan = stage._last_comm_plan.get(("SEND_F", mb_index), [len(ops)])
 
-                    self._spawn_chunked_send_worker(
-                        kind="SEND_F", action=action, ops=ops, plan=plan, chunk_deps=(action.chunk_deps or {}),
-                        current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index
-                    )
+                    num_splits = action.split_parts or 1
+                    modal_type = getattr(stage, "modal_type", None)  # 注意：是 modal_type 不是 model_type
+                    mods = (action.multimodality or [])
+                    m = mods[0] if len(mods) > 0 else None  # 对于 SEND/RECV：每条命令只有一个模态
+
+                    # 无模态或 packing 场景：走旧单通道逻辑
+                    if m is None or modal_type == "packing":
+                        ops = (
+                            stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
+                            if rank is not None and dest_rank is not None
+                            else stage.get_fwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
+                        )
+                        plan = stage._last_comm_plan.get(("SEND_F", mb_index), [len(ops)])
+
+                        self._spawn_chunked_send_worker(
+                            kind="SEND_F", action=action, ops=ops, plan=plan,
+                            chunk_deps=(action.chunk_deps or {}),
+                            current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index,
+                            modality=None  # 旧路径不带模态
+                        )
+
+                    else:
+                        # 单模态多模态-API路径
+                        has_mm_api = hasattr(stage, "get_fwd_send_ops_mm")
+                        if has_mm_api:
+                            if rank is not None and dest_rank is not None:
+                                ops = stage.get_fwd_send_ops_mm(
+                                    mb_index, rank=rank, dest_rank=dest_rank,
+                                    modality=m, num_splits=num_splits
+                                )
+                            else:
+                                ops = stage.get_fwd_send_ops_mm(
+                                    mb_index, rank=None, dest_rank=None,
+                                    modality=m, num_splits=num_splits
+                                )
+                            plan = stage._last_comm_plan.get(("SEND_F", mb_index, m), [len(ops)])
+                        else:
+                            # 兜底：没有 mm-API 时退回旧 API（不推荐，仅为兼容）
+                            ops = (
+                                stage.get_fwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
+                                if rank is not None and dest_rank is not None
+                                else stage.get_fwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
+                            )
+                            plan = stage._last_comm_plan.get(("SEND_F", mb_index), [len(ops)])
+
+                        # 依赖：若已扩展按模态维护依赖，则优先用该模态的依赖；否则回退旧结构
+                        chunk_deps_for_m = {}
+                        if hasattr(action, "chunk_deps_mm") and action.chunk_deps_mm:
+                            chunk_deps_for_m = action.chunk_deps_mm.get(m, {}) or {}
+                        else:
+                            chunk_deps_for_m = action.chunk_deps or {}
+
+                        self._spawn_chunked_send_worker(
+                            kind="SEND_F", action=action, ops=ops, plan=plan,
+                            chunk_deps=chunk_deps_for_m,
+                            current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index,
+                            modality=m  # 为日志/排查标注该模态
+                        )
+
+
 
 
                     
@@ -1050,139 +1088,193 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_B microbatch {mb_index}, upstream bandwidth {action.upstream} mbps")
                     else:
                         print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_B microbatch {mb_index}")
-                    
-                    # num_splits = action.split_parts or 1
 
-                    # ops = (
-                    #     stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
-                    #     if rank is not None and dest_rank is not None
-                    #     else stage.get_bwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
-                    # )
-                    # plan = stage._last_comm_plan.get(("SEND_B", mb_index), [len(ops)])
-                    # pos = 0
-                    # for chunk_idx, cnt in enumerate(plan):
-                    #     sub_ops = ops[pos:pos+cnt]; pos += cnt
-
-                    #     if action.chunk_deps and chunk_idx in action.chunk_deps:
-                    #         for (dep_rank, dep_action_id, dep_chunk) in action.chunk_deps[chunk_idx]:
-                    #             _wait_remote_chunk(current_batch+1, dep_rank, dep_action_id, dep_chunk)
-
-                    #     works_k = schedule._batch_p2p(sub_ops)
-                    #     send_ops.append(works_k)
                     num_splits = action.split_parts or 1
-                    ops = (
-                        stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
-                        if rank is not None and dest_rank is not None
-                        else stage.get_bwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
-                    )
-                    plan = stage._last_comm_plan.get(("SEND_B", mb_index), [len(ops)])
+                    modal_type = getattr(stage, "modal_type", None)  # "packing" / "text" / "audio" / "vision" / None
+                    m = (action.multimodality or [None])[0]          # 对于 SEND/RECV：每条命令只有一个模态
 
-                    # self._tc_set_rate(action.upstream)  # 若你在 SEND_B 也有带宽设置，保留
+                    # 仅在 packing 上使用多模态 SEND_B，其他 stage 保持旧逻辑
+                    if modal_type == "packing" and m is not None and hasattr(stage, "get_bwd_send_ops_mm"):
+                        # 生成该模态的 SEND_B ops
+                        if rank is not None and dest_rank is not None:
+                            ops = stage.get_bwd_send_ops_mm(
+                                mb_index, rank=rank, dest_rank=dest_rank,
+                                modality=m, num_splits=num_splits
+                            )
+                        else:
+                            ops = stage.get_bwd_send_ops_mm(
+                                mb_index, rank=None, dest_rank=None,
+                                modality=m, num_splits=num_splits
+                            )
+                        # 读取对应模态的分块计划
+                        plan = stage._last_comm_plan.get(("SEND_B", mb_index, m), [len(ops)])
 
-                    self._spawn_chunked_send_worker(
-                        kind="SEND_B", action=action, ops=ops, plan=plan, chunk_deps=(action.chunk_deps or {}),
-                        current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index
-)
+                        # 依赖：若已扩展为按模态维护，优先用该模态；否则回退旧结构
+                        if hasattr(action, "chunk_deps_mm") and action.chunk_deps_mm:
+                            chunk_deps_for_m = action.chunk_deps_mm.get(m, {}) or {}
+                        else:
+                            chunk_deps_for_m = action.chunk_deps or {}
+
+                        self._spawn_chunked_send_worker(
+                            kind="SEND_B", action=action, ops=ops, plan=plan,
+                            chunk_deps=chunk_deps_for_m,
+                            current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index,
+                            modality=m  # 仅用于日志与潜在按模态等待的扩展
+                        )
+                    else:
+                        # 非 packing 或未提供模态：沿用旧的单通道发送
+                        ops = (
+                            stage.get_bwd_send_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
+                            if rank is not None and dest_rank is not None
+                            else stage.get_bwd_send_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
+                        )
+                        plan = stage._last_comm_plan.get(("SEND_B", mb_index), [len(ops)])
+
+                        self._spawn_chunked_send_worker(
+                            kind="SEND_B", action=action, ops=ops, plan=plan,
+                            chunk_deps=(action.chunk_deps or {}),
+                            current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index,
+                            modality=None
+                        )
+
 
 
 
 
                 elif comp_type == RECV_F:
-                    # print(f"[{dist.get_rank()}]: batch {current_batch+1} RECV_F microbatch {mb_index}")
-                    # assert (stage_idx, mb_index) not in fwd_recv_ops, (
-                    #     f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing forward"
-                    # )
-                    # num_splits = action.split_parts or 1
-                    # ops = (
-                    #     stage.get_fwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
-                    #     if rank is not None and dest_rank is not None
-                    #     else stage.get_fwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
-                    # )
-                    # plan = stage._last_comm_plan.get(("RECV_F", mb_index), [len(ops)])
-                    # pos = 0
-                    # all_works = []
-                    # for chunk_idx, cnt in enumerate(plan):
-                    #     sub_ops = ops[pos:pos+cnt]; pos += cnt
-                    #     works_k = schedule._batch_p2p(sub_ops)
-                    #     # 分块级完成打点（后台轮询 -> _mark_done_chunk）
-                    #     start_ns = time.time_ns()
-                    #     self._rec.record_async(current_batch+1, action_id, "RECV_F", stage_idx, mb_index, works_k, start_ns, chunk_idx=chunk_idx)
-                    #     all_works.extend(works_k)
-
-                    # # 如你仍想保持“RECV_F 立等”语义，可继续等待全部
-                    # schedule._wait_batch_p2p(all_works)
-                    # fwd_recv_ops[(stage_idx, mb_index)] = []   # 卫生：清空挂账
                     print(f"[{dist.get_rank()}]: batch {current_batch+1} RECV_F microbatch {mb_index}")
-                    key = (stage_idx, mb_index)
-                    assert key not in self._fwd_recv_posted, (
-                        f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing forward"
-                    )
+
+                    modal_type = getattr(stage, "modal_type", None)  # "packing"/"text"/"audio"/"vision"/None
+                    m = (action.multimodality or [None])[0]          # 每条命令只有一个模态
+
                     num_splits = action.split_parts or 1
-                    ops = (
-                        stage.get_fwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
-                        if rank is not None and dest_rank is not None
-                        else stage.get_fwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
-                    )
-                    plan = stage._last_comm_plan.get(("RECV_F", mb_index), [len(ops)])
 
-                    # 建立“全部 irecv 已 post”的 Event，占位 works 容器
-                    with self._async_recv_lock:
-                        self._fwd_recv_works[key] = []
-                        self._fwd_recv_posted[key] = threading.Event()
+                    if modal_type == "packing" and m is not None and hasattr(stage, "get_fwd_recv_ops_mm"):
+                        # —— 多模态（packing）路径：key 带上 modality —— #
+                        key = (stage_idx, mb_index, m)
+                        assert key not in self._fwd_recv_posted, (
+                            f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} modality={m} without executing forward"
+                        )
 
-                    # 启动接收线程
-                    self._spawn_chunked_recv_worker(
-                        kind="RECV_F", action=action, ops=ops, plan=plan,
-                        chunk_deps=(action.chunk_deps or {}),   # ← 新增
-                        current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index, action_id=action_id
-                    )
+                        if rank is not None and dest_rank is not None:
+                            ops = stage.get_fwd_recv_ops_mm(
+                                mb_index, rank=rank, dest_rank=dest_rank, modality=m, num_splits=num_splits
+                            )
+                        else:
+                            ops = stage.get_fwd_recv_ops_mm(
+                                mb_index, rank=None, dest_rank=None, modality=m, num_splits=num_splits
+                            )
+                        plan = stage._last_comm_plan.get(("RECV_F", mb_index, m), [len(ops)])
+
+                        # chunk 依赖：若有按模态结构，优先取该模态，否则用旧结构
+                        if hasattr(action, "chunk_deps_mm") and action.chunk_deps_mm:
+                            chunk_deps_for_m = action.chunk_deps_mm.get(m, {}) or {}
+                        else:
+                            chunk_deps_for_m = action.chunk_deps or {}
+
+                        with self._async_recv_lock:
+                            self._fwd_recv_works[key] = []
+                            self._fwd_recv_posted[key] = threading.Event()
+
+                        self._spawn_chunked_recv_worker(
+                            kind="RECV_F", action=action, ops=ops, plan=plan,
+                            chunk_deps=chunk_deps_for_m,
+                            current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index,
+                            action_id=action_id, modality=m
+                        )
+
+                    else:
+                        # —— 旧单通道路径（非 packing 或未提供模态） —— #
+                        key = (stage_idx, mb_index)
+                        assert key not in self._fwd_recv_posted, (
+                            f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing forward"
+                        )
+
+                        if rank is not None and dest_rank is not None:
+                            ops = stage.get_fwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
+                        else:
+                            ops = stage.get_fwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
+                        plan = stage._last_comm_plan.get(("RECV_F", mb_index), [len(ops)])
+
+                        with self._async_recv_lock:
+                            self._fwd_recv_works[key] = []
+                            self._fwd_recv_posted[key] = threading.Event()
+
+                        self._spawn_chunked_recv_worker(
+                            kind="RECV_F", action=action, ops=ops, plan=plan,
+                            chunk_deps=(action.chunk_deps or {}),
+                            current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index,
+                            action_id=action_id, modality=None
+                        )
+
 
 
 
                 elif comp_type == RECV_B:
-                    # print(f"[{dist.get_rank()}]: batch {current_batch+1} RECV_B microbatch {mb_index}")
-                    # assert (stage_idx, mb_index) not in bwd_recv_ops, (
-                    #     f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing backward"
-                    # )
-                    # num_splits = action.split_parts or 1
-                    # ops = (
-                    #     stage.get_bwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
-                    #     if rank is not None and dest_rank is not None
-                    #     else stage.get_bwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
-                    # )
-                    # plan = stage._last_comm_plan.get(("RECV_B", mb_index), [len(ops)])
-                    # pos = 0
-                    # works_all = []
-                    # for chunk_idx, cnt in enumerate(plan):
-                    #     sub_ops = ops[pos:pos+cnt]; pos += cnt
-                    #     works_k = schedule._batch_p2p(sub_ops)
-                    #     start_ns = time.time_ns()
-                    #     self._rec.record_async(current_batch+1, action_id, "RECV_B", stage_idx, mb_index, works_k, start_ns, chunk_idx=chunk_idx)
-                    #     works_all.extend(works_k)
-
-                    # bwd_recv_ops[(stage_idx, mb_index)] = works_all  # 真正等待仍在 BACKWARD_INPUT 触发前
                     print(f"[{dist.get_rank()}]: batch {current_batch+1} RECV_B microbatch {mb_index}")
-                    key = (stage_idx, mb_index)
-                    assert key not in self._bwd_recv_posted, (
-                        f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing backward"
-                    )
+
+                    modal_type = getattr(stage, "modal_type", None)  # "text"/"audio"/"vision"/"packing"/None
+                    m = (action.multimodality or [None])[0]          # 每条命令只有一个模态
+
                     num_splits = action.split_parts or 1
-                    ops = (
-                        stage.get_bwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
-                        if rank is not None and dest_rank is not None
-                        else stage.get_bwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
-                    )
-                    plan = stage._last_comm_plan.get(("RECV_B", mb_index), [len(ops)])
 
-                    with self._async_recv_lock:
-                        self._bwd_recv_works[key] = []
-                        self._bwd_recv_posted[key] = threading.Event()
+                    if modal_type != "packing" and m is not None and hasattr(stage, "get_bwd_recv_ops_mm"):
+                        # —— 头部模态路径：key 带上 modality —— #
+                        key = (stage_idx, mb_index, m)
+                        assert key not in self._bwd_recv_posted, (
+                            f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} modality={m} without executing backward"
+                        )
 
-                    self._spawn_chunked_recv_worker(
-                        kind="RECV_B", action=action, ops=ops, plan=plan,
-                        chunk_deps=(action.chunk_deps or {}),   # ← 新增
-                        current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index, action_id=action_id
-                    )
+                        if rank is not None and dest_rank is not None:
+                            ops = stage.get_bwd_recv_ops_mm(
+                                mb_index, rank=rank, dest_rank=dest_rank, modality=m, num_splits=num_splits
+                            )
+                        else:
+                            ops = stage.get_bwd_recv_ops_mm(
+                                mb_index, rank=None, dest_rank=None, modality=m, num_splits=num_splits
+                            )
+                        plan = stage._last_comm_plan.get(("RECV_B", mb_index, m), [len(ops)])
+
+                        if hasattr(action, "chunk_deps_mm") and action.chunk_deps_mm:
+                            chunk_deps_for_m = action.chunk_deps_mm.get(m, {}) or {}
+                        else:
+                            chunk_deps_for_m = action.chunk_deps or {}
+
+                        with self._async_recv_lock:
+                            self._bwd_recv_works[key] = []
+                            self._bwd_recv_posted[key] = threading.Event()
+
+                        self._spawn_chunked_recv_worker(
+                            kind="RECV_B", action=action, ops=ops, plan=plan,
+                            chunk_deps=chunk_deps_for_m,
+                            current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index,
+                            action_id=action_id, modality=m
+                        )
+
+                    else:
+                        # —— 旧单通道路径（packing 或未提供模态） —— #
+                        key = (stage_idx, mb_index)
+                        assert key not in self._bwd_recv_posted, (
+                            f"Recv twice for stage_idx={stage_idx} mb_index={mb_index} without executing backward"
+                        )
+
+                        if rank is not None and dest_rank is not None:
+                            ops = stage.get_bwd_recv_ops(mb_index, rank=rank, dest_rank=dest_rank, num_splits=num_splits)
+                        else:
+                            ops = stage.get_bwd_recv_ops(mb_index, rank=None, dest_rank=None, num_splits=num_splits)
+                        plan = stage._last_comm_plan.get(("RECV_B", mb_index), [len(ops)])
+
+                        with self._async_recv_lock:
+                            self._bwd_recv_works[key] = []
+                            self._bwd_recv_posted[key] = threading.Event()
+
+                        self._spawn_chunked_recv_worker(
+                            kind="RECV_B", action=action, ops=ops, plan=plan,
+                            chunk_deps=(action.chunk_deps or {}),
+                            current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index,
+                            action_id=action_id, modality=None
+                        )
+
 
 
 
@@ -1210,7 +1302,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     mb_ids: tuple[int, ...] = (mb_field,) if isinstance(mb_field, int) else tuple(mb_field)
                     rep_id = mb_ids[0]
 
-                    
                     if stage_uses_fsdp:
                         _assert_unsharded(stage_idx)
                     
@@ -1232,38 +1323,47 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             for k in kwarg_mbs[rep_id]:
                                 vals = [kwarg_mbs[mid][k] for mid in mb_ids]
                                 cat_kwargs[k] = _cat_like(vals)
-
                         else:
                             cat_kwargs = {}
                             
                     else:
-                        # In _step_microbatches, fix the FORWARD section:
+                        # 非首段：先等待上游 RECV_F
                         if not is_prev_stage_on_this_rank:
-                            for mid in mb_ids:
-                                key = (stage_idx, mid)
-                                # Wait for "all irecv posted"
-                                assert key in self._fwd_recv_posted, f"Computing {action=} before RECV_F posted"
-                                self._fwd_recv_posted[key].wait()
-                                # Then wait for "all works complete"
-                                with self._async_recv_lock:
-                                    # Check length BEFORE popping
-                                    works_count = len(self._fwd_recv_works.get(key, []))
-                                    works = self._fwd_recv_works.pop(key, [])
-                                # print(f"[{dist.get_rank()}] FORWARD wait st{stage_idx} mb{mid} "
-                                #         f"posted={self._fwd_recv_posted[key].is_set()} "
-                                #         f"works={works_count}")  # Use the saved count
-                                
-                                # Now actually wait for the works
-                                if works:
-                                    #print(f"[{dist.get_rank()}] FORWARD actually waiting for {len(works)} works")
-                                    schedule._wait_batch_p2p(works)
-                                    #print(f"[{dist.get_rank()}] FORWARD done waiting for mb{mid}")
-                                
-                                # Clean up event
-                                self._fwd_recv_posted.pop(key, None)
+                            is_packing = getattr(stage, "modal_type", None) == "packing"
+                            mods = tuple(action.multimodality or [])
+                            if is_packing and mods:
+                                # packing：按模态分别等待当前 mb 的 RECV_F 完成，并做粘合
+                                for mid in mb_ids:
+                                    for m in mods:
+                                        key_m = (stage_idx, mid, m)
+                                        assert key_m in self._fwd_recv_posted, \
+                                            f"Computing {action=} before RECV_F posted (modality={m})"
+                                        self._fwd_recv_posted[key_m].wait()
+                                        with self._async_recv_lock:
+                                            works = self._fwd_recv_works.pop(key_m, [])
+                                        if works:
+                                            schedule._wait_batch_p2p(works)
+                                        self._fwd_recv_posted.pop(key_m, None)
+                                        # 模态内粘合（若内部用到了临时 flat 缓冲）
+                                        if hasattr(stage, "finish_fwd_recv_mm"):
+                                            stage.finish_fwd_recv_mm(mid, m)
+                            else:
+                                # 老路径：单通道等待
+                                for mid in mb_ids:
+                                    key = (stage_idx, mid)
+                                    assert key in self._fwd_recv_posted, f"Computing {action=} before RECV_F posted"
+                                    self._fwd_recv_posted[key].wait()
+                                    with self._async_recv_lock:
+                                        works_count = len(self._fwd_recv_works.get(key, []))
+                                        works = self._fwd_recv_works.pop(key, [])
+                                    if works:
+                                        schedule._wait_batch_p2p(works)
+                                    self._fwd_recv_posted.pop(key, None)
 
-                        
+                        # 取本段前向输入
                         if len(mb_ids) == 1:
+                            # 对 packing：若你的 stage.forward_one_chunk 会从 mm_fwd_cache 组装输入，
+                            # 这里仍可按旧 API 取；若 stage 内部完全走 mm_fwd_cache，这里取到的可被忽略。
                             composite_args = stage._retrieve_recv_activations(mb_ids[0])
                             cat_args = composite_args
                         else:
@@ -1290,7 +1390,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         for mid in mb_ids:
                             self._mb_to_group[(stage_idx, mid)] = g_id
                             
-                    
                     with self._rec.record(current_batch+1,action_id,"FORWARD", stage_idx, mb_ids):
                         output = stage.forward_one_chunk(rep_id, cat_args, cat_kwargs, len(mb_ids))
                     
@@ -1299,7 +1398,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     assert big_entry is not None, f"missing big forward entry for stage {stage_idx}, mb {rep_id}"
                     self._big_fwd_cache[big_key] = big_entry
 
-                    
                     # Split output
                     if isinstance(output, tuple):
                         split_out = list(zip(*[
@@ -1360,10 +1458,11 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             stage_index_to_stage[stage_idx + 1].set_local_fwd_input(
                                 split_out[idx], mid
                             )
-                
+                    
                     for mid in mb_ids:
                         if mid in stage.fwd_cache:
                             outputs, inputs = stage.fwd_cache[mid]
+
 
                 elif comp_type == FULL_BACKWARD:
                     mb_ids = (mb_field,) if isinstance(mb_field, int) else tuple(mb_field)
@@ -1373,17 +1472,34 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if stage_uses_fsdp:
                         _assert_unsharded(stage_idx)
 
+                    # 等待下游 RECV_B
                     if not stage.is_last and not is_next_stage_on_this_rank:
-                        for mid in mb_ids:
-                            key = (stage_idx, mid)
-                            if key in self._bwd_recv_posted:
-                                self._bwd_recv_posted[key].wait()
-                                with self._async_recv_lock:
-                                    works = self._bwd_recv_works.pop(key, [])
-                                schedule._wait_batch_p2p(works)
-                                self._bwd_recv_posted.pop(key, None)
+                        is_head_modal = getattr(stage, "modal_type", None) in ("text", "vision", "audio")
+                        mods = tuple(action.multimodality or [])
+                        if is_head_modal and mods:
+                            m = mods[0]  # SEND/RECV 類命令每条只有一个模态
+                            for mid in mb_ids:
+                                key_m = (stage_idx, mid, m)
+                                if key_m in self._bwd_recv_posted:
+                                    self._bwd_recv_posted[key_m].wait()
+                                    with self._async_recv_lock:
+                                        works = self._bwd_recv_works.pop(key_m, [])
+                                    schedule._wait_batch_p2p(works)
+                                    self._bwd_recv_posted.pop(key_m, None)
+                                    # 模态内粘合（若内部用到了临时 flat 缓冲）
+                                    if hasattr(stage, "finish_bwd_recv_mm"):
+                                        stage.finish_bwd_recv_mm(mid, m)
+                        else:
+                            for mid in mb_ids:
+                                key = (stage_idx, mid)
+                                if key in self._bwd_recv_posted:
+                                    self._bwd_recv_posted[key].wait()
+                                    with self._async_recv_lock:
+                                        works = self._bwd_recv_works.pop(key, [])
+                                    schedule._wait_batch_p2p(works)
+                                    self._bwd_recv_posted.pop(key, None)
 
-
+                    # 清理本地 fwd_cache 的单条目
                     for mid in mb_ids:
                         stage.fwd_cache.pop(mid, None)
 
@@ -1411,13 +1527,16 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if not stage.is_last:
                         stage.set_local_bwd_input(cat_gradout, rep_id)
 
+                    # packing 上保留计算图，避免多模态梯度尚未全部发完
+                    retain_for_pack = (getattr(stage, "modal_type", None) == "packing")
+
                     with self._rec.record(current_batch+1, action_id, "FULL_BACKWARD", stage_idx, mb_ids):
                         stage.backward_one_chunk(
                             rep_id,
                             loss=cat_loss,
                             full_backward=True,
                             last_backward=False,
-                            retain_graph_for_packed_mbs=False,
+                            retain_graph_for_packed_mbs=retain_for_pack,
                         )
 
                     big_grads_in = stage.bwd_cache.pop(rep_id)
@@ -1436,6 +1555,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if self.last_backward:
                         grad_scale_factor = backward_counter.total() if self.scale_grads else 1
                         stage.scale_grads(grad_scale_factor)
+
                 
                 elif comp_type == BACKWARD_INPUT:
                     if stage_uses_fsdp:

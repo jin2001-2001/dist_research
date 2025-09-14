@@ -174,8 +174,9 @@ class _Action():
     dependency: Optional[Dict[int, tuple[int, ...]]]
     split_parts: Optional[int] 
     chunk_deps: Optional[Dict[int, List[Tuple[int,int,int]]]]
+    multimodality: Optional[List[str]]
     
-    def __init__(self, stage_index, rank, id, computation_type, microbatch_index, dest_rank=None, upstream=None, dependency=None, split_parts=None, chunk_deps=None):
+    def __init__(self, stage_index, rank, id, computation_type, microbatch_index, dest_rank=None, upstream=None, dependency=None, split_parts=None, chunk_deps=None,multimodality= None):
         self.stage_index = stage_index
         self.rank = rank
         self.id = id
@@ -186,6 +187,10 @@ class _Action():
         self.dependency = dependency
         self.split_parts = split_parts
         self.chunk_deps  = chunk_deps
+        self.multimodality = multimodality
+        
+        assert all(m in ["text","vision","audio","packing"] for m in self.multimodality), "multimodality only allow text, vision, audio, packing"
+        
 
     # -----------------------------------------------------------------------
     # NOTE: The order here matches the from_str method parameter order:
