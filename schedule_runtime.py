@@ -1361,27 +1361,94 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                     self._fwd_recv_posted.pop(key, None)
 
                         # 取本段前向输入
-                        if len(mb_ids) == 1:
-                            # 对 packing：若你的 stage.forward_one_chunk 会从 mm_fwd_cache 组装输入，
-                            # 这里仍可按旧 API 取；若 stage 内部完全走 mm_fwd_cache，这里取到的可被忽略。
-                            composite_args = stage._retrieve_recv_activations(mb_ids[0])
-                            cat_args = composite_args
-                        else:
-                            all_activations = []
-                            for mid in mb_ids:
-                                act = stage._retrieve_recv_activations(mid)
-                                all_activations.append(act)
-                            
-                            if all_activations and all_activations[0]:
-                                num_args = len(all_activations[0])
-                                cat_args = tuple(
-                                    torch.cat([all_activations[i][j] for i in range(len(mb_ids))], dim=0)
-                                    for j in range(num_args)
-                                )
+                        if stage.is_first:
+                            # 首段：直接使用 root args/kwargs，而不是尝试从上游接收
+                            if len(mb_ids) == 1:
+                                rep_id = mb_ids[0]
+                                cat_args = arg_mbs[rep_id] if arg_mbs and arg_mbs[rep_id] else ()
+                                cat_kwargs = kwarg_mbs[rep_id] if kwarg_mbs and kwarg_mbs[rep_id] else {}
                             else:
-                                cat_args = ()
-                        
-                        cat_kwargs = {}
+                                # 合并多 microbatches 的 root inputs
+                                def _merge_root_kwargs(mb_id_list):
+                                    out = {}
+                                    keys = set()
+                                    for _mid in mb_id_list:
+                                        if kwarg_mbs and kwarg_mbs[_mid]:
+                                            keys.update(kwarg_mbs[_mid].keys())
+                                    for k in keys:
+                                        vals = [kwarg_mbs[_mid].get(k) if kwarg_mbs and kwarg_mbs[_mid] else None for _mid in mb_id_list]
+                                        # 1) 常规张量：按 batch 维拼接
+                                        if all(isinstance(v, torch.Tensor) for v in vals if v is not None):
+                                            out[k] = torch.cat([v for v in vals if v is not None], dim=0)
+                                            continue
+                                        # 2) 音频：合并 dict 中的张量字段
+                                        if k == "audio_inputs" and all((v is None or isinstance(v, dict)) for v in vals):
+                                            merged = {}
+                                            inner_keys = set()
+                                            for v in vals:
+                                                if isinstance(v, dict):
+                                                    inner_keys.update(v.keys())
+                                            for ik in inner_keys:
+                                                inners = [(v.get(ik) if isinstance(v, dict) else None) for v in vals]
+                                                if all(isinstance(iv, torch.Tensor) for iv in inners if iv is not None):
+                                                    merged[ik] = torch.cat([iv for iv in inners if iv is not None], dim=0)
+                                                else:
+                                                    merged[ik] = next((iv for iv in inners if iv is not None), None)
+                                            out[k] = merged
+                                            continue
+                                        # 3) 视觉：拼接 list + cat grid_thw
+                                        if k == "vision_inputs" and all((v is None or isinstance(v, dict)) for v in vals):
+                                            merged = {}
+                                            # pixel_values_list: 扩展列表
+                                            pvl = []
+                                            for v in vals:
+                                                if isinstance(v, dict) and isinstance(v.get("pixel_values_list"), list):
+                                                    pvl.extend(v["pixel_values_list"])
+                                            if pvl:
+                                                merged["pixel_values_list"] = pvl
+                                            # grid_thw: 张量 cat
+                                            gths = [v.get("grid_thw") for v in vals if isinstance(v, dict) and isinstance(v.get("grid_thw"), torch.Tensor)]
+                                            if gths:
+                                                merged["grid_thw"] = torch.cat(gths, dim=0)
+                                            out[k] = merged
+                                            continue
+                                        # 4) 其它：取第一个非 None
+                                        out[k] = next((v for v in vals if v is not None), None)
+                                    return out
+
+                                # 合并 args（若有）
+                                if arg_mbs and arg_mbs[mb_ids[0]]:
+                                    num_args = len(arg_mbs[mb_ids[0]])
+                                    cat_args = tuple(
+                                        torch.cat([arg_mbs[mid][j] for mid in mb_ids], dim=0)
+                                        for j in range(num_args)
+                                    )
+                                else:
+                                    cat_args = ()
+                                # 合并 kwargs
+                                cat_kwargs = _merge_root_kwargs(mb_ids)
+                        else:
+                            # 非首段：从上游接收激活
+                            if len(mb_ids) == 1:
+                                # 对 packing：若你的 stage.forward_one_chunk 会从 mm_fwd_cache 组装输入，
+                                # 这里仍可按旧 API 取；若 stage 内部完全走 mm_fwd_cache，这里取到的可被忽略。
+                                composite_args = stage._retrieve_recv_activations(mb_ids[0])
+                                cat_args = composite_args
+                            else:
+                                all_activations = []
+                                for mid in mb_ids:
+                                    act = stage._retrieve_recv_activations(mid)
+                                    all_activations.append(act)
+                                
+                                if all_activations and all_activations[0]:
+                                    num_args = len(all_activations[0])
+                                    cat_args = tuple(
+                                        torch.cat([all_activations[i][j] for i in range(len(mb_ids))], dim=0)
+                                        for j in range(num_args)
+                                    )
+                                else:
+                                    cat_args = ()
+                            cat_kwargs = {}
                     
                     
                     if len(mb_ids) > 1:

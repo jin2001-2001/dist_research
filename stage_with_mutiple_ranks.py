@@ -1641,75 +1641,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     self.fwd_cache[fwd_chunk_id] = (tuple(), flat_args + flat_kwargs)
                     return tuple()
 
-            # 关键修复：首段且仅 kwargs 的输入不应触发 recv 路径
-            is_first_stage = (self.prev_group is None)
-            dp_size = 1
-            try:
-                if hasattr(self, "dp_group") and self.dp_group is not None:
-                    dp_size = dist.get_world_size(self.dp_group)
-            except Exception:
-                dp_size = 1
 
-            # 若是首段：
-            # - dp_size>1 时，广播 (args, clean_kwargs) 给组内其它副本
-            # - 始终直接以 (args, clean_kwargs) 运行，不走 _retrieve_recv_activations
-            if is_first_stage:
-                comp_args = args or tuple()
-                comp_kwargs = clean_kwargs or {}
-
-                if dp_size > 1:
-                    # 统一广播 (args, kwargs)
-                    payload = [comp_args, comp_kwargs]
-                    if getattr(self, "is_leader", False):
-                        dist.broadcast_object_list(payload, src=self.leader, group=self.dp_group)
-                    else:
-                        buf = [None, None]
-                        dist.broadcast_object_list(buf, src=self.leader, group=self.dp_group)
-                        comp_args, comp_kwargs = buf[0] or tuple(), buf[1] or {}
-
-                # 执行前向（完全绕开父类对 first/recv 的判定，避免空 args 触发 recv）
-                try:
-                    output = self.forward_maybe_with_nosync(*comp_args, **comp_kwargs)
-                except Exception as e:
-                    exc_msg = f"""
-                    {self.log_prefix} failed to run forward (kwargs-first stage):
-                    args: {map_debug_info(comp_args)}
-                    kwargs: {map_debug_info(comp_kwargs)}
-                    """
-                    raise RuntimeError(exc_msg) from e
-
-                output_tuple = _normalize_model_output_as_tuple(output)
-
-                # 记录 cache（与父类一致）
-                flat_args = flatten_args(comp_args)
-                flat_kwargs = flatten_args(comp_kwargs)
-                self.fwd_cache[fwd_chunk_id] = (
-                    output_tuple,
-                    flat_args + flat_kwargs,
-                )
-
-                # 仅做输出校验（若 pack_size>1，仅用于验证切分后的前半段形状，不改变真实输出）
-                if pack_size > 1 and output_tuple:
-                    # 找一个 tensor 估计 batch 维
-                    mb_bs = None
-                    for t in output_tuple:
-                        if isinstance(t, torch.Tensor) and t.dim() > 0:
-                            mb_bs = t.shape[0] // pack_size
-                            break
-                    if mb_bs is not None:
-                        outputs_for_val = tuple(
-                            (t[:mb_bs] if isinstance(t, torch.Tensor) else t)
-                            for t in output_tuple
-                        )
-                    else:
-                        outputs_for_val = output_tuple
-                else:
-                    outputs_for_val = output_tuple
-
-                self._validate_fwd_outputs(outputs_for_val)
-                return output
-
-            # 非首段或存在位置参数的场景：回退父类逻辑
             return super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
 
         # ---------- helpers（局部，无外部依赖） ----------
