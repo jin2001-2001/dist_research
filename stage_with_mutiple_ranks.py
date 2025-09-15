@@ -1038,7 +1038,21 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             elif isinstance(info, _RecvInfo):
                 return info.buffer
             else:
-                raise AssertionError(f"Expected _RecvInfo or None but got {type(info)}")
+                # Debug信息：显示stage信息和收到的类型
+                stage_info = f"stage_idx={getattr(self, 'stage_index', 'unknown')}, model_type={getattr(self, 'model_type', 'unknown')}"
+                print(f"[DEBUG] {stage_info}, recv_infos type issue:")
+                print(f"[DEBUG] info type: {type(info)}")
+                print(f"[DEBUG] info: {info}")
+                print(f"[DEBUG] is_first: {getattr(self, 'is_first', 'unknown')}")
+                print(f"[DEBUG] prev_group: {getattr(self, 'prev_group', 'unknown')}")
+
+                # 如果是_RootArgPlaceholder且是第一阶段，这可能是正常的
+                if hasattr(info, '__class__') and '_RootArgPlaceholder' in str(type(info)):
+                    if getattr(self, 'prev_group', None) is None:  # 确实是第一阶段
+                        print(f"[DEBUG] This is expected for first stage, returning None")
+                        return None
+
+                raise AssertionError(f"Expected _RecvInfo or None but got {type(info)} at {stage_info}")
 
         return map_aggregate(cast(Argument, recv_infos), get_recv_tensor)
 
@@ -1611,6 +1625,21 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         对于 packing：从 mm_fwd_cache[mb] 取三个模态的缓存，组装成 (args, kwargs) 送入子模块；
                     并记录 flat 输入到 (modality, local_idx) 的映射，供 backward 拆分用。
         """
+        # Debug: 显示调用参数
+        print(f"[DEBUG] forward_one_chunk called:")
+        print(f"[DEBUG]   stage_idx={getattr(self, 'stage_index', 'unknown')}")
+        print(f"[DEBUG]   model_type={getattr(self, 'model_type', 'unknown')}")
+        print(f"[DEBUG]   fwd_chunk_id={fwd_chunk_id}")
+        print(f"[DEBUG]   args length={len(args) if args else 'None'}")
+        print(f"[DEBUG]   args type={type(args)}")
+        print(f"[DEBUG]   kwargs={kwargs}")
+        print(f"[DEBUG]   is_first={getattr(self, 'is_first', 'unknown')}")
+        print(f"[DEBUG]   prev_group={getattr(self, 'prev_group', 'unknown')}")
+        if args:
+            for i, arg in enumerate(args):
+                print(f"[DEBUG]   args[{i}] type={type(arg)}, shape={getattr(arg, 'shape', 'no shape')}")
+        else:
+            print(f"[DEBUG]   args is empty/None!")
         if getattr(self, "model_type", None) != "packing":
             # 过滤与当前模态无关的 kwargs，避免子模块收到多余参数报错
             mt = getattr(self, "model_type", None)
