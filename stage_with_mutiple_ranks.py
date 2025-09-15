@@ -605,13 +605,22 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             if args:
                 composite_args = args
             else:
-                composite_args = self._retrieve_recv_activations(fwd_chunk_id)
+                # 对于第一阶段，如果没有args但有kwargs，使用空args避免_retrieve_recv_activations
+                if getattr(self, 'prev_group', None) is None:  # 是第一阶段
+                    print(f"[DEBUG] First stage with empty args, using empty tuple")
+                    composite_args = ()
+                else:
+                    composite_args = self._retrieve_recv_activations(fwd_chunk_id)
 
-        if composite_args is None or len(composite_args) == 0:
+        # 对于第一阶段，如果有kwargs数据，空args是正常的
+        is_first_stage = getattr(self, 'prev_group', None) is None
+        has_kwargs_data = kwargs and any(kwargs.values())
+
+        if composite_args is None or (len(composite_args) == 0 and not (is_first_stage and has_kwargs_data)):
             raise RuntimeError(
                 f"[rank{dist.get_rank()}] Empty composite_args after dispatch at "
                 f"stage={self.stage_index}, fwd_chunk_id={fwd_chunk_id}, "
-                f"is_first={self.prev_group is None}."
+                f"is_first={is_first_stage}, has_kwargs_data={has_kwargs_data}."
             )
 
 
