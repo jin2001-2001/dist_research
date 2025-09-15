@@ -1225,6 +1225,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     # DEBUG: 输出关键信息
                     has_mm_method = hasattr(stage, "get_bwd_recv_ops_mm")
                     print(f"DEBUG RECV_B rank={dist.get_rank()}: modal_type={modal_type}, modality={m}, has_mm_method={has_mm_method}")
+                    print(f"DEBUG RECV_B action info: rank={rank}, dest_rank={dest_rank}, mb_index={mb_index}")
 
                     if modal_type != "packing" and m is not None and has_mm_method:
                         # —— 头部模态路径：key 带上 modality —— #
@@ -1241,6 +1242,10 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             ops = stage.get_bwd_recv_ops_mm(
                                 mb_index, rank=None, dest_rank=None, modality=m, num_splits=num_splits
                             )
+
+                        # DEBUG: 检查ops内容
+                        print(f"DEBUG RECV_B ops: rank={rank}, dest_rank={dest_rank}, ops_len={len(ops)}")
+
                         plan = stage._last_comm_plan.get(("RECV_B", mb_index, m), [len(ops)])
 
                         if hasattr(action, "chunk_deps_mm") and action.chunk_deps_mm:
