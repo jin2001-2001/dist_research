@@ -22,40 +22,85 @@
 [rank1]:   File "/local/desk/qwen2.5_omni_3b_devide_head.py", line 951, in <module>
 [rank1]:     main()
 [rank1]:   File "/local/desk/qwen2.5_omni_3b_devide_head.py", line 800, in main
-[rank1]:     sched.step(vision_inputs=vis_pack, target=tgt)
-[rank1]:   File "/local/desk/pipelining_source_code/schedules.py", line 1358, in step
-[rank1]:     args_split, kwargs_split = self._split_inputs(args, kwargs)
-[rank1]:                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/local/desk/pipelining_source_code/schedules.py", line 458, in _split_inputs
-[rank1]:     args_split, kwargs_split = split_args_kwargs_into_chunks(
-[rank1]:                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/local/desk/pipelining_source_code/microbatch.py", line 353, in split_args_kwargs_into_chunks
-[rank1]:     _postfix_slice_listlike_by_samples(kwargs, kwargs_split)
-[rank1]:   File "/local/desk/pipelining_source_code/microbatch.py", line 550, in _postfix_slice_listlike_by_samples
-[rank1]:     mb_sizes = _infer_mb_sizes_from_kwargs_split(kwargs_split)
-[rank1]:                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/local/desk/pipelining_source_code/microbatch.py", line 539, in _infer_mb_sizes_from_kwargs_split
-[rank1]:     raise RuntimeError(f"Cannot infer microbatch size for kwargs_split[{i}]")
-[rank1]: RuntimeError: Cannot infer microbatch size for kwargs_split[0]
+[rank1]:     sched.step(vis_pack, target=tgt)
+[rank1]:   File "/local/desk/pipelining_source_code/schedules.py", line 1366, in step
+[rank1]:     self._step_microbatches(args_split, kwargs_split, targets_split, losses)
+[rank1]:   File "/local/desk/schedule_runtime.py", line 926, in _step_microbatches
+[rank1]:     self._initialize_stages(arg_mbs[0], kwarg_mbs[0])
+[rank1]:   File "/local/desk/pipelining_source_code/schedules.py", line 1289, in _initialize_stages
+[rank1]:     next_stage_args = stage._prepare_forward_infra(
+[rank1]:                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/desk/pipelining_source_code/stage.py", line 1463, in _prepare_forward_infra
+[rank1]:     outputs = self._shape_inference(args, kwargs)
+[rank1]:               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/desk/stage_with_mutiple_ranks.py", line 1190, in _shape_inference
+[rank1]:     return super()._shape_inference(args, kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/desk/stage_with_mutiple_ranks.py", line 162, in _shape_inference
+[rank1]:     outputs = self.submod(*args, **kwargs)
+[rank1]:               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/desk/qwen2.5_omni_3b_devide_head.py", line 109, in forward
+[rank1]:     image_embeds = self.vision_enc(pixel_values, grid_thw=grid_thw)
+[rank1]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/transformers/models/qwen2_5_omni/modeling_qwen2_5_omni.py", line 1343, in forward
+[rank1]:     hidden_states = blk(
+[rank1]:                     ^^^^
+[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/transformers/models/qwen2_5_omni/modeling_qwen2_5_omni.py", line 1133, in forward
+[rank1]:     self.norm1(hidden_states), cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb
+[rank1]:     ^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+[rank1]:     return self._call_impl(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+[rank1]:     return forward_call(*args, **kwargs)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/transformers/models/qwen2_5_omni/modeling_qwen2_5_omni.py", line 98, in forward
+[rank1]:     return self.weight * hidden_states.to(input_dtype)
+[rank1]:            ~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+[rank1]: RuntimeError: The size of tensor a (1280) must match the size of tensor b (0) at non-singleton dimension 1
 
 [rank2]: Traceback (most recent call last):
 [rank2]:   File "/local/desk/qwen2.5_omni_3b_devide_head.py", line 951, in <module>
 [rank2]:     main()
 [rank2]:   File "/local/desk/qwen2.5_omni_3b_devide_head.py", line 803, in main
-[rank2]:     sched.step(input_ids=inp_ids, attention_mask=attn, target=tgt)
+[rank2]:     sched.step(inp_ids, attention_mask=attn, target=tgt)
 [rank2]:   File "/local/desk/pipelining_source_code/schedules.py", line 1366, in step
 [rank2]:     self._step_microbatches(args_split, kwargs_split, targets_split, losses)
-[rank2]:   File "/local/desk/schedule_runtime.py", line 926, in _step_microbatches
-[rank2]:     self._initialize_stages(arg_mbs[0], kwarg_mbs[0])
-[rank2]:   File "/local/desk/pipelining_source_code/schedules.py", line 1289, in _initialize_stages
-[rank2]:     next_stage_args = stage._prepare_forward_infra(
-[rank2]:                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank2]:   File "/local/desk/pipelining_source_code/stage.py", line 1463, in _prepare_forward_infra
-[rank2]:     outputs = self._shape_inference(args, kwargs)
-[rank2]:               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank2]:   File "/local/desk/stage_with_mutiple_ranks.py", line 1190, in _shape_inference
-[rank2]:     return super()._shape_inference(self, args, kwargs)
-[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank2]: TypeError: PipelineStage_with_mutiple_ranks._shape_inference() takes from 2 to 3 positional arguments but 4 were given
+[rank2]:   File "/local/desk/schedule_runtime.py", line 1620, in _step_microbatches
+[rank2]:     raise e
+[rank2]:   File "/local/desk/schedule_runtime.py", line 1394, in _step_microbatches
+[rank2]:     output = stage.forward_one_chunk(rep_id, cat_args, cat_kwargs, len(mb_ids))
+[rank2]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/local/desk/stage_with_mutiple_ranks.py", line 1499, in forward_one_chunk
+[rank2]:     return super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
+[rank2]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank2]:   File "/local/desk/stage_with_mutiple_ranks.py", line 685, in forward_one_chunk
+[rank2]:     self._validate_fwd_outputs(outputs_for_val)
+[rank2]:   File "/local/desk/pipelining_source_code/stage.py", line 943, in _validate_fwd_outputs
+[rank2]:     validate_tensors_metadata(
+[rank2]:   File "/local/desk/pipelining_source_code/_utils.py", line 86, in validate_tensors_metadata
+[rank2]:     validate_tensor_metadata(
+[rank2]:   File "/local/desk/pipelining_source_code/_utils.py", line 62, in validate_tensor_metadata
+[rank2]:     if not expected.shape == given.shape:
+[rank2]:            ^^^^^^^^^^^^^^
+[rank2]: AttributeError: 'NoneType' object has no attribute 'shape'
 
 其他的rank都因为上面三个rank出错而被挂掉
