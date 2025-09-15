@@ -420,43 +420,6 @@ def _wait_remote_chunk(batch_id: int, owner_rank: int, dep_id: int, dep_chunk: i
             time.sleep(poll_interval)
             poll_interval = min(poll_interval * 1.5, 0.1)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # ==================== 以下是原有的带宽控制相关代码（保持不变） ====================
 NIC = os.getenv("PP_BW_IF", "eth0")
 _LOCK = f"/tmp/pp_bw_lock_{NIC}"
@@ -1512,6 +1475,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                     self._bwd_recv_posted[key_m].wait()
                                     with self._async_recv_lock:
                                         works = self._bwd_recv_works.pop(key_m, [])
+                                        print(f"在这里 {works}")
                                     schedule._wait_batch_p2p(works)
                                     self._bwd_recv_posted.pop(key_m, None)
                                     # 模态内粘合（若内部用到了临时 flat 缓冲）
@@ -1584,43 +1548,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         grad_scale_factor = backward_counter.total() if self.scale_grads else 1
                         stage.scale_grads(grad_scale_factor)
 
-                
-                elif comp_type == BACKWARD_INPUT:
-                    if stage_uses_fsdp:
-                        _assert_unsharded(stage_idx)
-
-                    if not stage.is_last and not is_next_stage_on_this_rank:
-                        assert (
-                            stage_idx,
-                            mb_index,
-                        ) in bwd_recv_ops, (
-                            f"Attempted to run compute {action=} before receiving input"
-                        )
-                        schedule._wait_batch_p2p(bwd_recv_ops.pop((stage_idx, mb_index)))
-                    loss = self._maybe_get_loss(stage, mb_index)
-                    with self._rec.record(current_batch+1,action_id,"BACKWARD_INPUT", stage_idx, mb_index):
-                        stage.backward_one_chunk(
-                            mb_index,
-                            loss=loss,
-                            full_backward=False,
-                            last_backward=False,
-                        )
-
-                    if is_prev_stage_on_this_rank:
-                        stage_index_to_stage[stage_idx - 1].set_local_bwd_input(
-                            stage.get_local_bwd_output(mb_index), mb_index
-                        )
-                elif comp_type == BACKWARD_WEIGHT:
-                    if stage_uses_fsdp:
-                        _assert_unsharded(stage_idx)
-                    backward_counter[stage_idx] += 1
-                    
-                    with self._rec.record(current_batch+1,action_id,"BACKWARD_WEIGHT", stage_idx, mb_index):
-                        stage.backward_weight_one_chunk(
-                            mb_index,
-                            last_backward=backward_counter[stage_idx]
-                            == self._n_microbatches,
-                        )
                 elif comp_type == _ComputationType.ALL_REDUCE:
                     _tc_set_rate(action.upstream)
                     if action.upstream is not None:
