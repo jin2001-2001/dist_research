@@ -1393,19 +1393,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     with self._rec.record(current_batch+1,action_id,"FORWARD", stage_idx, mb_ids):
                         output = stage.forward_one_chunk(rep_id, cat_args, cat_kwargs, len(mb_ids))
 
-                    # DEBUG: 添加调试信息来定位split_out索引问题
-                    print(f"[DEBUG] stage_idx={stage_idx}, rep_id={rep_id}, mb_ids={mb_ids}")
-                    print(f"[DEBUG] output type: {type(output)}")
-                    if hasattr(output, 'shape'):
-                        print(f"[DEBUG] output.shape: {output.shape}")
-                    elif isinstance(output, (tuple, list)):
-                        print(f"[DEBUG] output length: {len(output)}")
-                        for i, item in enumerate(output):
-                            if hasattr(item, 'shape'):
-                                print(f"[DEBUG] output[{i}].shape: {item.shape}")
-                            else:
-                                print(f"[DEBUG] output[{i}] type: {type(item)}")
-
                     big_key = (stage_idx, rep_id)
                     big_entry = stage.fwd_cache.get(rep_id)
                     assert big_entry is not None, f"missing big forward entry for stage {stage_idx}, mb {rep_id}"
@@ -1413,32 +1400,23 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
                     # Split output
                     if isinstance(output, tuple):
-                        print(f"[DEBUG] Processing tuple output with {len(output)} elements")
                         split_out = list(zip(*[
                             torch.chunk(t, len(mb_ids), dim=0) if isinstance(t, torch.Tensor)
                             else (t,) * len(mb_ids)
                             for t in output
                         ]))
-                        print(f"[DEBUG] split_out length: {len(split_out)}")
                     else:
-                        print(f"[DEBUG] Processing single tensor output")
                         if output is None:
-                            print(f"[DEBUG] ERROR: output is None, cannot split!")
                             split_out = [None] * len(mb_ids)
                         elif not hasattr(output, 'chunk'):
-                            print(f"[DEBUG] ERROR: output type {type(output)} doesn't have chunk method!")
                             split_out = [output] * len(mb_ids)
                         else:
                             split_out = list(torch.chunk(output, len(mb_ids), dim=0))
-                            print(f"[DEBUG] split_out length: {len(split_out)}")
                     
                     flat_args = flatten_args(cat_args)
                     flat_kwargs = flatten_args(cat_kwargs)
                     
                     for idx, mid in enumerate(mb_ids):
-                        print(f"[DEBUG] Processing mb_id {mid} at index {idx}/{len(mb_ids)}")
-                        print(f"[DEBUG] split_out available indices: {len(split_out) if split_out else 'None'}")
-
                         if len(mb_ids) > 1:
                             mb_inputs = []
                             for i, arg in enumerate(cat_args):
@@ -1457,9 +1435,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
                         # 检查索引是否越界
                         if idx >= len(split_out):
-                            print(f"[DEBUG] ERROR: idx={idx} >= len(split_out)={len(split_out)}")
-                            print(f"[DEBUG] mb_ids={mb_ids}, stage_idx={stage_idx}")
-                            print(f"[DEBUG] This is the source of IndexError!")
                             # 临时修复：如果索引越界，使用第一个元素或None
                             if len(split_out) > 0:
                                 normalized_output = _normalize_model_output_as_tuple(split_out[0])
@@ -1495,7 +1470,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         if idx < len(split_out):
                             self._maybe_compute_loss(stage, split_out[idx], target_mbs, mid)
                         else:
-                            print(f"[DEBUG] Skipping loss computation for idx={idx}, split_out length={len(split_out)}")
                             # 对于空输出的情况，传入None或创建默认输出
                             self._maybe_compute_loss(stage, None, target_mbs, mid)
                     
@@ -1507,7 +1481,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                     split_out[idx], mid
                                 )
                             else:
-                                print(f"[DEBUG] Skipping set_local_fwd_input for idx={idx}, split_out length={len(split_out)}")
                                 # 传递None或空的激活
                                 stage_index_to_stage[stage_idx + 1].set_local_fwd_input(
                                     None, mid

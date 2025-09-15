@@ -1,16 +1,30 @@
-[rank0]: Traceback (most recent call last):
-[rank0]:   File "/local/desk/qwen2.5_omni_3b_devide_head.py", line 968, in <module>
-[rank0]:     main()
-[rank0]:   File "/local/desk/qwen2.5_omni_3b_devide_head.py", line 794, in main
-[rank0]:     sched.step(audio_inputs=aud_pack, attention_mask=attn, target=tgt)
-[rank0]:   File "/local/desk/pipelining_source_code/schedules.py", line 1366, in step
-[rank0]:     self._step_microbatches(args_split, kwargs_split, targets_split, losses)
-[rank0]:   File "/local/desk/schedule_runtime.py", line 1674, in _step_microbatches
-[rank0]:     raise e
-[rank0]:   File "/local/desk/schedule_runtime.py", line 1047, in _step_microbatches
-[rank0]:     ops = stage.get_fwd_send_ops_mm(
-[rank0]:           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank0]:   File "/local/desk/stage_with_mutiple_ranks.py", line 1327, in get_fwd_send_ops_mm
-[rank0]:     dst_stages = self.act_send_info[idx] if hasattr(self, "act_send_info") else (dest_rank,)
-[rank0]:                  ~~~~~~~~~~~~~~~~~~^^^^^
-[rank0]: KeyError: 0
+[rank1]: Traceback (most recent call last):
+[rank1]:   File "/local/desk/qwen2.5_omni_3b_devide_head.py", line 968, in <module>
+[rank1]:     main()
+[rank1]:   File "/local/desk/qwen2.5_omni_3b_devide_head.py", line 817, in main
+[rank1]:     sched.step(vision_inputs=vis_pack, attention_mask=attn, target=tgt)
+[rank1]:   File "/local/desk/pipelining_source_code/schedules.py", line 1366, in step
+[rank1]:     self._step_microbatches(args_split, kwargs_split, targets_split, losses)
+[rank1]:   File "/local/desk/schedule_runtime.py", line 1674, in _step_microbatches
+[rank1]:     raise e
+[rank1]:   File "/local/desk/schedule_runtime.py", line 1394, in _step_microbatches
+[rank1]:     output = stage.forward_one_chunk(rep_id, cat_args, cat_kwargs, len(mb_ids))
+[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/desk/stage_with_mutiple_ranks.py", line 1677, in forward_one_chunk
+[rank1]:     return super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/desk/stage_with_mutiple_ranks.py", line 608, in forward_one_chunk
+[rank1]:     composite_args = self._retrieve_recv_activations(fwd_chunk_id)
+[rank1]:                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/desk/pipelining_source_code/stage.py", line 560, in _retrieve_recv_activations
+[rank1]:     activations = self._map_tensor_from_recv_info(recv_infos)
+[rank1]:                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/desk/stage_with_mutiple_ranks.py", line 1043, in _map_tensor_from_recv_info
+[rank1]:     return map_aggregate(cast(Argument, recv_infos), get_recv_tensor)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/torch/fx/node.py", line 873, in map_aggregate
+[rank1]:     return _fx_map_aggregate(a, fn)
+[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^
+[rank1]:   File "/local/desk/stage_with_mutiple_ranks.py", line 1041, in get_recv_tensor
+[rank1]:     raise AssertionError(f"Expected _RecvInfo or None but got {type(info)}")
+[rank1]: AssertionError: Expected _RecvInfo or None but got <class 'pipelining_source_code.stage._RootArgPlaceholder'>

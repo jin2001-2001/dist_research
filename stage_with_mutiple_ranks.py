@@ -1314,14 +1314,12 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         单模态 head 的 FWD 发送：本模态内 slot 从 0 计数；tag = (0, mb, slot, split)。
         output_tuple 取自 self.fwd_cache[mb]，与基类一致。
         """
-        print(f"[DEBUG] get_fwd_send_ops_mm called: chunk_id={fwd_chunk_id}, modality={modality}")
 
         if fwd_chunk_id not in self.fwd_cache:
-            print(f"[DEBUG] ERROR: fwd_chunk_id {fwd_chunk_id} not in fwd_cache. Available keys: {list(self.fwd_cache.keys())}")
             return []
 
         output_tuple, _ = self.fwd_cache[fwd_chunk_id]
-        print(f"[DEBUG] output_tuple length: {len(output_tuple)}")
+    
         ops: list[dist.P2POp] = []
         ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
 
@@ -1331,21 +1329,16 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         plans = []  # [(slot_idx, flat, slices)]
         slot_ctr = 0
         for idx, out in enumerate(output_tuple):
-            print(f"[DEBUG] Processing output[{idx}]: type={type(out)}")
 
             # 安全地获取dst_stages，处理act_send_info不存在或缺少索引的情况
             if hasattr(self, "act_send_info") and self.act_send_info and idx in self.act_send_info:
                 dst_stages = self.act_send_info[idx]
-                print(f"[DEBUG] Using act_send_info[{idx}]: {dst_stages}")
             else:
                 dst_stages = (dest_rank,)
-                print(f"[DEBUG] Using fallback dest_rank: {dst_stages}")
 
             if dst_stages is None:
-                print(f"[DEBUG] Skipping output[{idx}]: dst_stages is None")
                 continue
             if not isinstance(out, torch.Tensor):
-                print(f"[DEBUG] Skipping output[{idx}]: not a tensor")
                 continue
             flat = out.contiguous().view(-1)
             slices = self._compute_1d_slices(flat.numel(), num_splits)
@@ -1653,7 +1646,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             if mt == "audio":
                 ai = (clean_kwargs or {}).get("audio_inputs", None)
                 if ai is None:
-                    print(f"[DEBUG] Audio head missing audio_inputs, creating dummy output for mb={fwd_chunk_id}")
                     from pipelining_source_code._utils import flatten_args as _flat
                     flat_args = _flat(args)
                     flat_kwargs = _flat(clean_kwargs or {})
