@@ -656,6 +656,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if kind == "RECV_F":
                         self._fwd_recv_works.setdefault(key, []).extend(works_k)
                     else:
+                        print(f"在这里 {key} {works_k}")
                         self._bwd_recv_works.setdefault(key, []).extend(works_k)
 
             # 全部分块 ops 已 post 的事件
@@ -1475,7 +1476,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                     self._bwd_recv_posted[key_m].wait()
                                     with self._async_recv_lock:
                                         works = self._bwd_recv_works.pop(key_m, [])
-                                        print(f"在这里 {works}")
                                     schedule._wait_batch_p2p(works)
                                     self._bwd_recv_posted.pop(key_m, None)
                                     # 模态内粘合（若内部用到了临时 flat 缓冲）
