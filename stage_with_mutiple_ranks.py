@@ -1092,6 +1092,8 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
         
         super().__init__(submodule, stage_index, num_stages, device, input_args, output_args, group, dw_builder, prev_group,  this_group, next_group)
+        # 记录 vision 的 grid_thw 切片游标（按微批推进）
+        self._mm_grid_thw_pos: dict[int, int] = {}
         
         
     def _shape_inference(self, args, kwargs=None):
@@ -1197,6 +1199,20 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 allow = {"input_ids", "attention_mask"}
 
             clean_kwargs = {k: v for k, v in kwargs.items() if k in allow}
+            # 对 vision：shape 推断时按 microbatch 的样本数裁剪 grid_thw（取前 n 行）
+            if mt == "vision" and isinstance(clean_kwargs.get("vision_inputs", None), dict):
+                _vin = clean_kwargs["vision_inputs"]
+                pvl = _vin.get("pixel_values_list", None)
+                gthw = _vin.get("grid_thw", None)
+                if isinstance(pvl, (list, tuple)) and torch.is_tensor(gthw):
+                    n = len(pvl)
+                    try:
+                        if gthw.dim() >= 2 and gthw.size(0) >= n:
+                            _vin = dict(_vin)
+                            _vin["grid_thw"] = gthw[:n].contiguous()
+                            clean_kwargs["vision_inputs"] = _vin
+                    except Exception:
+                        pass
 
             # leader：设定 inputs_meta，并使用真实输入跑一次前向，以获得可靠的 meta 输出；组内广播给 DP 成员；
             if self.is_leader:
@@ -1591,6 +1607,25 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             clean_kwargs = None
             if kwargs:
                 clean_kwargs = {k: v for k, v in kwargs.items() if k in allow}
+            # 对 vision：按微批游标裁剪 grid_thw，使与 pixel_values_list 对齐
+            if mt == "vision" and isinstance(clean_kwargs, dict) and isinstance(clean_kwargs.get("vision_inputs", None), dict):
+                _vin = dict(clean_kwargs["vision_inputs"])  # copy
+                pvl = _vin.get("pixel_values_list", None)
+                gthw = _vin.get("grid_thw", None)
+                if isinstance(pvl, (list, tuple)) and torch.is_tensor(gthw):
+                    n = len(pvl)
+                    # 新一轮微批：重置游标
+                    if fwd_chunk_id == 0:
+                        self._mm_grid_thw_pos[self.stage_index] = 0
+                    st = self._mm_grid_thw_pos.get(self.stage_index, 0)
+                    ed = st + n
+                    try:
+                        if gthw.dim() >= 2 and gthw.size(0) >= ed:
+                            _vin["grid_thw"] = gthw[st:ed].contiguous()
+                            clean_kwargs["vision_inputs"] = _vin
+                            self._mm_grid_thw_pos[self.stage_index] = ed
+                    except Exception:
+                        pass
             # Debug (可通过环境变量开启)
             import os as _os
             if _os.getenv("MM_DEBUG", "0") == "1" and (args or clean_kwargs):
@@ -1867,5 +1902,3 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         logger.debug("%s Backwarded (packing) chunk %s", self.log_prefix, bwd_chunk_id)
 
     
-
-
