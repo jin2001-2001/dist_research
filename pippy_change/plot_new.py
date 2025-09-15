@@ -10,7 +10,7 @@ import numpy as np
 def first_peak_end_time_raw(
     series,
     start_t,
-    low_ok: float = 10,          # ignore values <= this (e.g., ~10 noise)
+    low_ok: float = 1,          # ignore values <= this (e.g., ~10 noise)
     high_ok: float = 1.2e4,          # ignore values >= this (e.g., 10000+ spikes)
     baseline_ns: int = 1e8,        # samples from start to estimate baseline
     amp_thresh: float = 0,     # enter peak when value >= baseline + amp_thresh
@@ -56,6 +56,7 @@ def first_peak_end_time_raw(
         baseline = high_ok
     #print(baseline)
     baseline= baseline/10
+
 
     enter_thr = baseline + amp_thresh
     exit_thr  = baseline + end_tol
