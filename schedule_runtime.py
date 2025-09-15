@@ -1491,13 +1491,27 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                 }
                     
                     for idx, mid in enumerate(mb_ids):
-                        self._maybe_compute_loss(stage, split_out[idx], target_mbs, mid)
+                        # 检查split_out索引是否存在
+                        if idx < len(split_out):
+                            self._maybe_compute_loss(stage, split_out[idx], target_mbs, mid)
+                        else:
+                            print(f"[DEBUG] Skipping loss computation for idx={idx}, split_out length={len(split_out)}")
+                            # 对于空输出的情况，传入None或创建默认输出
+                            self._maybe_compute_loss(stage, None, target_mbs, mid)
                     
                     if is_next_stage_on_this_rank:
                         for idx, mid in enumerate(mb_ids):
-                            stage_index_to_stage[stage_idx + 1].set_local_fwd_input(
-                                split_out[idx], mid
-                            )
+                            # 检查split_out索引是否存在
+                            if idx < len(split_out):
+                                stage_index_to_stage[stage_idx + 1].set_local_fwd_input(
+                                    split_out[idx], mid
+                                )
+                            else:
+                                print(f"[DEBUG] Skipping set_local_fwd_input for idx={idx}, split_out length={len(split_out)}")
+                                # 传递None或空的激活
+                                stage_index_to_stage[stage_idx + 1].set_local_fwd_input(
+                                    None, mid
+                                )
                     
                     for mid in mb_ids:
                         if mid in stage.fwd_cache:

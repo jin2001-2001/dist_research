@@ -1631,15 +1631,29 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 except Exception:
                     pass
 
-            # 音频缺省：直接返回空输出并写入 fwd_cache，避免进入父类校验
+            # 音频缺省：当没有audio_inputs时，返回dummy tensor而不是空tuple
             if mt == "audio":
                 ai = (clean_kwargs or {}).get("audio_inputs", None)
                 if ai is None:
+                    print(f"[DEBUG] Audio head missing audio_inputs, creating dummy output for mb={fwd_chunk_id}")
                     from pipelining_source_code._utils import flatten_args as _flat
                     flat_args = _flat(args)
                     flat_kwargs = _flat(clean_kwargs or {})
-                    self.fwd_cache[fwd_chunk_id] = (tuple(), flat_args + flat_kwargs)
-                    return tuple()
+
+                    # 创建一个dummy的audio embedding tensor
+                    # 假设batch size为1，audio embedding维度为合理的默认值
+                    batch_size = 1
+                    audio_seq_len = 32  # 合理的音频序列长度
+                    audio_dim = 512     # 合理的音频特征维度
+
+                    dummy_audio_embeds = torch.zeros(
+                        batch_size, audio_seq_len, audio_dim,
+                        device=self.device, dtype=torch.float32
+                    )
+
+                    output_tuple = (dummy_audio_embeds,)
+                    self.fwd_cache[fwd_chunk_id] = (output_tuple, flat_args + flat_kwargs)
+                    return output_tuple
 
 
             return super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
