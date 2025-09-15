@@ -1,14 +1,3 @@
-[DEBUG] stage_idx=0, rep_id=0, mb_ids=(0,)
-[DEBUG] output type: <class 'tuple'>
-[DEBUG] output length: 0
-[DEBUG] Processing tuple output with 0 elements
-[DEBUG] split_out length: 0
-[DEBUG] Processing mb_id 0 at index 0/1
-[DEBUG] split_out available indices: None
-[DEBUG] ERROR: idx=0 >= len(split_out)=0
-[DEBUG] mb_ids=(0,), stage_idx=0
-[DEBUG] This is the source of IndexError!
-
 [rank0]: Traceback (most recent call last):
 [rank0]:   File "/local/desk/qwen2.5_omni_3b_devide_head.py", line 968, in <module>
 [rank0]:     main()
@@ -16,9 +5,12 @@
 [rank0]:     sched.step(audio_inputs=aud_pack, attention_mask=attn, target=tgt)
 [rank0]:   File "/local/desk/pipelining_source_code/schedules.py", line 1366, in step
 [rank0]:     self._step_microbatches(args_split, kwargs_split, targets_split, losses)
-[rank0]:   File "/local/desk/schedule_runtime.py", line 1660, in _step_microbatches
+[rank0]:   File "/local/desk/schedule_runtime.py", line 1674, in _step_microbatches
 [rank0]:     raise e
-[rank0]:   File "/local/desk/schedule_runtime.py", line 1494, in _step_microbatches
-[rank0]:     self._maybe_compute_loss(stage, split_out[idx], target_mbs, mid)
-[rank0]:                                     ~~~~~~~~~^^^^^
-[rank0]: IndexError: list index out of range
+[rank0]:   File "/local/desk/schedule_runtime.py", line 1047, in _step_microbatches
+[rank0]:     ops = stage.get_fwd_send_ops_mm(
+[rank0]:           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/local/desk/stage_with_mutiple_ranks.py", line 1327, in get_fwd_send_ops_mm
+[rank0]:     dst_stages = self.act_send_info[idx] if hasattr(self, "act_send_info") else (dest_rank,)
+[rank0]:                  ~~~~~~~~~~~~~~~~~~^^^^^
+[rank0]: KeyError: 0
