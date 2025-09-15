@@ -1,64 +1,3 @@
-[DEBUG] forward_one_chunk called:
-[DEBUG]   stage_idx=0
-[DEBUG]   model_type=vision
-[DEBUG]   fwd_chunk_id=0
-[DEBUG]   args length=None
-[DEBUG]   args type=<class 'tuple'>
-[DEBUG]   kwargs={'vision_inputs': {'pixel_values_list': [tensor([[-1.2375, -0.8580, -0.6536,  ..., -1.3380, -1.3522, -1.4518],
-        [-1.3689, -1.3543, -1.1353,  ..., -1.3238, -1.2527, -1.1389],
-        [-1.1937, -1.0915, -1.0477,  ..., -0.8261, -1.1674, -1.3096],
-        ...,
-        [ 1.4048,  1.3756,  1.4340,  ...,  1.4065,  1.3922,  1.5060],
-        [ 0.9668,  0.9376,  1.0690,  ...,  1.8615,  1.9610,  2.0748],
-        [ 1.3464,  1.1712,  1.1128,  ...,  1.9184,  1.9042,  1.8331]])], 'grid_thw': tensor([[ 1, 28, 36]])}, 'attention_mask': tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-         1, 1, 1, 1, 1, 1, 1, 1]])}
-[DEBUG]   is_first=True
-[DEBUG]   prev_group=None
-[DEBUG]   args is empty/None!
-[DEBUG] stage_idx=0, model_type=vision, recv_infos type issue:
-[DEBUG] info type: <class 'pipelining_source_code.stage._RootArgPlaceholder'>
-[DEBUG] info: <pipelining_source_code.stage._RootArgPlaceholder object at 0x7f6023f74b10>
-[DEBUG] is_first: True
-[DEBUG] prev_group: None
-[DEBUG] This is expected for first stage, returning None
-
-[rank1]: Traceback (most recent call last):
-[rank1]:   File "/local/desk/stage_with_mutiple_ranks.py", line 642, in forward_one_chunk
-[rank1]:     output = self.forward_maybe_with_nosync(*composite_args, **composite_kwargs)
-[rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/local/desk/pipelining_source_code/stage.py", line 581, in forward_maybe_with_nosync
-[rank1]:     out_val = self.submod(*args, **kwargs)
-[rank1]:               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
-[rank1]:     return self._call_impl(*args, **kwargs)
-[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/local/miniconda3/envs/qwencpu/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
-[rank1]:     return forward_call(*args, **kwargs)
-[rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]: TypeError: VisionStage.forward() got multiple values for argument 'vision_inputs'
-
-[rank1]: The above exception was the direct cause of the following exception:
-
 [rank1]: Traceback (most recent call last):
 [rank1]:   File "/local/desk/qwen2.5_omni_3b_devide_head.py", line 968, in <module>
 [rank1]:     main()
@@ -71,13 +10,16 @@
 [rank1]:   File "/local/desk/schedule_runtime.py", line 1394, in _step_microbatches
 [rank1]:     output = stage.forward_one_chunk(rep_id, cat_args, cat_kwargs, len(mb_ids))
 [rank1]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/local/desk/stage_with_mutiple_ranks.py", line 1698, in forward_one_chunk
+[rank1]:   File "/local/desk/stage_with_mutiple_ranks.py", line 1707, in forward_one_chunk
 [rank1]:     return super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
 [rank1]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[rank1]:   File "/local/desk/stage_with_mutiple_ranks.py", line 650, in forward_one_chunk
-[rank1]:     raise RuntimeError(exc_msg) from e
-[rank1]: RuntimeError: 
-[rank1]:             [Stage 0] failed to run forward:
-[rank1]:             args: ('None',)
-[rank1]:             kwargs: {'vision_inputs': {'pixel_values_list': ['Tensor(torch.Size([1008, 1176]), grad=False, dtype=torch.float32)'], 'grid_thw': 'Tensor(torch.Size([1, 3]), grad=False, dtype=torch.int64)'}}
-[rank1]:             
+[rank1]:   File "/local/desk/stage_with_mutiple_ranks.py", line 694, in forward_one_chunk
+[rank1]:     self._validate_fwd_outputs(outputs_for_val)
+[rank1]:   File "/local/desk/pipelining_source_code/stage.py", line 943, in _validate_fwd_outputs
+[rank1]:     validate_tensors_metadata(
+[rank1]:   File "/local/desk/pipelining_source_code/_utils.py", line 86, in validate_tensors_metadata
+[rank1]:     validate_tensor_metadata(
+[rank1]:   File "/local/desk/pipelining_source_code/_utils.py", line 63, in validate_tensor_metadata
+[rank1]:     raise PipeliningShapeError(
+[rank1]: pipelining_source_code._utils.PipeliningShapeError: Stage 0 forward outputs: value 0 has a shape mismatch: expected torch.Size([252, 2048]) actual torch.Size([198, 2048])
+ds
