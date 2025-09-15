@@ -1149,7 +1149,11 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
                     num_splits = action.split_parts or 1
 
-                    if modal_type == "packing" and m is not None and hasattr(stage, "get_fwd_recv_ops_mm"):
+                    # DEBUG: 输出关键信息
+                    has_mm_method = hasattr(stage, "get_fwd_recv_ops_mm")
+                    print(f"DEBUG RECV_F rank={dist.get_rank()}: modal_type={modal_type}, modality={m}, has_mm_method={has_mm_method}")
+
+                    if modal_type == "packing" and m is not None and has_mm_method:
                         # —— 多模态（packing）路径：key 带上 modality —— #
                         key = (stage_idx, mb_index, m)
                         assert key not in self._fwd_recv_posted, (
@@ -1331,13 +1335,19 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         if not is_prev_stage_on_this_rank:
                             is_packing = getattr(stage, "modal_type", None) == "packing"
                             mods = tuple(action.multimodality or [])
+
+                            # DEBUG: 输出FORWARD等待的关键信息
+                            print(f"DEBUG FORWARD rank={dist.get_rank()}: is_packing={is_packing}, mods={mods}")
+                            print(f"DEBUG FORWARD available keys: {list(self._fwd_recv_posted.keys())}")
+
                             if is_packing and mods:
                                 # packing：按模态分别等待当前 mb 的 RECV_F 完成，并做粘合
                                 for mid in mb_ids:
                                     for m in mods:
                                         key_m = (stage_idx, mid, m)
+                                        print(f"DEBUG FORWARD waiting for key_m={key_m}")
                                         assert key_m in self._fwd_recv_posted, \
-                                            f"Computing {action=} before RECV_F posted (modality={m})"
+                                            f"Computing {action=} before RECV_F posted (modality={m}). Available keys: {list(self._fwd_recv_posted.keys())}"
                                         self._fwd_recv_posted[key_m].wait()
                                         with self._async_recv_lock:
                                             works = self._fwd_recv_works.pop(key_m, [])

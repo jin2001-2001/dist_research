@@ -122,9 +122,9 @@ class VisionStage(nn.Module):
             pixel_values = pixel_values.type(self.vision_enc.get_dtype())
         pixel_values = pixel_values.to(next(self.vision_enc.parameters()).device if hasattr(self.vision_enc, "parameters") else pixel_values.device)
 
-        print(f"[DEBUG] Vision input shape: {pixel_values.shape}")
+        
         image_embeds = self.vision_enc(pixel_values, grid_thw=grid_thw)
-        print(f"[DEBUG] Vision output shape before padding: {image_embeds.shape if image_embeds is not None else 'None'}")
+    
 
         # 添加padding逻辑确保输出shape一致
         if image_embeds is not None:
@@ -138,11 +138,9 @@ class VisionStage(nn.Module):
                 embed_dim = image_embeds.shape[1]
                 padding = torch.zeros(pad_len, embed_dim, device=image_embeds.device, dtype=image_embeds.dtype)
                 image_embeds = torch.cat([image_embeds, padding], dim=0)
-                print(f"[DEBUG] Padded vision output to shape: {image_embeds.shape}")
             elif current_len > MAX_VISION_TOKENS:
                 # 截断到固定长度
                 image_embeds = image_embeds[:MAX_VISION_TOKENS]
-                print(f"[DEBUG] Truncated vision output to shape: {image_embeds.shape}")
 
         return (image_embeds.contiguous() if image_embeds is not None else None), grid_thw
 
