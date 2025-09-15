@@ -1222,7 +1222,11 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
                     num_splits = action.split_parts or 1
 
-                    if modal_type != "packing" and m is not None and hasattr(stage, "get_bwd_recv_ops_mm"):
+                    # DEBUG: 输出关键信息
+                    has_mm_method = hasattr(stage, "get_bwd_recv_ops_mm")
+                    print(f"DEBUG RECV_B rank={dist.get_rank()}: modal_type={modal_type}, modality={m}, has_mm_method={has_mm_method}")
+
+                    if modal_type != "packing" and m is not None and has_mm_method:
                         # —— 头部模态路径：key 带上 modality —— #
                         key = (stage_idx, mb_index, m)
                         assert key not in self._bwd_recv_posted, (
@@ -1513,10 +1517,16 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if not stage.is_last and not is_next_stage_on_this_rank:
                         is_head_modal = getattr(stage, "modal_type", None) in ("text", "vision", "audio")
                         mods = tuple(action.multimodality or [])
+
+                        # DEBUG: 输出FULL_BACKWARD等待的关键信息
+                        print(f"DEBUG FULL_BACKWARD rank={dist.get_rank()}: is_head_modal={is_head_modal}, mods={mods}")
+                        print(f"DEBUG FULL_BACKWARD available keys: {list(self._bwd_recv_posted.keys())}")
+
                         if is_head_modal and mods:
                             m = mods[0]  # SEND/RECV 類命令每条只有一个模态
                             for mid in mb_ids:
                                 key_m = (stage_idx, mid, m)
+                                print(f"DEBUG FULL_BACKWARD checking key_m={key_m}")
                                 if key_m in self._bwd_recv_posted:
                                     self._bwd_recv_posted[key_m].wait()
                                     with self._async_recv_lock:
