@@ -4,6 +4,112 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
+from typing import List, Tuple, Optional
+import numpy as np
+
+def first_peak_end_time_raw(
+    series,
+    start_t,
+    low_ok: float = 10,          # ignore values <= this (e.g., ~10 noise)
+    high_ok: float = 1.2e4,          # ignore values >= this (e.g., 10000+ spikes)
+    baseline_ns: int = 1e8,        # samples from start to estimate baseline
+    amp_thresh: float = 0,     # enter peak when value >= baseline + amp_thresh
+    end_tol: float = 1,         # exit peak when value <  baseline + end_tol
+    end_hold: int = 1,            # need N consecutive exit samples
+    inverted: bool = False,        # True if peaks are downward dips
+    min_duration: Optional[float] = None,  # minimum time the peak must last
+    min_samples: Optional[int] = 1      # minimum number of samples in the peak
+):
+    """
+    Returns the timestamp of the end of the first 'normal' peak, or None.
+    - No smoothing. Outliers are ignored (treated as NaN).
+    - Peaks that are shorter than min_duration or min_samples are skipped.
+    """
+
+    arr = np.asarray(series, dtype=object)
+    t = arr[:, 0].astype(int)
+    v = arr[:, 2].astype(float)
+
+    # Apply start_time filter
+    if start_t is not None:
+        mask = t >= start_t
+        t = t[mask]
+        v = v[mask]
+        if len(t) == 0:
+            return None
+    print(t[0])
+
+    # Mark outliers as NaN so they don't count toward continuity.
+    valid = (v > low_ok) & (v < high_ok)
+    v_use = v.astype(float)
+    #v_use[~valid] = np.nan
+    if inverted:
+        v_use = -v_use
+
+    # Baseline from early valid points.
+    head = v_use[:min(baseline_ns, len(v_use))]
+    mask = (head<high_ok) & (head > low_ok)
+    baseline = np.nanmedian(head[mask])
+    #print(baseline)
+    if np.isnan(baseline):
+        print("baseline error")
+        baseline = high_ok
+    #print(baseline)
+    baseline= baseline/10
+
+    enter_thr = baseline + amp_thresh
+    exit_thr  = baseline + end_tol
+
+    i = 0
+    prev = v_use[0] if len(v_use) > 0 else np.nan
+
+    while i < len(v_use):
+        cur = v_use[i]
+        # Find entry into a peak (crossing from below to >= enter_thr)
+        if (not np.isnan(cur)) and (not np.isnan(prev)) and (enter_thr <= cur):
+            start_idx = i
+            # Now find end: first time we stay below exit_thr for end_hold consecutive valid points
+            below_run = 0
+            end_idx = None
+            j = start_idx
+            while j < len(v_use):
+                x = v_use[j]
+                if np.isnan(x):
+                    below_run = 0
+                elif x < exit_thr:
+                    below_run += 1
+                    if below_run >= end_hold:
+                        end_idx = j
+                        break
+                else:
+                    below_run = 0
+                j += 1
+
+            if end_idx is None:
+                end_idx = end_hold-1+j-1 # last till...
+
+            # Duration/sample-width checks
+            duration_ok = (min_duration is None) or ((t[end_idx] - t[start_idx]) >= min_duration)
+            # Count samples considered "in-peak" as those from start to the first index
+            # where we began the exit run (end_idx - end_hold + 1) or end_idx if we prefer inclusive.
+            first_exit_idx = end_idx - end_hold + 1
+            width_samples = max(0, first_exit_idx - start_idx+1)
+            samples_ok = (min_samples is None) or (width_samples >= min_samples)
+
+            if duration_ok and samples_ok:
+                return int(t[end_idx])  # end time of the first normal peak
+
+            # Too narrow → skip this peak and continue scanning after it
+            i = end_idx + 1
+            prev = v_use[i-1] if i-1 < len(v_use) else np.nan
+            continue
+
+        prev = cur
+        i += 1
+    print("error, no peak end found")
+    return None
+
+
 
 
 with open("timeline_batch0_all.json", "r") as f:
@@ -39,8 +145,11 @@ for record in records:
         stage_info[stage_idx] = [rank]
 
     send_start = record["start_ns"]
+    real_end = record["end_ns"]
 
     if action in {"RECV_F", "RECV_B"}:
+        #print(record["net_series"])
+        print(y_tag, mb_str)
         for start_record in records:
             cand_mb = start_record.get("mb_idx", -1)
             cand_action = start_record["action"]
@@ -51,6 +160,7 @@ for record in records:
                 if (t1 == 'F' and cand_stage_idx == stage_idx-1) or (t1 == 'B' and cand_stage_idx == stage_idx+1):
                     send_start = start_record["start_ns"]
                     break
+        real_end = first_peak_end_time_raw(series = record["net_series"],start_t = send_start)
 
     if action not in {"SEND_F", "SEND_B"}:
         rows.append({
@@ -59,8 +169,9 @@ for record in records:
         "rank": rank,
         "action": action,
         "start": (send_start - base_ns) / 1e6,
-        "end": (record["end_ns"] - base_ns) / 1e6,
-        "mb_idx": mb_str
+        "end": (real_end - base_ns) / 1e6,
+        "mb_idx": mb_str,
+        "net_series": [[s, u ,d] for s, u, d in record["net_series"] if s>send_start and s< real_end]
         })
 
 df = pd.DataFrame(rows)
@@ -150,20 +261,21 @@ for _, row in df.iterrows():
     )
 
 # Overlay smoothed bandwidth lines
-#for record in records:
-#    if record["action"].startswith("RECV") and record["net_series"]:
-#        y_tag = f"{record['rank']}-{record['action']}"
-#        y_base = y_map[y_tag]
-#        x_vals = [(ts - base_ns) / 1e6 for ts, _, _ in record["net_series"]]
-#        up_vals = [up for _, up, _ in record["net_series"]]
-#        down_vals = [down for _, _, down in record["net_series"]]
-#        up_smooth = smooth_series(up_vals, window_size=5)
-#        down_smooth = smooth_series(down_vals, window_size=5)
-#        bw_max = max(max(up_smooth), max(down_smooth), 1)
-#        up_scaled = [y_base + 0.3 * (u / bw_max) for u in up_smooth]
-#        down_scaled = [y_base - 0.3 * (d / bw_max) for d in down_smooth]
-#        ax.plot(x_vals, up_scaled, color='red', linewidth=1.5, label="Up Mbps" if 'Up Mbps' not in ax.get_legend_handles_labels()[1] else "")
-#        ax.plot(x_vals, down_scaled, color='blue', linewidth=1.5, label="Down Mbps" if 'Down Mbps' not in ax.get_legend_handles_labels()[1] else "")
+for record in rows:
+    if record["action"].startswith("RECV") and record["net_series"]:
+        y_tag = f"{record['rank']}-{record['action']}"
+        y_base = highest-y_map[y_tag]
+        x_vals = [(ts - base_ns) / 1e6 for ts, _, _ in record["net_series"]]
+        #up_vals = [up for _, up, _ in record["net_series"]]
+        down_vals = [down for _, _, down in record["net_series"]]
+        #up_smooth = smooth_series(up_vals, window_size=5)
+        down_smooth = smooth_series(down_vals, window_size=5)
+        #bw_max = max(max(up_smooth), max(down_smooth), 1)
+        bw_max = max(max(down_smooth), 1)
+        #up_scaled = [y_base + 0.3 * (u / bw_max) for u in up_smooth]
+        down_scaled = [y_base - 0.3 * (d / bw_max) for d in down_smooth]
+        #ax.plot(x_vals, up_scaled, color='red', linewidth=1.5, label="Up Mbps" if 'Up Mbps' not in ax.get_legend_handles_labels()[1] else "")
+        ax.plot(x_vals, down_scaled, color='blue', linewidth=1.5, label="Down Mbps" if 'Down Mbps' not in ax.get_legend_handles_labels()[1] else "")
 
 # Final touches
 ax.set_yticks(list(y_map.values()))
