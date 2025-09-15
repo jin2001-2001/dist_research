@@ -1186,8 +1186,48 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 else:
                     # dp_size == 1 且非 leader 不会发生
                     raise RuntimeError("Unexpected non-leader with dp_size==1 at packing stage")
-        else: # text, vision, audio沿用原逻辑
-            return super()._shape_inference(args, kwargs)
+        else: # text, vision, audio 自定义逻辑：使用真实小批输入推断，且过滤多余 kwargs
+            mt = getattr(self, "model_type", None)
+            allow = set()
+            if mt == "audio":
+                allow = {"audio_inputs"}
+            elif mt == "vision":
+                allow = {"vision_inputs"}
+            elif mt == "text":
+                allow = {"input_ids", "attention_mask"}
+
+            clean_kwargs = {k: v for k, v in kwargs.items() if k in allow}
+
+            # leader 使用真实输入跑一次前向，以获得可靠的 meta 输出；组内广播给 DP 成员；
+            if self.is_leader:
+                # Debug: 打印一次输入信息
+                try:
+                    print(f"[MM_DEBUG][{mt}] _shape_infer leader args={type(args)} len={len(args) if isinstance(args, tuple) else 'N/A'} kw={list(clean_kwargs.keys())}")
+                except Exception:
+                    pass
+
+                with torch.no_grad():
+                    outputs = self.submod(*args, **clean_kwargs)
+                if isinstance(outputs, torch.Tensor):
+                    outputs = [outputs]
+                outputs_meta = tuple(tree_map_only(torch.Tensor, lambda x: x.to('meta'), outputs))
+                self._configure_outputs_meta(outputs_meta)
+
+                if self.next_group is not None:
+                    next_leader = min(self.next_group)
+                    dist.send_object_list([outputs_meta], dst=next_leader, group=dist.group.WORLD)
+
+                if is_multi_dp:
+                    dist.broadcast_object_list([outputs_meta], src=self.leader, group=self.dp_group)
+                return outputs_meta
+            else:
+                if is_multi_dp:
+                    buf = [None]
+                    dist.broadcast_object_list(buf, src=self.leader, group=self.dp_group)
+                    return buf[0]
+                else:
+                    # dp_size == 1 且非 leader 不会发生
+                    raise RuntimeError("Unexpected non-leader with dp_size==1")
 
     def _ensure_mm_tables(self):
         if not hasattr(self, "_mm_fwd_post_recv"):
@@ -1757,7 +1797,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         logger.debug("%s Backwarded (packing) chunk %s", self.log_prefix, bwd_chunk_id)
 
     
-
 
 
 

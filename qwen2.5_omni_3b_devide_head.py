@@ -136,8 +136,9 @@ class TextStage(nn.Module):
         pad = (attention_mask == 0).view(B, 1, 1, T)
         attn_4d = attn_4d.masked_fill(pad, float("-inf")).contiguous()
 
-        # 不在这里计算 position_ids；交给 Stage1
-        position_ids = None
+        # 在头部阶段直接给出基础 position_ids（三路堆叠），避免下游元信息校验因 None 失败
+        base_pos = torch.arange(T, device=device).unsqueeze(0).repeat(B, 1)
+        position_ids = torch.stack([base_pos, base_pos, base_pos], dim=0).contiguous()
         return hidden.contiguous(), attn_4d.contiguous(), position_ids
 
 
