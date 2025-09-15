@@ -1353,9 +1353,11 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         self,
         fwd_chunk_id: int,
         rank: int,
-        src_rank_fallback: int,  # 若 info 内未携带 peer 信息，用该 rank
-        modality: str,
-        num_splits: int = 1
+        dest_rank: int | None = None,   # 显式指定从哪个对端接收（优先使用）
+        modality: str = "",
+        num_splits: int = 1,
+        src_rank_fallback: int | None = None,  # 兼容旧参数：未显式传 dest_rank 时作为后备
+        **kwargs,
     ) -> list[dist.P2POp]:
         """
         packing 端按“单模态”生成一批 irecv；将每个 recv buffer 收到一个临时 flat 张量里，
@@ -1375,7 +1377,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                         built_infos.append(
                             _RecvInfo(
                                 f"recv_mm_{modality}_for_{self.stage_index}",
-                                src_rank_fallback,
+                                (dest_rank if dest_rank is not None else (src_rank_fallback if src_rank_fallback is not None else 0)),
                                 buf,
                             )
                         )
@@ -1413,8 +1415,12 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             tmp_full_flat = torch.empty(numel, dtype=dtype, device=device)
             slices = self._compute_1d_slices(numel, num_splits)
 
-            peer_rank = self._recv_peer_from_info(info, src_rank_fallback)
-            peer_global_rank = self._peer_global_rank(peer_rank)
+            # 优先使用显式指定的对端 rank；否则回退到从 info 或 fallback 中获取
+            if dest_rank is not None:
+                peer_global_rank = self._peer_global_rank(int(dest_rank))
+            else:
+                peer_rank = self._recv_peer_from_info(info, (src_rank_fallback if src_rank_fallback is not None else 0))
+                peer_global_rank = self._peer_global_rank(peer_rank)
 
             plans.append((slot_ctr, tmp_full_flat, slices, peer_global_rank, shape, dtype, device))
             # 记录到“完成后处理”
@@ -1509,9 +1515,11 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         self,
         bwd_chunk_id: int,
         rank: int,
-        src_rank_fallback: int,   # packing 的 leader rank（或对端 rank）
-        modality: str,
-        num_splits: int = 1
+        dest_rank: int | None = None,     # 显式指定从哪个对端接收（优先使用）
+        modality: str = "",
+        num_splits: int = 1,
+        src_rank_fallback: int | None = None,  # 兼容旧参数
+        **kwargs,
     ) -> list[dist.P2POp]:
         """
         head 端从 packing 接收本模态的输入梯度；先收进临时 flat，finish_bwd_recv_mm 后落入 self.mm_bwd_cache[mb][modality]。
@@ -1540,8 +1548,12 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             tmp_full_flat = torch.empty(numel, dtype=dtype, device=device)
             slices = self._compute_1d_slices(numel, num_splits)
 
-            peer_rank = self._recv_peer_from_info(info, src_rank_fallback)
-            peer_global_rank = self._peer_global_rank(peer_rank)
+            # 优先使用显式指定的对端 rank；否则回退到从 info 或 fallback 中获取
+            if dest_rank is not None:
+                peer_global_rank = self._peer_global_rank(int(dest_rank))
+            else:
+                peer_rank = self._recv_peer_from_info(info, (src_rank_fallback if src_rank_fallback is not None else 0))
+                peer_global_rank = self._peer_global_rank(peer_rank)
 
             plans.append((slot_ctr, tmp_full_flat, slices, peer_global_rank, shape, dtype, device))
             self._mm_bwd_post_recv[(bwd_chunk_id, modality)].append((tmp_full_flat, shape, dtype, device))
@@ -1602,6 +1614,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             clean_kwargs = None
             if kwargs:
                 clean_kwargs = {k: v for k, v in kwargs.items() if k in allow}
+
             # Debug (可通过环境变量开启)
             import os as _os
             if _os.getenv("MM_DEBUG", "0") == "1" and (args or clean_kwargs):
@@ -1617,6 +1630,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     print(msg)
                 except Exception:
                     pass
+
             # 音频缺省：直接返回空输出并写入 fwd_cache，避免进入父类校验
             if mt == "audio":
                 ai = (clean_kwargs or {}).get("audio_inputs", None)
@@ -1627,6 +1641,75 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     self.fwd_cache[fwd_chunk_id] = (tuple(), flat_args + flat_kwargs)
                     return tuple()
 
+            # 关键修复：首段且仅 kwargs 的输入不应触发 recv 路径
+            is_first_stage = (self.prev_group is None)
+            dp_size = 1
+            try:
+                if hasattr(self, "dp_group") and self.dp_group is not None:
+                    dp_size = dist.get_world_size(self.dp_group)
+            except Exception:
+                dp_size = 1
+
+            # 若是首段：
+            # - dp_size>1 时，广播 (args, clean_kwargs) 给组内其它副本
+            # - 始终直接以 (args, clean_kwargs) 运行，不走 _retrieve_recv_activations
+            if is_first_stage:
+                comp_args = args or tuple()
+                comp_kwargs = clean_kwargs or {}
+
+                if dp_size > 1:
+                    # 统一广播 (args, kwargs)
+                    payload = [comp_args, comp_kwargs]
+                    if getattr(self, "is_leader", False):
+                        dist.broadcast_object_list(payload, src=self.leader, group=self.dp_group)
+                    else:
+                        buf = [None, None]
+                        dist.broadcast_object_list(buf, src=self.leader, group=self.dp_group)
+                        comp_args, comp_kwargs = buf[0] or tuple(), buf[1] or {}
+
+                # 执行前向（完全绕开父类对 first/recv 的判定，避免空 args 触发 recv）
+                try:
+                    output = self.forward_maybe_with_nosync(*comp_args, **comp_kwargs)
+                except Exception as e:
+                    exc_msg = f"""
+                    {self.log_prefix} failed to run forward (kwargs-first stage):
+                    args: {map_debug_info(comp_args)}
+                    kwargs: {map_debug_info(comp_kwargs)}
+                    """
+                    raise RuntimeError(exc_msg) from e
+
+                output_tuple = _normalize_model_output_as_tuple(output)
+
+                # 记录 cache（与父类一致）
+                flat_args = flatten_args(comp_args)
+                flat_kwargs = flatten_args(comp_kwargs)
+                self.fwd_cache[fwd_chunk_id] = (
+                    output_tuple,
+                    flat_args + flat_kwargs,
+                )
+
+                # 仅做输出校验（若 pack_size>1，仅用于验证切分后的前半段形状，不改变真实输出）
+                if pack_size > 1 and output_tuple:
+                    # 找一个 tensor 估计 batch 维
+                    mb_bs = None
+                    for t in output_tuple:
+                        if isinstance(t, torch.Tensor) and t.dim() > 0:
+                            mb_bs = t.shape[0] // pack_size
+                            break
+                    if mb_bs is not None:
+                        outputs_for_val = tuple(
+                            (t[:mb_bs] if isinstance(t, torch.Tensor) else t)
+                            for t in output_tuple
+                        )
+                    else:
+                        outputs_for_val = output_tuple
+                else:
+                    outputs_for_val = output_tuple
+
+                self._validate_fwd_outputs(outputs_for_val)
+                return output
+
+            # 非首段或存在位置参数的场景：回退父类逻辑
             return super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
 
         # ---------- helpers（局部，无外部依赖） ----------
