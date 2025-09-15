@@ -65,12 +65,28 @@ class AudioStage(nn.Module):
         audio_values = audio_values.to(next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else audio_values.device)
 
         try:
-            audio_embeds = self.audio_enc(audio_values)
+            res = self.audio_enc(audio_values)
         except TypeError:
             # 适配部分 encoder 的 (x, attention_mask=None) 签名
-            audio_embeds = self.audio_enc(audio_values, None)
+            res = self.audio_enc(audio_values, None)
 
-        return audio_embeds.contiguous() if audio_embeds is not None else None
+        audio_embeds = None
+        if isinstance(res, torch.Tensor):
+            audio_embeds = res
+        elif hasattr(res, "last_hidden_state") and isinstance(res.last_hidden_state, torch.Tensor):
+            audio_embeds = res.last_hidden_state
+        elif isinstance(res, (list, tuple)):
+            audio_embeds = next((x for x in res if isinstance(x, torch.Tensor)), None)
+        elif isinstance(res, dict):
+            audio_embeds = res.get("last_hidden_state", None)
+            if not isinstance(audio_embeds, torch.Tensor):
+                # 回退取第一个 tensor 值
+                for v in res.values():
+                    if isinstance(v, torch.Tensor):
+                        audio_embeds = v
+                        break
+
+        return audio_embeds.contiguous() if isinstance(audio_embeds, torch.Tensor) else None
 
 
 class VisionStage(nn.Module):
@@ -774,8 +790,8 @@ def main():
                 buf_aud = [aud_pack]
                 dist.broadcast_object_list(buf_aud, src=0)
 
-                # Local step for audio head: 将音频包作为位置参数传入，便于 microbatch 拆分
-                sched.step(aud_pack, target=tgt)
+                # Local step for audio head：作为 kwargs 传入，并带上 attention_mask 以便 microbatch 大小推断
+                sched.step(audio_inputs=aud_pack, attention_mask=attn, target=tgt)
 
             else:
                 # Receive target
@@ -797,8 +813,8 @@ def main():
                 aud_pack = buf_aud[0]
 
                 if rank == 1:
-                    # Vision head executes with vision inputs（位置参数，便于拆分）
-                    sched.step(vis_pack, target=tgt)
+                    # Vision head executes with vision inputs：作为 kwargs 传入，并带上 attention_mask 以便 microbatch 大小推断
+                    sched.step(vision_inputs=vis_pack, attention_mask=attn, target=tgt)
                 elif rank == 2:
                     # Text head executes with text inputs
                     sched.step(inp_ids, attention_mask=attn, target=tgt)

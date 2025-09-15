@@ -1198,7 +1198,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
             clean_kwargs = {k: v for k, v in kwargs.items() if k in allow}
 
-            # leader 使用真实输入跑一次前向，以获得可靠的 meta 输出；组内广播给 DP 成员；
+            # leader：设定 inputs_meta，并使用真实输入跑一次前向，以获得可靠的 meta 输出；组内广播给 DP 成员；
             if self.is_leader:
                 # Debug: 打印一次输入信息
                 try:
@@ -1206,10 +1206,53 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 except Exception:
                     pass
 
+                # 设定 inputs_meta：优先从 args 中提取 tensor 生成 meta，否则用占位 meta
+                try:
+                    from pipelining_source_code._utils import flatten_args as _flat
+                    flat_a = _flat(args)
+                    metas = [t.to('meta') for t in flat_a if isinstance(t, torch.Tensor)]
+                    if len(metas) == 0:
+                        # 尝试从 kwargs 里拿一个 tensor 生成占位 meta
+                        for v in clean_kwargs.values():
+                            if isinstance(v, torch.Tensor):
+                                metas.append(v.to('meta'))
+                                break
+                            elif isinstance(v, dict):
+                                for vv in v.values():
+                                    if isinstance(vv, torch.Tensor):
+                                        metas.append(vv.to('meta'))
+                                        break
+                            if len(metas):
+                                break
+                    if len(metas) == 0:
+                        metas = [torch.empty(1, device=self.device).to('meta')]
+                    self.inputs_meta = tuple(metas)
+                except Exception:
+                    # 最低保真占位
+                    self.inputs_meta = (torch.empty(1, device=self.device).to('meta'),)
+
                 with torch.no_grad():
                     outputs = self.submod(*args, **clean_kwargs)
                 if isinstance(outputs, torch.Tensor):
                     outputs = [outputs]
+                if outputs is None:
+                    # 无法获取输出：提供更详细的调试信息并抛错
+                    try:
+                        def _kv_shapes(d):
+                            out = {}
+                            for k, v in d.items():
+                                if isinstance(v, torch.Tensor):
+                                    out[k] = tuple(v.shape)
+                                elif isinstance(v, dict):
+                                    out[k] = {kk: (tuple(vv.shape) if isinstance(vv, torch.Tensor) else type(vv).__name__) for kk, vv in v.items()}
+                                else:
+                                    out[k] = type(v).__name__
+                            return out
+                        print(f"[MM_DEBUG][{mt}] forward returned None. kwargs summary: {_kv_shapes(clean_kwargs)}")
+                    except Exception:
+                        pass
+                    raise RuntimeError(f"[{mt}] _shape_inference: submodule returned None; please verify inputs and encoders")
+
                 outputs_meta = tuple(tree_map_only(torch.Tensor, lambda x: x.to('meta'), outputs))
                 self._configure_outputs_meta(outputs_meta)
 
@@ -1309,7 +1352,34 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         """
         self._ensure_mm_tables()
 
+        # 如果本 microbatch 没有事先建立接收信息，则按 mm_inputs_meta 的结构即时构建
         recv_infos = tuple(self.mm_args_recv_info.get(fwd_chunk_id, {}).get(modality, ()))
+        if not recv_infos:
+            meta_obj = getattr(self, "mm_inputs_meta", {}).get(modality, None)
+            built_infos: list[_RecvInfo] = []
+            if meta_obj is not None:
+                def _walk_and_make(x):
+                    if isinstance(x, torch.Tensor):
+                        buf = _make_tensor_from_meta(x, self.device)
+                        built_infos.append(
+                            _RecvInfo(
+                                f"recv_mm_{modality}_for_{self.stage_index}",
+                                src_rank_fallback,
+                                buf,
+                            )
+                        )
+                    elif isinstance(x, (list, tuple)):
+                        for e in x:
+                            _walk_and_make(e)
+                    elif isinstance(x, dict):
+                        for e in x.values():
+                            _walk_and_make(e)
+                _walk_and_make(meta_obj)
+            # 注册到表中
+            if fwd_chunk_id not in self.mm_args_recv_info:
+                self.mm_args_recv_info[fwd_chunk_id] = {}
+            self.mm_args_recv_info[fwd_chunk_id][modality] = tuple(built_infos)
+            recv_infos = tuple(built_infos)
         ops: list[dist.P2POp] = []
         ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
 
@@ -1797,7 +1867,5 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         logger.debug("%s Backwarded (packing) chunk %s", self.log_prefix, bwd_chunk_id)
 
     
-
-
 
 
