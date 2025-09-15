@@ -763,7 +763,7 @@ def main():
                 # Broadcast target tensor to all ranks
                 dist.broadcast(tgt, src=0)
 
-                # Broadcast text tensors
+                # Broadcast text tensors (for other heads to use splitting if needed)
                 dist.broadcast(inp_ids, src=0)
                 dist.broadcast(attn, src=0)
 
@@ -773,8 +773,8 @@ def main():
                 buf_aud = [aud_pack]
                 dist.broadcast_object_list(buf_aud, src=0)
 
-                # Local step for audio head
-                sched.step(audio_inputs=aud_pack, target=tgt)
+                # Local step for audio head: 将音频包作为位置参数传入，便于 microbatch 拆分
+                sched.step(aud_pack, target=tgt)
 
             else:
                 # Receive target
@@ -796,11 +796,11 @@ def main():
                 aud_pack = buf_aud[0]
 
                 if rank == 1:
-                    # Vision head executes with vision inputs
-                    sched.step(vision_inputs=vis_pack, target=tgt)
+                    # Vision head executes with vision inputs（位置参数，便于拆分）
+                    sched.step(vis_pack, target=tgt)
                 elif rank == 2:
                     # Text head executes with text inputs
-                    sched.step(input_ids=inp_ids, attention_mask=attn, target=tgt)
+                    sched.step(inp_ids, attention_mask=attn, target=tgt)
                 else:
                     # Packing and later stages only need target to drive schedule
                     sched.step(target=tgt)

@@ -1187,7 +1187,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     # dp_size == 1 且非 leader 不会发生
                     raise RuntimeError("Unexpected non-leader with dp_size==1 at packing stage")
         else: # text, vision, audio沿用原逻辑
-            return super()._shape_inference(self, args, kwargs)
+            return super()._shape_inference(args, kwargs)
 
     def _ensure_mm_tables(self):
         if not hasattr(self, "_mm_fwd_post_recv"):
@@ -1468,7 +1468,35 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     并记录 flat 输入到 (modality, local_idx) 的映射，供 backward 拆分用。
         """
         if getattr(self, "model_type", None) != "packing":
-            return super().forward_one_chunk(fwd_chunk_id, args, kwargs, pack_size)
+            # 过滤与当前模态无关的 kwargs，避免子模块收到多余参数报错
+            mt = getattr(self, "model_type", None)
+            allow = set()
+            if mt == "audio":
+                allow = {"audio_inputs"}
+            elif mt == "vision":
+                allow = {"vision_inputs"}
+            elif mt == "text":
+                allow = {"input_ids", "attention_mask"}
+            # 仅保留允许的键，其余丢弃
+            clean_kwargs = None
+            if kwargs:
+                clean_kwargs = {k: v for k, v in kwargs.items() if k in allow}
+            # Debug (可通过环境变量开启)
+            import os as _os
+            if _os.getenv("MM_DEBUG", "0") == "1" and (args or clean_kwargs):
+                try:
+                    def _shape(x):
+                        import torch as _t
+                        return tuple(x.shape) if isinstance(x, _t.Tensor) else type(x).__name__
+                    msg = f"[MM_DEBUG][{mt}] fwd_one_chunk mb={fwd_chunk_id} args_len={len(args) if args else 0} "
+                    if args:
+                        msg += " args_shapes=[" + ",".join(str(_shape(a)) for a in args) + "]"
+                    if clean_kwargs:
+                        msg += " kw_keys=" + str(list(clean_kwargs.keys()))
+                    print(msg)
+                except Exception:
+                    pass
+            return super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
 
         # ---------- helpers（局部，无外部依赖） ----------
         def _is_float_tensor(x):
@@ -1729,9 +1757,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         logger.debug("%s Backwarded (packing) chunk %s", self.log_prefix, bwd_chunk_id)
 
     
-
-
-
 
 
 
