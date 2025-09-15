@@ -6,7 +6,7 @@ from datasets import load_dataset
 from tqdm import tqdm
 import time, math
 
-from stage_with_mutiple_ranks import PipelineStage_with_mutiple_ranks, PipelineStage_Multimodalityl
+from stage_with_mutiple_ranks import PipelineStage_with_mutiple_ranks, PipelineStage_Multimodality
 from schedule_runtime import PipelineScheduleRuntimeWithDirection
 from pipelining_source_code.schedules import _Action, _ComputationType
 
@@ -496,18 +496,20 @@ def create_pipeline_actions():
     return {0: rank0_actions, 1: rank1_actions, 2: rank2_actions, 3: rank3_actions, 4: rank4_actions, 5: rank5_actions}
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--train_steps", type=int, default=None,
+parser.add_argument("--train_steps", type=int, default=1,
                     help="The total number of steps for training. If omitted, run the entire DataLoader.")
 parser.add_argument("--batch_size", type=int,
-                    default=int(os.getenv("BATCH_SIZE", 16)),
+                    default=int(os.getenv("BATCH_SIZE", 20)),
                     help="The batch size of each rank (the environment variable BATCH_SIZE can be overridden)")
 parser.add_argument("--microbatch_num", type=int,
-                    default=int(os.getenv("MICROBATCH_NUM", 4)),
+                    default=int(os.getenv("MICROBATCH_NUM", 5)),
                     help="Micro-batch number (the environment variable MICROBATCH_NUM can be overridden)")
 parser.add_argument("--sudo_pass", default=os.getenv("SUDO_PASS"),
                     help='Write the password of root')
 parser.add_argument("--upstream", default=os.getenv("upstream"),
                     help='Write the upstream in mbps')
+parser.add_argument("--plan_loc", type=str, required=True,
+                    help='the json file that stores the sharding plans...')
 args = parser.parse_args()
 def main():
 
@@ -537,42 +539,46 @@ def main():
     L2 = (2 * L) // 3
     
     if rank == 0:
-        stage_mod = AudioStage(text_model, audio_enc, vision_enc)
+        stage_mod = AudioStage(audio_enc)
         stage_mod.to(device)
-        stage = PipelineStage_Multimodalityl(stage_mod, stage_index=0,
+        stage = PipelineStage_Multimodality(stage_mod, stage_index=0,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
                             prev_group=None, this_group=[0], next_group=[3],
-                            model_type = "aduio",
+                            model_type = "audio",
                             mm_prev_groups = None)
+        setattr(stage, "modal_type", "audio")
     elif rank == 1:
-        stage_mod = VisionStage(text_model, audio_enc, vision_enc)
+        stage_mod = VisionStage(vision_enc)
         stage_mod.to(device)
-        stage = PipelineStage_Multimodalityl(stage_mod, stage_index=0,
+        stage = PipelineStage_Multimodality(stage_mod, stage_index=0,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
                             prev_group=None, this_group=[1], next_group=[3],
                             model_type = "vision",
                             mm_prev_groups = None)
+        setattr(stage, "modal_type", "vision")
     elif rank == 2:
-        stage_mod = TextStage(text_model, audio_enc, vision_enc)
+        stage_mod = TextStage(text_model)
         stage_mod.to(device)
-        stage = PipelineStage_Multimodalityl(stage_mod, stage_index=0,
+        stage = PipelineStage_Multimodality(stage_mod, stage_index=0,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
                             prev_group=None, this_group=[2], next_group=[3],
                             model_type = "text",
                             mm_prev_groups = None)
+        setattr(stage, "modal_type", "text")
         
     elif rank == 3:
         stage_mod = Stage1(text_model, L1)
         stage_mod.to(device)
-        stage = PipelineStage_Multimodalityl(stage_mod, stage_index=1,
+        stage = PipelineStage_Multimodality(stage_mod, stage_index=1,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
                             prev_group=[0,1,2], this_group=[3], next_group=[4],
                             model_type = "packing",
                             mm_prev_groups = {"audio":[0],"vision":[1],"text":[2]})
+        setattr(stage, "modal_type", "packing")
     elif rank == 4:
         stage_mod = Stage2(text_model, L1, L2)
         stage_mod.to(device)
@@ -592,345 +598,354 @@ def main():
     import gc; gc.collect()
 
     raw = load_dataset("jxie/flickr8k", split="train")
-    
-#     def pick_caption(example):
-#         text = example.get("caption_0", None)
-#         if text is None:
-#             caps = example.get("captions") 
-#             text = caps[0] if isinstance(caps, list) and caps else ""
-#         return {"text": text}
 
-#     keep_cols = {"image", "text"}
-#     raw = raw.map(pick_caption, remove_columns=[c for c in raw.column_names if c not in keep_cols])
+    def pick_caption(example):
+        text = example.get("caption_0", None)
+        if text is None:
+            caps = example.get("captions")
+            text = caps[0] if isinstance(caps, list) and caps else ""
+        return {"text": text}
 
-#     block = 512
-#     def tok_fn(batch):
-#         out = tok(batch["text"],
-#                 return_attention_mask=False,
-#                 truncation=True,
-#                 max_length=block,
-#                 padding="max_length")
+    keep_cols = {"image", "text"}
+    raw = raw.map(pick_caption, remove_columns=[c for c in raw.column_names if c not in keep_cols])
 
-#         out["labels"] = out["input_ids"].copy()
-#         return out
+    from PIL import Image
 
-#     ds = raw.map(tok_fn, batched=True)
+    noise_path = os.path.join(os.getcwd(), "noise.mp3")
 
-#     from PIL import Image, ImageOps
+    def collate_fn(batch):
+        conversations = []
+        for ex in batch:
+            img = ex["image"]
+            txt = ex.get("text", "") if isinstance(ex.get("text", ""), str) else ""
+            conversations.append([
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "audio", "audio": noise_path},
+                        {"type": "image", "image": img},
+                        {"type": "text",  "text": txt}
+                    ],
+                }
+            ])
 
-#     def _round_to_multiple(x: int, m: int) -> int:
-#         """将数字向上取整到m的倍数"""
-#         return max(m, int(math.ceil(x / m) * m))
+        pack = proc.apply_chat_template(
+            conversations,
+            add_generation_prompt=False,
+            tokenize=True,
+            return_tensors="pt",
+            return_dict=True,
+            padding="max_length",
+            max_length=512,
+            truncation=True
+        )
 
-#     def _pad_to_valid_size(img: Image.Image) -> Image.Image:
-#         """
-#         将图像填充到符合 Qwen2.5-Omni 视觉编码器要求的尺寸。
-        
-#         Qwen2.5-Omni 的要求：
-#         - patch_size = 14
-#         - spatial_merge_size = 2  
-#         - spatial_merge_unit = 4
-#         - 最终 (H/14) 和 (W/14) 必须是 4 的倍数
-#         """
-#         img = ImageOps.exif_transpose(img)
-#         w, h = img.size
+        input_ids = pack["input_ids"]
+        attention_mask = pack["attention_mask"]
+        labels = input_ids.clone()
 
-#         new_w = _round_to_multiple(w, 56)
-#         new_h = _round_to_multiple(h, 56)
+        special_ids = set([
+            tok.pad_token_id,
+            getattr(tok, "eos_token_id", None),
+            getattr(tok, "bos_token_id", None),
+            getattr(cfg, "image_token_id", None),
+            getattr(cfg, "video_token_id", None),
+            getattr(cfg, "audio_token_id", None),
+        ])
+        special_ids = {i for i in special_ids if i is not None}
+        for sid in special_ids:
+            labels[labels == sid] = -100
 
-#         grid_h = new_h // 14
-#         grid_w = new_w // 14
+        # Vision packing
+        vision_inputs = None
+        pixel_values = pack.get("pixel_values", None)
+        image_grid_thw = pack.get("image_grid_thw", None)
+        if image_grid_thw is not None:
+            image_grid_thw = torch.as_tensor(image_grid_thw, dtype=torch.long)
+        if pixel_values is not None and image_grid_thw is not None and image_grid_thw.numel() > 0:
+            counts = (image_grid_thw[:, 0] * image_grid_thw[:, 1] * image_grid_thw[:, 2])
+            slices, off = [], 0
+            for n in counts.tolist():
+                slices.append(pixel_values[off: off + n])
+                off += n
+            assert off == pixel_values.size(0), f"visual tokens mismatch: {off} != {pixel_values.size(0)}"
+            vision_inputs = {
+                "pixel_values_list": slices,
+                "grid_thw": image_grid_thw,
+            }
 
-#         while grid_h % 4 != 0:
-#             new_h += 56
-#             grid_h = new_h // 14
-        
-#         while grid_w % 4 != 0:
-#             new_w += 56
-#             grid_w = new_w // 14
-        
-#         new_w = max(new_w, 112)
-#         new_h = max(new_h, 112)
-        
-#         pad_right = new_w - w
-#         pad_bottom = new_h - h
-        
-#         if pad_right == 0 and pad_bottom == 0:
-#             return img
-        
-#         # 填充图像（右边和下边）
-#         return ImageOps.expand(img, border=(0, 0, pad_right, pad_bottom), fill=0)
+        # Audio packing: pass through whatever processor returned
+        audio_inputs = None
+        if isinstance(pack, dict):
+            for k in ("input_values", "audio_values", "input_features"):
+                if k in pack:
+                    audio_inputs = {k: pack[k]}
+                    break
 
-#     def collate_fn(batch):
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels,
+            "vision_inputs": vision_inputs,
+            "audio_inputs": audio_inputs,
+        }
 
-#         conversations = []
-#         for ex in batch:
-#             img = ex["image"]
-#             txt = ex["text"] if isinstance(ex["text"], str) else ""
-#             conversations.append([
-#                 {
-#                     "role": "user",
-#                     "content": [
-#                         {"type": "image", "image": img},
-#                         {"type": "text",  "text": txt}
-#                     ],
-#                 }
-#             ])
+    batch_size = args.batch_size
+    microbatch_num = args.microbatch_num
+    block = 512
 
-#         pack = proc.apply_chat_template(
-#             conversations,
-#             add_generation_prompt=False,
-#             tokenize=True,
-#             return_tensors="pt",
-#             return_dict=True,
-#             padding="max_length", 
-#             max_length=512,       
-#             truncation=True        
-#         )
+    if rank == 0:
+        loader = torch.utils.data.DataLoader(
+            raw,
+            batch_size=batch_size,
+            drop_last=True,
+            collate_fn=collate_fn,
+        )
 
-#         input_ids      = pack["input_ids"]            # [B, T]
-#         attention_mask = pack["attention_mask"]       # [B, T]
-#         labels         = input_ids.clone()
+    def loss_fn(output, target):
+        if output is None or target is None:
+            return None
+        vocab_size = output.size(-1)
+        T_logits = output.size(1)
+        T_labels = target.size(1)
+        T = min(T_logits, T_labels)
+        logits = output[:, :T-1, :].reshape(-1, vocab_size)
+        labels = target[:, 1:T].reshape(-1)
+        valid_mask = (labels >= -100) & (labels < vocab_size)
+        if not valid_mask.all():
+            invalid_labels = labels[~valid_mask]
+            print(f"[rank{dist.get_rank()}] WARNING: Found invalid labels: {invalid_labels[:10]}...")
+        return F.cross_entropy(logits, labels, ignore_index=-100)
 
-#         special_ids = set([
-#             tok.pad_token_id, getattr(tok, "eos_token_id", None), getattr(tok, "bos_token_id", None),
-#             getattr(cfg, "image_token_id", None),
-#             getattr(cfg, "video_token_id", None),
-#             getattr(cfg, "audio_token_id", None),
-#         ])
-#         special_ids = {i for i in special_ids if i is not None}
-#         for sid in special_ids:
-#             labels[labels == sid] = -100
+    sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=microbatch_num,
+                                                loss_fn=loss_fn, root_pass=args.sudo_pass)
+    actions = create_pipeline_actions()
+    sched._load_actions(actions, format="compute_comms")
 
-#         vision_inputs = None
-#         pixel_values   = pack.get("pixel_values", None)  # [sum_i N_i, C_feat]  [2940, 1176]
-#         image_grid_thw = torch.as_tensor(pack.get("image_grid_thw", []), dtype=torch.long)  # [B, 3]
-#         if pixel_values is not None and image_grid_thw.numel() > 0:
-#             smu = int(getattr(vision_enc, "spatial_merge_unit", 4))  # 2x2 merge -> 4
-#             counts = (image_grid_thw[:, 0] * image_grid_thw[:, 1] * image_grid_thw[:, 2])
-#             slices, off = [], 0
-#             for n in counts.tolist():
-#                 slices.append(pixel_values[off: off + n])
-#                 off += n
-#             assert off == pixel_values.size(0), f"visual tokens mismatch: {off} != {pixel_values.size(0)}"
-
-#             vision_inputs = {
-#                 "pixel_values_list": slices,  
-#                 "grid_thw": image_grid_thw,    # [B,3]
-#             }
-
-#         return {
-#             "input_ids": input_ids,
-#             "attention_mask": attention_mask,
-#             "labels": labels,
-#             "vision_inputs": vision_inputs,
-#         }
-
-#     batch_size = args.batch_size
-#     microbatch_num = args.microbatch_num
-#     block = 512
-    
-#     if rank == 0:
-#         loader = torch.utils.data.DataLoader(
-#             ds,
-#             batch_size=batch_size,
-#             #shuffle=True,
-#             drop_last=True,
-#             collate_fn=collate_fn
-#         )
-
-#     def loss_fn(output, target):
-#         if output is None or target is None:
-#             return None
-        
-#         vocab_size = output.size(-1)
-#         T_logits = output.size(1)
-#         T_labels = target.size(1)
-#         T = min(T_logits, T_labels)
-        
-#         logits = output[:, :T-1, :].reshape(-1, vocab_size)
-#         labels = target[:, 1:T].reshape(-1)
-
-#         valid_mask = (labels >= -100) & (labels < vocab_size)
-#         if not valid_mask.all():
-#             invalid_labels = labels[~valid_mask]
-#             print(f"[rank{dist.get_rank()}] WARNING: Found invalid labels: {invalid_labels[:10]}...")
-        
-#         return F.cross_entropy(logits, labels, ignore_index=-100)
-
-#     sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=microbatch_num,
-#                                                 loss_fn=loss_fn, root_pass=args.sudo_pass)
-#     actions = generate_1f1b_pipeline_actions(num_stages=4, num_microbatches=8, upstream = args.upstream)
-#     sched._load_actions(actions, format="compute_comms")
-
-#     opt = optim.Adam(stage_mod.parameters(), lr=1e-4)
-#     prev_loss = None
+    opt = optim.Adam(stage_mod.parameters(), lr=1e-4)
+    prev_loss = None
     
     
-#     for epoch in range(1):
-#         if rank == 0:
-#             if args.train_steps is None:
-#                 steps_tensor = torch.tensor(len(loader), device=device)
-#             else:
-#                 steps_tensor = torch.tensor(args.train_steps, device=device)
-#             dist.broadcast(steps_tensor, src=0)
-#             data_iter = iter(loader)
-#             print(f"Total training steps: {steps_tensor.item()}")
-#         else:
-#             steps_tensor = torch.tensor(0, device=device)
-#             dist.broadcast(steps_tensor, src=0)
+    for epoch in range(1):
+        if rank == 0:
+            steps_tensor = torch.tensor(len(loader) if args.train_steps is None else args.train_steps, device=device)
+            dist.broadcast(steps_tensor, src=0)
+            data_iter = iter(loader)
+            print(f"Total training steps: {steps_tensor.item()}")
+        else:
+            steps_tensor = torch.tensor(0, device=device)
+            dist.broadcast(steps_tensor, src=0)
 
-#         total_steps = int(steps_tensor.item())
+        total_steps = int(steps_tensor.item())
 
-#         if rank == 0:
-#             pbar = tqdm(
-#                 total=int(total_steps),
-#                 desc=f"Training Epoch {epoch+1}",
-#                 unit="step",
-#                 bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
-#             )
-#             start_time = time.time()
+        if rank == 0:
+            pbar = tqdm(
+                total=int(total_steps),
+                desc=f"Training Epoch {epoch+1}",
+                unit="step",
+                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+            )
+            start_time = time.time()
 
-#         for step in range(total_steps):
-#             step_start_time = time.time()
-#             opt.zero_grad(set_to_none=True)
+        for step in range(total_steps):
+            step_start_time = time.time()
+            opt.zero_grad(set_to_none=True)
 
-#             if rank == 0:
-#                 batch = next(data_iter)
-#                 #print(f"✅✅✅{batch}")
-#                 inp_ids = batch["input_ids"].to(device)             # [B, block]
-#                 attn    = batch["attention_mask"].to(device)
-#                 vis_pack = batch["vision_inputs"]
-#                 if vis_pack is not None:
-#                     if "pixel_values_list" in vis_pack:
-#                         vis_pack["pixel_values_list"] = [t.to(device) for t in vis_pack["pixel_values_list"]]
-#                     elif "pixel_values" in vis_pack:  
-#                         vis_pack["pixel_values"] = vis_pack["pixel_values"].to(device)
-#                     if torch.is_tensor(vis_pack.get("grid_thw", None)):
-#                         vis_pack["grid_thw"] = vis_pack["grid_thw"].to(device)
+            # Prepare per-head inputs on rank 0 then broadcast
+            if rank == 0:
+                batch = next(data_iter)
+                inp_ids = batch["input_ids"].to(device)
+                attn = batch["attention_mask"].to(device)
+                vis_pack = batch.get("vision_inputs", None)
+                aud_pack = batch.get("audio_inputs", None)
+                tgt = batch["labels"].to(device)
+
+                # Broadcast target tensor to all ranks
+                dist.broadcast(tgt, src=0)
+
+                # Broadcast text tensors
+                dist.broadcast(inp_ids, src=0)
+                dist.broadcast(attn, src=0)
+
+                # Broadcast vision/audio packs as Python objects
+                buf_vis = [vis_pack]
+                dist.broadcast_object_list(buf_vis, src=0)
+                buf_aud = [aud_pack]
+                dist.broadcast_object_list(buf_aud, src=0)
+
+                # Local step for audio head
+                sched.step(audio_inputs=aud_pack, target=tgt)
+
+            else:
+                # Receive target
+                tgt = torch.zeros(batch_size, block, dtype=torch.long, device=device)
+                dist.broadcast(tgt, src=0)
+
+                # Receive text tensors for rank 2 (text head) or keep but ignore on others
+                inp_ids = torch.zeros(batch_size, block, dtype=torch.long, device=device)
+                attn = torch.zeros(batch_size, block, dtype=torch.long, device=device)
+                dist.broadcast(inp_ids, src=0)
+                dist.broadcast(attn, src=0)
+
+                # Receive vision/audio packs
+                buf_vis = [None]
+                dist.broadcast_object_list(buf_vis, src=0)
+                vis_pack = buf_vis[0]
+                buf_aud = [None]
+                dist.broadcast_object_list(buf_aud, src=0)
+                aud_pack = buf_aud[0]
+
+                if rank == 1:
+                    # Vision head executes with vision inputs
+                    sched.step(vision_inputs=vis_pack, target=tgt)
+                elif rank == 2:
+                    # Text head executes with text inputs
+                    sched.step(input_ids=inp_ids, attention_mask=attn, target=tgt)
+                else:
+                    # Packing and later stages only need target to drive schedule
+                    sched.step(target=tgt)
+
+            if (step + 1) % 50 == 0:
+                try:
+                    sched.timeline_rec.events.clear()
+                except Exception:
+                    pass
+
+            opt.step()
+
+            if rank == 0:
+                step_time = time.time() - step_start_time
+                tokens_processed = batch_size * block
+                tokens_per_second = tokens_processed / step_time
+                pbar.set_postfix({
+                    'tokens/s': f'{tokens_per_second:.0f}',
+                    'step_time': f'{step_time:.2f}s',
+                    'lr': f'{opt.param_groups[0]["lr"]:.2e}'
+                })
+                pbar.update(1)
+
+            cur_loss = getattr(sched, "last_step_loss", None)
+            if cur_loss is not None and rank == 0:
+                print(f"[rank0] step {step+1} loss {cur_loss:.4f}")
+                prev_loss = cur_loss
+
+            dist.barrier()
+
+        if rank == 0:
+            pbar.close()
+            total_time = time.time() - start_time
+            print(f"\nEpoch {epoch+1} completed in {total_time:.2f}s")
+            print(f"Average speed: {total_steps / total_time:.2f} steps/s")
+
+    # ===== Gather states and merge full model =====
+    # Collect from each rank the submodule state_dict
+    buf_audio = [stage_mod.state_dict()] if rank == 0 else [None]
+    dist.broadcast_object_list(buf_audio, src=0)
+    if rank == 0:
+        audio_state = buf_audio[0]
+
+    buf_vision = [stage_mod.state_dict()] if rank == 1 else [None]
+    dist.broadcast_object_list(buf_vision, src=1)
+    if rank == 0:
+        vision_state = buf_vision[0]
+
+    buf_text = [stage_mod.state_dict()] if rank == 2 else [None]
+    dist.broadcast_object_list(buf_text, src=2)
+    if rank == 0:
+        text_state = buf_text[0]
+
+    buf_s1 = [stage_mod.state_dict()] if rank == 3 else [None]
+    dist.broadcast_object_list(buf_s1, src=3)
+    if rank == 0:
+        s1_state = buf_s1[0]
+
+    buf_s2 = [stage_mod.state_dict()] if rank == 4 else [None]
+    dist.broadcast_object_list(buf_s2, src=4)
+    if rank == 0:
+        s2_state = buf_s2[0]
+
+    buf_s3 = [stage_mod.state_dict()] if rank == 5 else [None]
+    dist.broadcast_object_list(buf_s3, src=5)
+    if rank == 0:
+        s3_state = buf_s3[0]
+
+    if rank == 0:
+        print("\nMerging and saving model (divide-head version)...")
+        merged = Qwen2_5OmniThinkerForConditionalGeneration.from_pretrained(MODEL_ID, trust_remote_code=True)
+        merged_state = merged.state_dict()
+
+        # 1) Text embed_tokens from rank2
+        for k, v in text_state.items():
+            if k.startswith("embed_tokens."):
+                newk = "model.embed_tokens." + k[len("embed_tokens."):]
+                merged_state[newk] = v
+
+        # 2) Rotary from Stage1 (rank3) if present
+        for k, v in s1_state.items():
+            if k.startswith("rotary_emb."):
+                newk = "model.rotary_emb." + k[len("rotary_emb."):]
+                if newk in merged_state:
+                    merged_state[newk] = v
+
+        # 3) Audio tower from rank0
+        for k, v in audio_state.items():
+            if k.startswith("audio_enc."):
+                newk = "audio_tower." + k[len("audio_enc."):]
+                if newk in merged_state:
+                    merged_state[newk] = v
+
+        # 4) Vision tower from rank1
+        for k, v in vision_state.items():
+            if k.startswith("vision_enc."):
+                newk = "visual." + k[len("vision_enc."):]
+                if newk in merged_state:
+                    merged_state[newk] = v
+
+        # Helper to map layers
+        def _map_layer_key(local_key: str, global_offset: int) -> str:
+            parts = local_key.split(".")
+            assert parts[0] == "layers", f"unexpected key {local_key}"
+            li = int(parts[1]) + global_offset
+            rest = ".".join(parts[2:])
+            return f"model.layers.{li}.{rest}"
+
+        # 5) Layers 0..L1-1 from Stage1
+        for k, v in s1_state.items():
+            if k.startswith("layers."):
+                newk = _map_layer_key(k, 0)
+                merged_state[newk] = v
+
+        # 6) Layers L1..L2-1 from Stage2
+        for k, v in s2_state.items():
+            if k.startswith("layers."):
+                newk = _map_layer_key(k, L1)
+                merged_state[newk] = v
+
+        # 7) Layers L2..end + norm + lm_head from Stage3
+        for k, v in s3_state.items():
+            if k.startswith("layers."):
+                newk = _map_layer_key(k, L2)
+                merged_state[newk] = v
+            elif k == "norm.weight":
+                merged_state["model.norm.weight"] = v
+            elif k == "norm.bias":
+                if "model.norm.bias" in merged_state:
+                    merged_state["model.norm.bias"] = v
+            elif k == "lm_head.weight":
+                merged_state["lm_head.weight"] = v
+            elif k == "lm_head.bias":
+                if "lm_head.bias" in merged_state:
+                    merged_state["lm_head.bias"] = v
+
+        merged.load_state_dict(merged_state, strict=False)
+        save_dir = "trained_qwen_pp_devide_head"
+        merged.save_pretrained(save_dir)
+        tok.save_pretrained(save_dir)
+        print(f"Saved merged model to ./{save_dir}")
+
+    dist.destroy_process_group()
 
 
-#                 tgt = batch["labels"].to(device)                # [B, block]
 
-#                 dist.broadcast(tgt, src=0)
-
-#                 sched.step(inp_ids,attention_mask=attn , vision_inputs=vis_pack, target=tgt)
-
-#             else:
-#                 tgt = torch.zeros(batch_size, block, dtype=torch.long, device=device)
-#                 dist.broadcast(tgt, src=0)
-#                 sched.step(target=tgt)
-
-#             if (step + 1) % 50 == 0:
-#                 try:
-#                     sched.timeline_rec.events.clear()
-#                 except Exception:
-#                     pass
-
-#             opt.step()
-
-#             if rank == 0:
-#                 step_time = time.time() - step_start_time
-#                 tokens_processed = batch_size * block
-#                 tokens_per_second = tokens_processed / step_time
-#                 pbar.set_postfix({
-#                     'tokens/s': f'{tokens_per_second:.0f}',
-#                     'step_time': f'{step_time:.2f}s',
-#                     'lr': f'{opt.param_groups[0]["lr"]:.2e}'
-#                 })
-#                 pbar.update(1)
-
-#             cur_loss = getattr(sched, "last_step_loss", None)
-#             if cur_loss is not None and rank == 0:
-#                 print(f"[rank0] step {step+1} loss {cur_loss:.4f}")
-#                 prev_loss = cur_loss
-
-#             dist.barrier()
-
-#         if rank == 0:
-#             pbar.close()
-#             total_time = time.time() - start_time
-#             print(f"\nEpoch {epoch+1} completed in {total_time:.2f}s")
-#             print(f"Average speed: {total_steps / total_time:.2f} steps/s")
-
-#     recv1, recv2, recv3 = [None], [None], [None]
-
-#     buf = [stage_mod.state_dict()] if rank == 1 else [None]
-#     dist.broadcast_object_list(buf, src=1)
-#     if rank == 0: part1_state = buf[0]
-
-#     buf = [stage_mod.state_dict()] if rank == 2 else [None]
-#     dist.broadcast_object_list(buf, src=2)
-#     if rank == 0: part2_state = buf[0]
-
-#     buf = [stage_mod.state_dict()] if rank == 3 else [None]
-#     dist.broadcast_object_list(buf, src=3)
-#     if rank == 0: part3_state = buf[0]
-
-#     if rank == 0:
-#         print("\nMerging and saving model...")
-#         part0_state = stage_mod.state_dict()
-
-#         merged = Qwen2_5OmniThinkerForConditionalGeneration.from_pretrained(MODEL_ID, trust_remote_code=True)
-#         merged_state = merged.state_dict()
-
-#         for k, v in part0_state.items():
-#             if k.startswith("embed_tokens."):
-#                 newk = "model.embed_tokens." + k[len("embed_tokens."):]
-#                 merged_state[newk] = v
-#             elif k.startswith("rotary_emb."):
-#                 newk = "model.rotary_emb." + k[len("rotary_emb."):]
-#                 if newk in merged_state: 
-#                     merged_state[newk] = v
-#             elif k.startswith("audio_enc."):
-#                 newk = "audio_tower." + k[len("audio_enc."):]
-#                 if newk in merged_state:
-#                     merged_state[newk] = v
-#             elif k.startswith("vision_enc."):
-#                 newk = "visual." + k[len("vision_enc."):]
-#                 if newk in merged_state:
-#                     merged_state[newk] = v
-
-#         def _map_layer_key(local_key: str, global_offset: int) -> str:
-#             parts = local_key.split(".")
-#             assert parts[0] == "layers", f"unexpected key {local_key}"
-#             li = int(parts[1]) + global_offset
-#             rest = ".".join(parts[2:])
-#             return f"model.layers.{li}.{rest}"
-
-#         for k, v in part1_state.items():
-#             if k.startswith("layers."):
-#                 newk = _map_layer_key(k, 0)
-#                 merged_state[newk] = v
-
-#         for k, v in part2_state.items():
-#             if k.startswith("layers."):
-#                 newk = _map_layer_key(k, L1)
-#                 merged_state[newk] = v
-
-#         for k, v in part3_state.items():
-#             if k.startswith("layers."):
-#                 newk = _map_layer_key(k, L2)
-#                 merged_state[newk] = v
-#             elif k == "norm.weight":
-#                 merged_state["model.norm.weight"] = v
-#             elif k == "norm.bias":
-#                 if "model.norm.bias" in merged_state:
-#                     merged_state["model.norm.bias"] = v
-#             elif k == "lm_head.weight":
-#                 merged_state["lm_head.weight"] = v
-#             elif k == "lm_head.bias":
-#                 if "lm_head.bias" in merged_state:
-#                     merged_state["lm_head.bias"] = v
-
-#         merged.load_state_dict(merged_state, strict=False)
-#         merged.save_pretrained("trained_qwen_pp")
-#         tok.save_pretrained("trained_qwen_pp")
-#         print("Saved to ./trained_qwen_pp")
-
-#     dist.destroy_process_group()
-
-
-
-# if __name__ == "__main__":
-#     main()
+if __name__ == "__main__":
+    main()
