@@ -1521,6 +1521,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             plans.append((slot_ctr, flat, slices))
             slot_ctr += 1
 
+        print(f"在这里 {plans}")
         ops: list[dist.P2POp] = []
         ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
         for split_idx in range(max(1, num_splits)):
@@ -1535,7 +1536,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
         self._last_comm_plan[("SEND_B", bwd_chunk_id, modality)] = ops_per_chunk
         # 选择是否在此处 pop 掉缓存；通常等三模态都发完后再清理上层字典更安全
-        print(f"在这里 {ops}")
+        
         return ops
 
 
