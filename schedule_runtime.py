@@ -343,7 +343,6 @@ def debug_redis_key(key: str):
     exists = client.exists(key)
     value = client.get(key) if exists else None
     ttl = client.ttl(key) if exists else -2
-    print(f"[DEBUG-{dist.get_rank()}] Redis key '{key}': exists={exists}, value={value}, ttl={ttl}")
     return exists
 
 # Modify _mark_done_chunk to add more debugging:

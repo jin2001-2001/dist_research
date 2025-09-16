@@ -1217,11 +1217,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
             # leader：设定 inputs_meta，并使用真实输入跑一次前向，以获得可靠的 meta 输出；组内广播给 DP 成员；
             if self.is_leader:
-                # Debug: 打印一次输入信息
-                try:
-                    print(f"[MM_DEBUG][{mt}] _shape_infer leader args={type(args)} len={len(args) if isinstance(args, tuple) else 'N/A'} kw={list(clean_kwargs.keys())}")
-                except Exception:
-                    pass
 
                 # 设定 inputs_meta：优先从 args 中提取 tensor 生成 meta，否则用占位 meta
                 try:
@@ -1276,7 +1271,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                                     else:
                                         out[k] = type(v).__name__
                                 return out
-                            print(f"[MM_DEBUG][{mt}] forward returned None. kwargs summary: {_kv_shapes(clean_kwargs)}")
                         except Exception:
                             pass
                         raise RuntimeError(f"[{mt}] _shape_inference: submodule returned None; please verify inputs and encoders")
@@ -1481,10 +1475,9 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         tensors = []
         for tmp_full_flat, shape, dtype, device in post_list:
             tensor = tmp_full_flat.view(*shape)
-            # 关键修复：为packing stage接收的张量启用梯度跟踪
+            # 为packing stage接收的张量启用梯度跟踪
             if getattr(self, "model_type", None) == "packing" and tensor.is_floating_point():
                 tensor = tensor.requires_grad_(True)
-                print(f"[FIX_DEBUG][rank{dist.get_rank()}] Set requires_grad=True for {modality} tensor: shape={tensor.shape}")
             tensors.append(tensor)
         self.mm_fwd_cache[fwd_chunk_id][modality] = tuple(tensors)
 
@@ -1514,24 +1507,19 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         total_elements = 0
         total_bytes = 0
         valid_grads = 0
-        print(f"[SEND_SIZE_DEBUG][rank{dist.get_rank()}] Analyzing {modality} grads for mb={bwd_chunk_id}:")
         for i, grad in enumerate(grads_tuple):
             if grad is None:
-                print(f"  grad[{i}]: None")
+                pass
             elif not isinstance(grad, torch.Tensor):
-                print(f"  grad[{i}]: Not tensor ({type(grad)})")
+                pass
             else:
                 elements = grad.numel()
                 bytes_size = elements * grad.element_size()
                 total_elements += elements
                 total_bytes += bytes_size
                 valid_grads += 1
-                print(f"  grad[{i}]: shape={grad.shape}, elements={elements}, bytes={bytes_size}, dtype={grad.dtype}")
 
-        print(f"[SEND_SIZE_DEBUG][rank{dist.get_rank()}] {modality} total: {valid_grads} grads, {total_elements} elements, {total_bytes} bytes ({total_bytes/1024/1024:.2f}MB) to rank {dest_rank}")
 
-        if total_bytes > 1024 * 1024:  # 超过1MB
-            print(f"[SIZE_WARNING][rank{dist.get_rank()}] ⚠️ Large transfer detected for {modality}: {total_bytes/1024/1024:.2f}MB > 1MB buffer limit!")
 
         peer_global_rank = self._peer_global_rank(dest_rank)
 
@@ -1550,8 +1538,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             # DEBUG: 检查每个张量的分片大小
             max_slice_size = max(ln for _, ln in slices) if slices else 0
             max_slice_bytes = max_slice_size * grad.element_size()
-            if max_slice_bytes > 1024 * 1024:  # 超过1MB
-                print(f"[SLICE_WARNING][rank{dist.get_rank()}] ⚠️ Large slice for {modality} grad[{slot_ctr}]: {max_slice_bytes/1024/1024:.2f}MB")
             slot_ctr += 1
 
         ops: list[dist.P2POp] = []
@@ -1563,24 +1549,12 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 off, ln = slices[split_idx]
                 chunk_view = flat.narrow(0, off, ln)
                 chunk_bytes = chunk_view.numel() * chunk_view.element_size()
-                # DEBUG: 详细检查每个发送块
-                print(f"[CHUNK_DEBUG][rank{dist.get_rank()}] {modality} mb={bwd_chunk_id} slot={slot_idx} split={split_idx}: {chunk_view.numel()} elements, {chunk_bytes} bytes ({chunk_bytes/1024:.1f}KB)")
-
-                if chunk_bytes > 1024 * 1024:  # 超过1MB
-                    print(f"[CHUNK_ERROR][rank{dist.get_rank()}] ❌ Chunk too large for {modality}: {chunk_bytes/1024/1024:.2f}MB > 1MB limit!")
-
-                if not chunk_view.is_contiguous():
-                    print(f"[CHUNK_ERROR][rank{dist.get_rank()}] ❌ Non-contiguous chunk for {modality}")
-
-                if chunk_view.numel() == 0:
-                    print(f"[CHUNK_ERROR][rank{dist.get_rank()}] ❌ Empty chunk for {modality}")
 
                 tag = _mk_tag(1, bwd_chunk_id, slot_idx, split_idx, MOD2ID[modality])
                 ops.append(dist.P2POp(dist.isend, chunk_view, peer_global_rank, self.group, tag=tag))
                 ops_per_chunk[split_idx] += 1
 
         self._last_comm_plan[("SEND_B", bwd_chunk_id, modality)] = ops_per_chunk
-        print(f"[SEND_FINAL_DEBUG][rank{dist.get_rank()}] {modality} mb={bwd_chunk_id}: {len(ops)} send operations created")
         # 选择是否在此处 pop 掉缓存；通常等三模态都发完后再清理上层字典更安全
 
         return ops
@@ -1679,21 +1653,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             if kwargs:
                 clean_kwargs = {k: v for k, v in kwargs.items() if k in allow}
 
-            # Debug (可通过环境变量开启)
-            import os as _os
-            if _os.getenv("MM_DEBUG", "0") == "1" and (args or clean_kwargs):
-                try:
-                    def _shape(x):
-                        import torch as _t
-                        return tuple(x.shape) if isinstance(x, _t.Tensor) else type(x).__name__
-                    msg = f"[MM_DEBUG][{mt}] fwd_one_chunk mb={fwd_chunk_id} args_len={len(args) if args else 0} "
-                    if args:
-                        msg += " args_shapes=[" + ",".join(str(_shape(a)) for a in args) + "]"
-                    if clean_kwargs:
-                        msg += " kw_keys=" + str(list(clean_kwargs.keys()))
-                    print(msg)
-                except Exception:
-                    pass
 
             # 音频缺省：当没有audio_inputs时，返回dummy tensor而不是空tuple
             if mt == "audio":
@@ -1843,10 +1802,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         flat_kwargs = flatten_args(composite_kwargs)
         flatten_input_tensors = flat_args + flat_kwargs
 
-        # DEBUG: 简化检查
-        requires_grad_count = sum(1 for t in flatten_input_tensors if isinstance(t, torch.Tensor) and t.requires_grad)
-        total_tensors = sum(1 for t in flatten_input_tensors if isinstance(t, torch.Tensor))
-        print(f"[PACKING_FORWARD_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id}: {requires_grad_count}/{total_tensors} tensors with requires_grad=True")
 
         order_map: list[Optional[tuple[str, int]]] = []
         for ten in flatten_input_tensors:
@@ -1920,10 +1875,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             grads_output = self._avg_next_stage_grads(grads_output)
             bwd_kwargs = {"stage_output": stage_output, "output_grads": grads_output, "input_values": input_values}
 
-        # DEBUG: 简化检查
-        requires_grad_count = sum(1 for inp in input_values if isinstance(inp, torch.Tensor) and inp.requires_grad)
-        total_tensors = sum(1 for inp in input_values if isinstance(inp, torch.Tensor))
-        print(f"[PACKING_BACKWARD_DEBUG][rank{dist.get_rank()}] bwd_chunk_id={bwd_chunk_id}, input_values: {requires_grad_count}/{total_tensors} with requires_grad=True")
 
         # 2) 真正 backward（保持与父类一致，但确保保留计算图，因同一图要给三路上游发送）
         if full_backward:
@@ -1960,39 +1911,23 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
         # grads_input 的顺序与 input_values（即 forward 里 flatten_input_tensors）一致
         valid_grad_count = 0
-        print(f"[GRAD_SPLIT_DEBUG][rank{dist.get_rank()}] Splitting {len(grads_input)} gradients by modality:")
-
-        for i, (gi, tag) in enumerate(zip(grads_input, order)):
+        for gi, tag in zip(grads_input, order):
             if tag is None:
-                print(f"  grads_input[{i}]: tag=None (skipping)")
                 continue  # 非 head 来的张量（如 position_ids 占位）或非 tensor
             mod, local_idx = tag
 
             if gi is None:
-                print(f"  grads_input[{i}]: None -> {mod}[{local_idx}] ❌")
+                pass
             elif not isinstance(gi, torch.Tensor):
-                print(f"  grads_input[{i}]: {type(gi)} -> {mod}[{local_idx}] ❌")
+                pass
             elif not (gi.is_floating_point() or torch.is_complex(gi)):
-                print(f"  grads_input[{i}]: {gi.dtype} -> {mod}[{local_idx}] ❌ (not float/complex)")
+                pass
             else:
                 # 只回传浮点/复数梯度，保持发送端过滤一致性
                 if 0 <= local_idx < len(per_mod_lists[mod]):
                     per_mod_lists[mod][local_idx] = gi
                     valid_grad_count += 1
-                    grad_size = gi.numel() * gi.element_size()
-                    print(f"  grads_input[{i}]: shape={gi.shape} -> {mod}[{local_idx}] ✅ ({grad_size} bytes)")
-                else:
-                    print(f"  grads_input[{i}]: shape={gi.shape} -> {mod}[{local_idx}] ❌ (index out of bounds)")
 
-        # 检查每个模态的总大小
-        for mod in ("text", "audio", "vision"):
-            if len(per_mod_lists[mod]) > 0:
-                mod_grads = [g for g in per_mod_lists[mod] if g is not None]
-                if mod_grads:
-                    mod_total_bytes = sum(g.numel() * g.element_size() for g in mod_grads)
-                    print(f"[MOD_SIZE_DEBUG][rank{dist.get_rank()}] {mod}: {len(mod_grads)} grads, {mod_total_bytes} bytes ({mod_total_bytes/1024/1024:.2f}MB)")
-                    if mod_total_bytes > 1024 * 1024:
-                        print(f"[MOD_WARNING][rank{dist.get_rank()}] ⚠️ {mod} exceeds 1MB: {mod_total_bytes/1024/1024:.2f}MB")
 
         # 写入 mm_bwd_cache（tuple 形式，供 get_bwd_send_ops_mm 使用）
         for mod in ("text", "audio", "vision"):
