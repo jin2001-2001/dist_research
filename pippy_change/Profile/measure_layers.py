@@ -294,6 +294,8 @@ def main():
     }
     }
 
+    metis_result["model"]["parameters"]["total_parameters_bytes"]+= (embed_params+tail_params)
+    metis_result["execution_memory"]["total_memory"]+= (embed_params+tail_params)/1024/1024
     for i in range(L):
         metis_result["model"]["parameters"]["parameters_per_layer_bytes"].append(pbytes[i])
         metis_result["model"]["parameters"]["total_parameters_bytes"]+=pbytes[i]
@@ -307,7 +309,7 @@ def main():
         original_mem = pbytes[i]
         #JIn: now, we do a general estimiation of runtime mem...
 
-        runingM = model_state_bytes(original_mem, param_dtype=args.dtype)["total_model_states"]/1024
+        runingM = model_state_bytes(original_mem, param_dtype=args.dtype)["total_model_states"]/1024/1024
         metis_result["execution_memory"]["layer_memory_total_mb"].append(runingM)
         metis_result["execution_memory"]["total_memory"]+=runingM
 
