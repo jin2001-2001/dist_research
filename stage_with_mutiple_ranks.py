@@ -613,7 +613,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         # 对于第一阶段，如果有kwargs数据，空args是正常的
         is_first_stage = getattr(self, 'prev_group', None) is None
-        has_kwargs_data = kwargs and any(kwargs.values())
+        has_kwargs_data = kwargs and any(v is not None for v in kwargs.values())
 
         if composite_args is None or (len(composite_args) == 0 and not (is_first_stage and has_kwargs_data)):
             raise RuntimeError(
@@ -997,7 +997,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                 if meta is None or not torch.is_tensor(meta):
                     grad_recv_info_list.append(None)
                     continue
-                
+
                 if not (meta.is_floating_point() or torch.is_complex(meta)):
                     grad_recv_info_list.append(None)
                     continue
@@ -1633,6 +1633,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         if getattr(self, "model_type", None) != "packing":
             # 过滤与当前模态无关的 kwargs，避免子模块收到多余参数报错
             mt = getattr(self, "model_type", None)
+
             allow = set()
             if mt == "audio":
                 allow = {"audio_inputs"}
@@ -1640,6 +1641,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 allow = {"vision_inputs"}
             elif mt == "text":
                 allow = {"input_ids", "attention_mask"}
+
             # 仅保留允许的键，其余丢弃
             clean_kwargs = None
             if kwargs:
@@ -1670,10 +1672,9 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     flat_kwargs = _flat(clean_kwargs or {})
 
                     # 创建一个dummy的audio embedding tensor
-                    # 假设batch size为1，audio embedding维度为合理的默认值
                     batch_size = 1
-                    audio_seq_len = 32  # 合理的音频序列长度
-                    audio_dim = 512     # 合理的音频特征维度
+                    audio_seq_len = 32
+                    audio_dim = 512
 
                     dummy_audio_embeds = torch.zeros(
                         batch_size, audio_seq_len, audio_dim,
@@ -1683,7 +1684,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     output_tuple = (dummy_audio_embeds,)
                     self.fwd_cache[fwd_chunk_id] = (output_tuple, flat_args + flat_kwargs)
                     return output_tuple
-
 
             return super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
 
