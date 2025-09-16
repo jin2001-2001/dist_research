@@ -743,54 +743,14 @@ def main():
             }
 
         # Audio packing: pass through whatever processor returned
-        print(f"[DATA_DEBUG] Processing pack for audio...")
-        print(f"[DATA_DEBUG] pack type: {type(pack)}")
-
-        # 安全地检查pack的内容
-        try:
-            if hasattr(pack, 'keys'):
-                keys = list(pack.keys())
-                print(f"[DATA_DEBUG] pack keys: {keys}")
-
-                # 安全地检查每个键的值
-                for k in keys:
-                    try:
-                        v = pack[k]
-                        if hasattr(v, 'shape'):
-                            print(f"[DATA_DEBUG] pack[{k}]: shape={v.shape}, dtype={v.dtype}")
-                        elif v is None:
-                            print(f"[DATA_DEBUG] pack[{k}]: None")
-                        else:
-                            print(f"[DATA_DEBUG] pack[{k}]: type={type(v)}")
-                    except Exception as e:
-                        print(f"[DATA_DEBUG] Error accessing pack[{k}]: {e}")
-            else:
-                print(f"[DATA_DEBUG] pack has no keys attribute")
-                print(f"[DATA_DEBUG] pack dir: {[attr for attr in dir(pack) if not attr.startswith('_')]}")
-        except Exception as e:
-            print(f"[DATA_DEBUG] Error inspecting pack: {e}")
-
         audio_inputs = None
-        try:
-            if hasattr(pack, 'keys'):
-                for k in ("input_values", "audio_values", "input_features"):
-                    if k in pack:
-                        print(f"[DATA_DEBUG] Found audio key '{k}' in pack")
-                        audio_inputs = {k: pack[k]}
-
-                        # 同时包含feature_attention_mask如果存在
-                        if "feature_attention_mask" in pack:
-                            audio_inputs["feature_attention_mask"] = pack["feature_attention_mask"]
-                            print(f"[DATA_DEBUG] Added feature_attention_mask shape: {pack['feature_attention_mask'].shape}")
-
-                        print(f"[DATA_DEBUG] audio_inputs keys: {list(audio_inputs.keys())}")
-                        break
-                else:
-                    print(f"[DATA_DEBUG] No audio keys found in pack")
-        except Exception as e:
-            print(f"[DATA_DEBUG] Error processing audio inputs: {e}")
-
-        print(f"[DATA_DEBUG] Final audio_inputs: {audio_inputs is not None}")
+        if hasattr(pack, 'keys'):
+            for k in ("input_values", "audio_values", "input_features"):
+                if k in pack:
+                    audio_inputs = {k: pack[k]}
+                    if "feature_attention_mask" in pack:
+                        audio_inputs["feature_attention_mask"] = pack["feature_attention_mask"]
+                    break
 
         return {
             "input_ids": input_ids,
