@@ -1330,6 +1330,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             return []
 
         output_tuple, _ = self.fwd_cache[fwd_chunk_id]
+        print(f"哈哈哈 {modality} {output_tuple}")
     
         ops: list[dist.P2POp] = []
         ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
