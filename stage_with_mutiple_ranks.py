@@ -1906,12 +1906,12 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             if isinstance(gi, torch.Tensor) and (gi.is_floating_point() or torch.is_complex(gi)):
                 # 安全：越界忽略
                 if 0 <= local_idx < len(per_mod_lists[mod]):
+                    print(f"在这里 {gi}")
                     per_mod_lists[mod][local_idx] = gi
 
         # 写入 mm_bwd_cache（tuple 形式，供 get_bwd_send_ops_mm 使用）
         for mod in ("text", "audio", "vision"):
             if len(per_mod_lists[mod]) > 0:
-                print(f"在这里 {per_mod_lists[mod]}")
                 self.mm_bwd_cache[bwd_chunk_id][mod] = tuple(per_mod_lists[mod])
 
         # 4) 兼容：也把 grads_input 留在 bwd_cache，避免外部调用到基类 send 流程时出错
