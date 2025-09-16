@@ -1500,7 +1500,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             return []
 
         grads_tuple = self.mm_bwd_cache.get(bwd_chunk_id, {}).get(modality, None)
-        print(f"在这里 {grads_tuple}")
         if not grads_tuple:
             # 该模态在本 mb 上可能为空（如该 batch 无音频）
             self._last_comm_plan[("SEND_B", bwd_chunk_id, modality)] = [0 for _ in range(max(1, num_splits))]
@@ -1551,9 +1550,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         src_rank_fallback: int | None = None,  # 兼容旧参数
         **kwargs,
     ) -> list[dist.P2POp]:
-        """
-        head 端从 packing 接收本模态的输入梯度；先收进临时 flat，finish_bwd_recv_mm 后落入 self.mm_bwd_cache[mb][modality]。
-        """
+    
         self._ensure_mm_tables()
         if not self.has_backward or self.is_last:
             return []
@@ -1603,20 +1600,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
         self._last_comm_plan[("RECV_B", bwd_chunk_id, modality)] = ops_per_chunk
         return ops
-
-
-    def finish_bwd_recv_mm(self, bwd_chunk_id: int, modality: str) -> None:
-        """
-        将临时 flat 重组为张量列表，落入 self.mm_bwd_cache[mb][modality]（供本模态 head 的 backward 使用）。
-        """
-        self._ensure_mm_tables()
-        post_list = self._mm_bwd_post_recv.pop((bwd_chunk_id, modality), None)
-        if not post_list:
-            return
-        tensors = []
-        for tmp_full_flat, shape, dtype, device in post_list:
-            tensors.append(tmp_full_flat.view(*shape))
-        self.mm_bwd_cache[bwd_chunk_id][modality] = tuple(tensors)
         
     def forward_one_chunk(
         self,
@@ -1928,6 +1911,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         # 写入 mm_bwd_cache（tuple 形式，供 get_bwd_send_ops_mm 使用）
         for mod in ("text", "audio", "vision"):
             if len(per_mod_lists[mod]) > 0:
+                print(f"在这里 {per_mod_lists[mod]}")
                 self.mm_bwd_cache[bwd_chunk_id][mod] = tuple(per_mod_lists[mod])
 
         # 4) 兼容：也把 grads_input 留在 bwd_cache，避免外部调用到基类 send 流程时出错
