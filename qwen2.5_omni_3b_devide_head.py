@@ -47,54 +47,141 @@ class AudioStage(nn.Module):
         返回: audio_embeds
         要求: collate 后的 audio_inputs（dict 或 tensor）其拼接顺序要与 input_ids 中 audio_token 的扫描顺序一致。
         """
+        import time
+        start_time = time.time()
+        print(f"[AUDIO_FORWARD_DEBUG] AudioStage.forward started at {start_time}")
+        print(f"[AUDIO_FORWARD_DEBUG] Input type: {type(audio_inputs)}, is None: {audio_inputs is None}")
+
+        if audio_inputs is not None:
+            if isinstance(audio_inputs, dict):
+                print(f"[AUDIO_FORWARD_DEBUG] Dict keys: {list(audio_inputs.keys())}")
+                for k, v in audio_inputs.items():
+                    if hasattr(v, 'shape'):
+                        print(f"[AUDIO_FORWARD_DEBUG] {k}: shape={v.shape}, dtype={v.dtype}")
+                    else:
+                        print(f"[AUDIO_FORWARD_DEBUG] {k}: type={type(v)}")
+            elif hasattr(audio_inputs, 'shape'):
+                print(f"[AUDIO_FORWARD_DEBUG] Tensor input shape: {audio_inputs.shape}, dtype: {audio_inputs.dtype}")
+
         if audio_inputs is None:
+            print(f"[AUDIO_FORWARD_DEBUG] Returning dummy tensor (input is None)")
             # 为了pipeline通信拓扑的完整性，即使没有音频输入也要返回一个tensor
             # 这个dummy tensor在实际训练时不会被使用，只是为了保证pipeline结构完整
             device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
-            return torch.zeros(1, 1, 768, device=device, dtype=torch.float32)  # [batch, seq_len, hidden_dim]
+            dummy_result = torch.zeros(1, 1, 768, device=device, dtype=torch.float32)  # [batch, seq_len, hidden_dim]
+            end_time = time.time()
+            print(f"[AUDIO_FORWARD_DEBUG] Dummy path took {end_time - start_time:.4f} seconds")
+            return dummy_result
 
         if isinstance(audio_inputs, dict):
             audio_values = (audio_inputs.get("input_values")
                             or audio_inputs.get("audio_values")
                             or audio_inputs.get("input_features"))
+            print(f"[AUDIO_FORWARD_DEBUG] Extracted audio_values from dict: {type(audio_values)}")
         else:
             audio_values = audio_inputs
+            print(f"[AUDIO_FORWARD_DEBUG] Using audio_inputs directly as audio_values")
 
         if audio_values is None:
+            print(f"[AUDIO_FORWARD_DEBUG] Returning dummy tensor (audio_values is None)")
             device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
-            return torch.zeros(1, 1, 768, device=device, dtype=torch.float32)  # [batch, seq_len, hidden_dim]
+            dummy_result = torch.zeros(1, 1, 768, device=device, dtype=torch.float32)  # [batch, seq_len, hidden_dim]
+            end_time = time.time()
+            print(f"[AUDIO_FORWARD_DEBUG] Dummy path took {end_time - start_time:.4f} seconds")
+            return dummy_result
+
+        print(f"[AUDIO_FORWARD_DEBUG] audio_values shape: {audio_values.shape}, dtype: {audio_values.dtype}")
+        print(f"[AUDIO_FORWARD_DEBUG] audio_values device: {audio_values.device}")
+        print(f"[AUDIO_FORWARD_DEBUG] audio_enc type: {type(self.audio_enc)}")
+
+        # 检查音频编码器的设备
+        if hasattr(self.audio_enc, "parameters"):
+            enc_device = next(self.audio_enc.parameters()).device
+            print(f"[AUDIO_FORWARD_DEBUG] audio_enc device: {enc_device}")
+        else:
+            print(f"[AUDIO_FORWARD_DEBUG] audio_enc has no parameters")
+
+        print(f"[AUDIO_FORWARD_DEBUG] About to process audio_values...")
 
         if hasattr(self.audio_enc, "get_dtype"):
+            old_dtype = audio_values.dtype
             audio_values = audio_values.type(self.audio_enc.get_dtype())
+            print(f"[AUDIO_FORWARD_DEBUG] Changed dtype from {old_dtype} to {audio_values.dtype}")
+
+        old_device = audio_values.device
         audio_values = audio_values.to(next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else audio_values.device)
+        print(f"[AUDIO_FORWARD_DEBUG] Moved tensor from {old_device} to {audio_values.device}")
+
+        print(f"[AUDIO_FORWARD_DEBUG] About to call audio_enc with shape {audio_values.shape}")
+        enc_start_time = time.time()
 
         try:
+            print(f"[AUDIO_FORWARD_DEBUG] Calling audio_enc(audio_values)...")
             res = self.audio_enc(audio_values)
-        except TypeError:
+            print(f"[AUDIO_FORWARD_DEBUG] audio_enc call successful")
+        except TypeError as e:
+            print(f"[AUDIO_FORWARD_DEBUG] TypeError in audio_enc call: {e}")
+            print(f"[AUDIO_FORWARD_DEBUG] Trying with attention_mask=None...")
             # 适配部分 encoder 的 (x, attention_mask=None) 签名
             res = self.audio_enc(audio_values, None)
+            print(f"[AUDIO_FORWARD_DEBUG] Second audio_enc call successful")
+
+        enc_end_time = time.time()
+        print(f"[AUDIO_FORWARD_DEBUG] audio_enc took {enc_end_time - enc_start_time:.4f} seconds")
+        print(f"[AUDIO_FORWARD_DEBUG] audio_enc result type: {type(res)}")
+
+        if isinstance(res, torch.Tensor):
+            print(f"[AUDIO_FORWARD_DEBUG] Result is tensor, shape: {res.shape}, dtype: {res.dtype}")
+        elif hasattr(res, "last_hidden_state"):
+            print(f"[AUDIO_FORWARD_DEBUG] Result has last_hidden_state: {type(res.last_hidden_state)}")
+            if isinstance(res.last_hidden_state, torch.Tensor):
+                print(f"[AUDIO_FORWARD_DEBUG] last_hidden_state shape: {res.last_hidden_state.shape}")
+        elif isinstance(res, (list, tuple)):
+            print(f"[AUDIO_FORWARD_DEBUG] Result is sequence, length: {len(res)}")
+            for i, item in enumerate(res):
+                print(f"[AUDIO_FORWARD_DEBUG] Item[{i}]: {type(item)}")
+        elif isinstance(res, dict):
+            print(f"[AUDIO_FORWARD_DEBUG] Result is dict, keys: {list(res.keys())}")
 
         audio_embeds = None
         if isinstance(res, torch.Tensor):
+            print(f"[AUDIO_FORWARD_DEBUG] Using direct tensor result")
             audio_embeds = res
         elif hasattr(res, "last_hidden_state") and isinstance(res.last_hidden_state, torch.Tensor):
+            print(f"[AUDIO_FORWARD_DEBUG] Using last_hidden_state")
             audio_embeds = res.last_hidden_state
         elif isinstance(res, (list, tuple)):
+            print(f"[AUDIO_FORWARD_DEBUG] Searching for tensor in sequence")
             audio_embeds = next((x for x in res if isinstance(x, torch.Tensor)), None)
+            print(f"[AUDIO_FORWARD_DEBUG] Found tensor: {audio_embeds is not None}")
         elif isinstance(res, dict):
+            print(f"[AUDIO_FORWARD_DEBUG] Searching for last_hidden_state in dict")
             audio_embeds = res.get("last_hidden_state", None)
             if not isinstance(audio_embeds, torch.Tensor):
+                print(f"[AUDIO_FORWARD_DEBUG] last_hidden_state not found, searching for any tensor")
                 # 回退取第一个 tensor 值
-                for v in res.values():
+                for k, v in res.items():
+                    print(f"[AUDIO_FORWARD_DEBUG] Checking {k}: {type(v)}")
                     if isinstance(v, torch.Tensor):
                         audio_embeds = v
+                        print(f"[AUDIO_FORWARD_DEBUG] Using {k} as audio_embeds")
                         break
 
+        print(f"[AUDIO_FORWARD_DEBUG] Final audio_embeds type: {type(audio_embeds)}")
         if isinstance(audio_embeds, torch.Tensor):
-            return audio_embeds.contiguous()
+            print(f"[AUDIO_FORWARD_DEBUG] Final audio_embeds shape: {audio_embeds.shape}, dtype: {audio_embeds.dtype}")
+            result = audio_embeds.contiguous()
+            end_time = time.time()
+            print(f"[AUDIO_FORWARD_DEBUG] Total forward time: {end_time - start_time:.4f} seconds")
+            print(f"[AUDIO_FORWARD_DEBUG] Returning real audio embeddings")
+            return result
         else:
+            print(f"[AUDIO_FORWARD_DEBUG] audio_embeds is not tensor, returning dummy")
             device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
-            return torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
+            dummy_result = torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
+            end_time = time.time()
+            print(f"[AUDIO_FORWARD_DEBUG] Total forward time: {end_time - start_time:.4f} seconds")
+            return dummy_result
 
 
 class VisionStage(nn.Module):

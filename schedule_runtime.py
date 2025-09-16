@@ -656,7 +656,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if kind == "RECV_F":
                         self._fwd_recv_works.setdefault(key, []).extend(works_k)
                     else:
-                        print(f"在这里 {key} {works_k}")
                         self._bwd_recv_works.setdefault(key, []).extend(works_k)
 
             # 全部分块 ops 已 post 的事件
@@ -1208,7 +1207,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             self._bwd_recv_works[key] = []
                             self._bwd_recv_posted[key] = threading.Event()
                         
-                        print(f"在这里 {ops}")
                         self._spawn_chunked_recv_worker(
                             kind="RECV_B", action=action, ops=ops, plan=plan,
                             chunk_deps=chunk_deps_for_m,
