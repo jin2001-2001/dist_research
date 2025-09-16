@@ -1839,41 +1839,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     if isinstance(o, torch.Tensor):
                         print(f"    output[{i}]: shape={o.shape}, requires_grad={o.requires_grad}")
 
-            # [FORCE FIX] 强制建立所有输入到输出的计算图连接
-            print(f"[FORCE_GRAD_FN_DEBUG][rank{dist.get_rank()}] Forcing computation graph connections...")
-
-            if isinstance(output, (list, tuple)):
-                modified_output = []
-                for i, out_tensor in enumerate(output):
-                    if isinstance(out_tensor, torch.Tensor) and out_tensor.requires_grad:
-                        # 对每个需要梯度的输出，添加一个微小的来自所有输入的贡献
-                        force_connection = torch.zeros_like(out_tensor)
-
-                        # 为每个有requires_grad=True的输入添加连接
-                        for j, inp_tensor in enumerate(flatten_input_tensors):
-                            if isinstance(inp_tensor, torch.Tensor) and inp_tensor.requires_grad:
-                                # 计算一个极小的贡献，确保不影响实际计算但建立梯度连接
-                                if inp_tensor.numel() > 0 and out_tensor.numel() > 0:
-                                    # 使用广播机制添加微小连接
-                                    small_contrib = torch.sum(inp_tensor) * 1e-12  # 极小的系数
-                                    if small_contrib.numel() == 1:
-                                        force_connection = force_connection + small_contrib
-                                        print(f"    Added connection: input[{j}] -> output[{i}]")
-
-                        # 将强制连接添加到原输出
-                        modified_tensor = out_tensor + force_connection
-                        modified_output.append(modified_tensor)
-                        print(f"    output[{i}]: grad_fn={modified_tensor.grad_fn is not None}")
-                    else:
-                        modified_output.append(out_tensor)
-
-                output = tuple(modified_output)
-
-            print(f"[FORCE_GRAD_FN_DEBUG][rank{dist.get_rank()}] After forcing connections:")
-            if isinstance(output, (list, tuple)):
-                for i, o in enumerate(output):
-                    if isinstance(o, torch.Tensor):
-                        print(f"    output[{i}]: shape={o.shape}, requires_grad={o.requires_grad}, grad_fn={o.grad_fn is not None}")
 
         except Exception as e:
             exc_msg = f"""
@@ -1884,6 +1849,43 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             raise RuntimeError(exc_msg) from e
 
         output_tuple = _normalize_model_output_as_tuple(output)
+
+        # [FORCE FIX] 强制建立所有输入到输出的计算图连接
+        print(f"[FORCE_GRAD_FN_DEBUG][rank{dist.get_rank()}] Forcing computation graph connections...")
+
+        if isinstance(output_tuple, (list, tuple)):
+            modified_output = []
+            for i, out_tensor in enumerate(output_tuple):
+                if isinstance(out_tensor, torch.Tensor) and out_tensor.requires_grad:
+                    # 对每个需要梯度的输出，添加一个微小的来自所有输入的贡献
+                    force_connection = torch.zeros_like(out_tensor)
+
+                    # 为每个有requires_grad=True的输入添加连接
+                    for j, inp_tensor in enumerate(flatten_input_tensors):
+                        if isinstance(inp_tensor, torch.Tensor) and inp_tensor.requires_grad:
+                            # 计算一个极小的贡献，确保不影响实际计算但建立梯度连接
+                            if inp_tensor.numel() > 0 and out_tensor.numel() > 0:
+                                # 使用广播机制添加微小连接
+                                small_contrib = torch.sum(inp_tensor) * 1e-12  # 极小的系数
+                                if small_contrib.numel() == 1:
+                                    force_connection = force_connection + small_contrib
+                                    print(f"    Added connection: input[{j}] -> output[{i}]")
+
+                    # 将强制连接添加到原输出
+                    modified_tensor = out_tensor + force_connection
+                    modified_output.append(modified_tensor)
+                    print(f"    output[{i}]: grad_fn={modified_tensor.grad_fn is not None}")
+                else:
+                    modified_output.append(out_tensor)
+
+            output_tuple = tuple(modified_output)
+
+        print(f"[FORCE_GRAD_FN_DEBUG][rank{dist.get_rank()}] After forcing connections:")
+        if isinstance(output_tuple, (list, tuple)):
+            for i, o in enumerate(output_tuple):
+                if isinstance(o, torch.Tensor):
+                    print(f"    output[{i}]: shape={o.shape}, requires_grad={o.requires_grad}, grad_fn={o.grad_fn is not None}")
+
         if self.is_last:
             self.output_chunks.append(output)
 
