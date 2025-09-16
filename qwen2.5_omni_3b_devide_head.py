@@ -47,17 +47,26 @@ class AudioStage(nn.Module):
         返回: audio_embeds
         要求: collate 后的 audio_inputs（dict 或 tensor）其拼接顺序要与 input_ids 中 audio_token 的扫描顺序一致。
         """
+        print(f"[AUDIOSTAGE_DEBUG] AudioStage.forward called with audio_inputs type: {type(audio_inputs)}")
+        print(f"[AUDIOSTAGE_DEBUG] audio_inputs is None: {audio_inputs is None}")
+
         if audio_inputs is None:
+            print(f"[AUDIOSTAGE_DEBUG] audio_inputs is None, returning None")
             return None
 
         if isinstance(audio_inputs, dict):
+            print(f"[AUDIOSTAGE_DEBUG] audio_inputs is dict, keys: {list(audio_inputs.keys())}")
             audio_values = (audio_inputs.get("input_values")
                             or audio_inputs.get("audio_values")
                             or audio_inputs.get("input_features"))
         else:
+            print(f"[AUDIOSTAGE_DEBUG] audio_inputs is not dict, using directly")
             audio_values = audio_inputs
 
+        print(f"[AUDIOSTAGE_DEBUG] audio_values type: {type(audio_values)}, is None: {audio_values is None}")
+
         if audio_values is None:
+            print(f"[AUDIOSTAGE_DEBUG] audio_values is None, returning None")
             return None
 
         if hasattr(self.audio_enc, "get_dtype"):
@@ -86,7 +95,11 @@ class AudioStage(nn.Module):
                         audio_embeds = v
                         break
 
-        return audio_embeds.contiguous() if isinstance(audio_embeds, torch.Tensor) else None
+        result = audio_embeds.contiguous() if isinstance(audio_embeds, torch.Tensor) else None
+        print(f"[AUDIOSTAGE_DEBUG] Final result type: {type(result)}, is None: {result is None}")
+        if isinstance(result, torch.Tensor):
+            print(f"[AUDIOSTAGE_DEBUG] Result shape: {result.shape}, dtype: {result.dtype}")
+        return result
 
 
 class VisionStage(nn.Module):
