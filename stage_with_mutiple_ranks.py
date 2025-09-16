@@ -1797,8 +1797,10 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         # [LEAF TENSOR FIX] 确保输入张量 requires_grad=True 且保持 leaf tensor 状态
         # 不修改输出，而是确保输入能正确追踪梯度
         for inp_tensor in flatten_input_tensors:
-            if isinstance(inp_tensor, torch.Tensor) and not inp_tensor.requires_grad:
-                # 确保所有输入张量都需要梯度
+            if (isinstance(inp_tensor, torch.Tensor) and
+                not inp_tensor.requires_grad and
+                (inp_tensor.is_floating_point() or torch.is_complex(inp_tensor))):
+                # 只对浮点和复数张量设置 requires_grad
                 inp_tensor.requires_grad = True
 
         order_map: list[Optional[tuple[str, int]]] = []
