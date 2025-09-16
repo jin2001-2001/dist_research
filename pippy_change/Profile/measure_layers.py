@@ -97,7 +97,7 @@ def main():
     ap.add_argument("--model_path", type=str, default="Qwen/Qwen3-0.6B", help="HF name or local path")
     ap.add_argument("--seq_len", type=int, default=256)
     ap.add_argument("--batch", type=int, default=1)
-    ap.add_argument("--dtype", type=str, default="float32", choices=["float32","bfloat16","float16"])
+    ap.add_argument("--dtype", type=str, default="bfloat16", choices=["float32","bfloat16","float16"])
     ap.add_argument("--iters", type=int, default=2)
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--out", type=str, required=True)
@@ -217,9 +217,9 @@ def main():
         return _bwd
 
     handles = []
-    for i, blk in enumerate(blocks):
-        handles.append(blk.register_forward_pre_hook(pre_hook(i)))
-        handles.append(blk.register_forward_hook(fwd_hook(i)))
+    #for i, blk in enumerate(blocks):
+        #handles.append(blk.register_forward_pre_hook(pre_hook(i)))
+        #handles.append(blk.register_forward_hook(fwd_hook(i)))
         # full backward hook (PyTorch 1.10+). If not available, comment out.
         #if hasattr(blk, "register_full_backward_hook"):
             #handles.append(blk.register_full_backward_pre_hook(pre_bwd_hook(i)))
