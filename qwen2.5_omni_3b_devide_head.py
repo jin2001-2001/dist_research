@@ -47,29 +47,20 @@ class AudioStage(nn.Module):
         返回: audio_embeds
         要求: collate 后的 audio_inputs（dict 或 tensor）其拼接顺序要与 input_ids 中 audio_token 的扫描顺序一致。
         """
-        print(f"[AUDIOSTAGE_DEBUG] AudioStage.forward called with audio_inputs type: {type(audio_inputs)}")
-        print(f"[AUDIOSTAGE_DEBUG] audio_inputs is None: {audio_inputs is None}")
-
         if audio_inputs is None:
-            print(f"[AUDIOSTAGE_DEBUG] audio_inputs is None, returning dummy tensor for pipeline compatibility")
             # 为了pipeline通信拓扑的完整性，即使没有音频输入也要返回一个tensor
             # 这个dummy tensor在实际训练时不会被使用，只是为了保证pipeline结构完整
             device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
             return torch.zeros(1, 1, 768, device=device, dtype=torch.float32)  # [batch, seq_len, hidden_dim]
 
         if isinstance(audio_inputs, dict):
-            print(f"[AUDIOSTAGE_DEBUG] audio_inputs is dict, keys: {list(audio_inputs.keys())}")
             audio_values = (audio_inputs.get("input_values")
                             or audio_inputs.get("audio_values")
                             or audio_inputs.get("input_features"))
         else:
-            print(f"[AUDIOSTAGE_DEBUG] audio_inputs is not dict, using directly")
             audio_values = audio_inputs
 
-        print(f"[AUDIOSTAGE_DEBUG] audio_values type: {type(audio_values)}, is None: {audio_values is None}")
-
         if audio_values is None:
-            print(f"[AUDIOSTAGE_DEBUG] audio_values is None, returning dummy tensor for pipeline compatibility")
             device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
             return torch.zeros(1, 1, 768, device=device, dtype=torch.float32)  # [batch, seq_len, hidden_dim]
 
@@ -100,16 +91,10 @@ class AudioStage(nn.Module):
                         break
 
         if isinstance(audio_embeds, torch.Tensor):
-            result = audio_embeds.contiguous()
+            return audio_embeds.contiguous()
         else:
-            print(f"[AUDIOSTAGE_DEBUG] audio_embeds is not a tensor, returning dummy tensor for pipeline compatibility")
             device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
-            result = torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
-
-        print(f"[AUDIOSTAGE_DEBUG] Final result type: {type(result)}, is None: {result is None}")
-        if isinstance(result, torch.Tensor):
-            print(f"[AUDIOSTAGE_DEBUG] Result shape: {result.shape}, dtype: {result.dtype}")
-        return result
+            return torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
 
 
 class VisionStage(nn.Module):
