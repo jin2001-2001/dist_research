@@ -1498,6 +1498,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             return []
 
         grads_tuple = self.mm_bwd_cache.get(bwd_chunk_id, {}).get(modality, None)
+        print(f"在这里 {modality} {grads_tuple}")
         if not grads_tuple:
             # 该模态在本 mb 上可能为空（如该 batch 无音频）
             self._last_comm_plan[("SEND_B", bwd_chunk_id, modality)] = [0 for _ in range(max(1, num_splits))]
