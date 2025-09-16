@@ -51,8 +51,11 @@ class AudioStage(nn.Module):
         print(f"[AUDIOSTAGE_DEBUG] audio_inputs is None: {audio_inputs is None}")
 
         if audio_inputs is None:
-            print(f"[AUDIOSTAGE_DEBUG] audio_inputs is None, returning None")
-            return None
+            print(f"[AUDIOSTAGE_DEBUG] audio_inputs is None, returning dummy tensor for pipeline compatibility")
+            # 为了pipeline通信拓扑的完整性，即使没有音频输入也要返回一个tensor
+            # 这个dummy tensor在实际训练时不会被使用，只是为了保证pipeline结构完整
+            device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
+            return torch.zeros(1, 1, 768, device=device, dtype=torch.float32)  # [batch, seq_len, hidden_dim]
 
         if isinstance(audio_inputs, dict):
             print(f"[AUDIOSTAGE_DEBUG] audio_inputs is dict, keys: {list(audio_inputs.keys())}")
@@ -66,8 +69,9 @@ class AudioStage(nn.Module):
         print(f"[AUDIOSTAGE_DEBUG] audio_values type: {type(audio_values)}, is None: {audio_values is None}")
 
         if audio_values is None:
-            print(f"[AUDIOSTAGE_DEBUG] audio_values is None, returning None")
-            return None
+            print(f"[AUDIOSTAGE_DEBUG] audio_values is None, returning dummy tensor for pipeline compatibility")
+            device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
+            return torch.zeros(1, 1, 768, device=device, dtype=torch.float32)  # [batch, seq_len, hidden_dim]
 
         if hasattr(self.audio_enc, "get_dtype"):
             audio_values = audio_values.type(self.audio_enc.get_dtype())
@@ -95,7 +99,13 @@ class AudioStage(nn.Module):
                         audio_embeds = v
                         break
 
-        result = audio_embeds.contiguous() if isinstance(audio_embeds, torch.Tensor) else None
+        if isinstance(audio_embeds, torch.Tensor):
+            result = audio_embeds.contiguous()
+        else:
+            print(f"[AUDIOSTAGE_DEBUG] audio_embeds is not a tensor, returning dummy tensor for pipeline compatibility")
+            device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
+            result = torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
+
         print(f"[AUDIOSTAGE_DEBUG] Final result type: {type(result)}, is None: {result is None}")
         if isinstance(result, torch.Tensor):
             print(f"[AUDIOSTAGE_DEBUG] Result shape: {result.shape}, dtype: {result.dtype}")
