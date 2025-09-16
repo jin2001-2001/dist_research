@@ -228,9 +228,11 @@ def main():
     # Run
     iters = args.iters
     warmup = args.warmup
+    print("begin warmup")
     for it in range(iters):
         if it == warmup:
             total_T_start = time.perf_counter() # begin record total time...
+            print("begin record actual")
         model.zero_grad(set_to_none=True)
         out = model(input_ids=input_ids, labels=labels)
         loss = out.loss
@@ -241,7 +243,7 @@ def main():
             t1 = time.perf_counter()
         else:
             loss.backward()
-    
+    print("record/profile over")
     total_T = time.perf_counter() - total_T_start
     # Average over measured iterations
     denom = max(1, iters - warmup)
