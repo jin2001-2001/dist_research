@@ -6,7 +6,7 @@
     
     "stage_info": [
         {"index":0, "ranks":[0], "shard_layer":[0,14], "batch_allocate":[8]},
-        {"index":1, "ranks":[1,2], "shard_layer":[14,17], "batch_allocate":[4,4]},
-        {"index":2, "ranks":[3], "shard_layer":[17,28], "batch_allocate":[8]}
+        {"index":1, "ranks":[1,2], "shard_layer":[14,15], "batch_allocate":[4,4]},
+        {"index":2, "ranks":[3], "shard_layer":[15,28], "batch_allocate":[8]}
     ]
 }
