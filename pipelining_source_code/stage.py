@@ -244,6 +244,13 @@ class _PipelineStageBase(ABC):
         configuration, so it's important to also freeze/validate the output side to avoid any send/recv mismatches
         which could show up as hangs, silent corruption, or other errors.
         """
+        print(f"[CONFIGURE_META_DEBUG] stage_index={self.stage_index}, model_type={getattr(self, 'model_type', 'None')}")
+        print(f"[CONFIGURE_META_DEBUG] Configuring outputs_meta with {len(outputs_meta)} outputs")
+        if len(outputs_meta) == 0:
+            print(f"[CONFIGURE_META_DEBUG] WARNING: Attempting to configure with empty outputs_meta!")
+        for i, meta in enumerate(outputs_meta):
+            print(f"[CONFIGURE_META_DEBUG] Output[{i}]: type={type(meta).__name__}, shape={getattr(meta, 'shape', 'no_shape')}, dtype={getattr(meta, 'dtype', 'no_dtype')}")
+
         assert self._outputs_meta is None, (
             "Attempting to reconfigure output_meta, which is not supported"
         )
@@ -293,21 +300,13 @@ class _PipelineStageBase(ABC):
 
     def _prepare_backward_infra(self, num_microbatches: int):
         # TODO: this is needed for backward_maybe_with_nosync
-        import torch.distributed as dist
-        print(f"[DEBUG] _prepare_backward_infra called: stage_index={self.stage_index}, num_microbatches={num_microbatches}, rank={dist.get_rank() if dist.is_initialized() else 'not_init'}")
-        print(f"[DEBUG] act_send_info: {getattr(self, 'act_send_info', 'not_set')}")
-        print(f"[DEBUG] has_backward: {self.has_backward}")
-
         self.chunks = num_microbatches
 
         for mb_index in range(num_microbatches):
-            print(f"[DEBUG] Processing mb_index {mb_index}")
             # `grad_recv_info` is a mirror of `act_send_info`
-            grad_recv_result = self._create_grad_recv_info(
+            self.grad_recv_info[mb_index] = self._create_grad_recv_info(
                 self.act_send_info
             )
-            self.grad_recv_info[mb_index] = grad_recv_result
-            print(f"[DEBUG] Set grad_recv_info[{mb_index}] = {grad_recv_result}")
 
     @abstractmethod
     def _create_grad_recv_info(
@@ -1399,12 +1398,26 @@ class PipelineStage(_PipelineStageBase):
         )
 
         # set attributes needed for forward
+        print(f"[SHAPE_INFERENCE_DEBUG] stage_index={self.stage_index}, model_type={getattr(self, 'model_type', 'None')}")
+        print(f"[SHAPE_INFERENCE_DEBUG] Running forward with args: {[type(a).__name__ + str(getattr(a, 'shape', '')) for a in args]}")
+        print(f"[SHAPE_INFERENCE_DEBUG] kwargs: {list(kwargs.keys()) if kwargs else 'None'}")
+
         with torch.no_grad():
             outputs = self.submod(*args, **kwargs)
+
+        print(f"[SHAPE_INFERENCE_DEBUG] Raw output type: {type(outputs)}")
+        if isinstance(outputs, torch.Tensor):
+            print(f"[SHAPE_INFERENCE_DEBUG] Raw output shape: {outputs.shape}, dtype: {outputs.dtype}")
+        elif isinstance(outputs, (tuple, list)):
+            print(f"[SHAPE_INFERENCE_DEBUG] Raw output is sequence, length: {len(outputs)}")
+        else:
+            print(f"[SHAPE_INFERENCE_DEBUG] Raw output: {outputs}")
 
         # if single tensor, convert so it is always a list
         if isinstance(outputs, torch.Tensor):
             outputs = [outputs]
+
+        print(f"[SHAPE_INFERENCE_DEBUG] Normalized outputs length: {len(outputs)}")
 
         # communicate meta outputs not real outputs for two reasons
         # 1 - its faster (esp. since obj coll pickles tensor data!)
@@ -1412,6 +1425,11 @@ class PipelineStage(_PipelineStageBase):
         outputs_meta = tuple(
             tree_map_only(torch.Tensor, lambda x: x.to("meta"), outputs)
         )
+
+        print(f"[SHAPE_INFERENCE_DEBUG] outputs_meta length: {len(outputs_meta)}")
+        for i, meta in enumerate(outputs_meta):
+            print(f"[SHAPE_INFERENCE_DEBUG] outputs_meta[{i}]: type={type(meta).__name__}, shape={getattr(meta, 'shape', 'no_shape')}")
+
         logger.debug(
             "Shape inference: stage %s inputs %s, outputs %s",
             self.stage_index,
@@ -1510,19 +1528,46 @@ class PipelineStage(_PipelineStageBase):
         self.act_send_info: dict[int, list] = {}
 
         outputs_meta = self.get_outputs_meta()
-        print(f"[DEBUG] Setting up act_send_info: stage_index={self.stage_index}, is_last={self.is_last}")
-        print(f"[DEBUG] outputs_meta length: {len(outputs_meta)}")
+        print(f"[OUTPUTS_META_DEBUG] stage_index={self.stage_index}, model_type={getattr(self, 'model_type', 'None')}")
+        print(f"[OUTPUTS_META_DEBUG] outputs_meta length: {len(outputs_meta)}")
+        print(f"[OUTPUTS_META_DEBUG] _outputs_meta attribute: {getattr(self, '_outputs_meta', 'not_set')}")
+
+        if len(outputs_meta) == 0:
+            print(f"[OUTPUTS_META_DEBUG] WARNING: outputs_meta is empty!")
+            print(f"[OUTPUTS_META_DEBUG] inputs_meta: {getattr(self, 'inputs_meta', 'not_set')}")
+            print(f"[OUTPUTS_META_DEBUG] submod: {type(self.submod).__name__}")
+
+            # 检查是否进行过shape inference
+            if hasattr(self, 'inputs_meta') and self.inputs_meta is not None:
+                print(f"[OUTPUTS_META_DEBUG] inputs_meta exists, length: {len(self.inputs_meta)}")
+                print(f"[OUTPUTS_META_DEBUG] Trying to run forward with dummy inputs...")
+                try:
+                    import torch
+                    with torch.no_grad():
+                        dummy_args = tuple(torch.zeros_like(inp, device=self.device) if isinstance(inp, torch.Tensor) else inp for inp in self.inputs_meta)
+                        dummy_output = self.submod(*dummy_args)
+                        print(f"[OUTPUTS_META_DEBUG] Dummy forward output type: {type(dummy_output)}")
+                        if isinstance(dummy_output, torch.Tensor):
+                            print(f"[OUTPUTS_META_DEBUG] Dummy output shape: {dummy_output.shape}, dtype: {dummy_output.dtype}")
+                        elif isinstance(dummy_output, (tuple, list)):
+                            print(f"[OUTPUTS_META_DEBUG] Dummy output is sequence, length: {len(dummy_output)}")
+                            for i, out in enumerate(dummy_output):
+                                if isinstance(out, torch.Tensor):
+                                    print(f"[OUTPUTS_META_DEBUG] Output[{i}] shape: {out.shape}, dtype: {out.dtype}")
+                        else:
+                            print(f"[OUTPUTS_META_DEBUG] Dummy output: {dummy_output}")
+                except Exception as e:
+                    print(f"[OUTPUTS_META_DEBUG] Error running dummy forward: {e}")
+            else:
+                print(f"[OUTPUTS_META_DEBUG] inputs_meta not available for dummy forward")
 
         for idx in range(len(outputs_meta)):
             # We assume we always send to stage + 1
             if not self.is_last:
                 self.act_send_info[idx] = [self.stage_index + 1]
-                print(f"[DEBUG] act_send_info[{idx}] = [{self.stage_index + 1}] (sending to next stage)")
             else:
                 self.act_send_info[idx] = []
-                print(f"[DEBUG] act_send_info[{idx}] = [] (last stage, no sending)")
 
-        print(f"[DEBUG] Final act_send_info: {self.act_send_info}")
         return outputs
 
     def _create_grad_recv_info(
