@@ -74,17 +74,44 @@ class AudioStage(nn.Module):
             audio_values = audio_values.type(self.audio_enc.get_dtype())
         audio_values = audio_values.to(next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else audio_values.device)
 
-        # 根据源代码，Qwen2_5OmniAudioEncoder需要feature_lens参数
-        batch_size, seq_len = audio_values.shape[:2]
+        print(f"[AUDIO_DEBUG] Original audio_values shape: {audio_values.shape}")
 
-        # feature_lens: 每个样本的mel长度 (batch_size,)
-        feature_lens = torch.tensor([seq_len] * batch_size, dtype=torch.long, device=audio_values.device)
+        # 检查并转换数据格式
+        # 原始: [batch, time, features] = [1, 128, 3]
+        # 期望: [batch, mel_channels, time] = [1, 128, time_steps]
+
+        if audio_values.shape[-1] == 3 and audio_values.shape[1] == 128:
+            # 看起来我们的数据格式是 [batch, time=128, features=3]
+            # 但模型期望 [batch, mel_channels=128, time]
+            # 需要转置: [1, 128, 3] -> [1, 3, 128]
+            audio_values = audio_values.transpose(1, 2)
+            print(f"[AUDIO_DEBUG] Transposed to: {audio_values.shape}")
+
+            # 如果特征维度不是128，需要padding或重复
+            if audio_values.shape[1] != 128:
+                # 将3个特征扩展到128个mel频道
+                # 方法1：重复特征
+                repeat_factor = 128 // audio_values.shape[1]
+                remainder = 128 % audio_values.shape[1]
+
+                repeated = audio_values.repeat(1, repeat_factor, 1)
+                if remainder > 0:
+                    extra = audio_values[:, :remainder, :]
+                    audio_values = torch.cat([repeated, extra], dim=1)
+                else:
+                    audio_values = repeated
+                print(f"[AUDIO_DEBUG] Expanded to 128 mel channels: {audio_values.shape}")
+
+        batch_size, mel_channels, time_steps = audio_values.shape
+
+        # feature_lens: 每个样本的时间步长度 (batch_size,)
+        feature_lens = torch.tensor([time_steps] * batch_size, dtype=torch.long, device=audio_values.device)
 
         # aftercnn_lens: CNN后的长度，通常比原长度小
-        # 根据架构，audio通过CNN处理，长度会减少
-        aftercnn_lens = torch.tensor([seq_len // 4] * batch_size, dtype=torch.long, device=audio_values.device)
+        aftercnn_lens = torch.tensor([time_steps // 4] * batch_size, dtype=torch.long, device=audio_values.device)
 
-        print(f"[AUDIO_DEBUG] Calling audio_enc with feature_lens={feature_lens.tolist()}, aftercnn_lens={aftercnn_lens.tolist()}")
+        print(f"[AUDIO_DEBUG] Final audio_values shape: {audio_values.shape}")
+        print(f"[AUDIO_DEBUG] feature_lens: {feature_lens.tolist()}, aftercnn_lens: {aftercnn_lens.tolist()}")
 
         try:
             # 使用正确的参数调用音频编码器
