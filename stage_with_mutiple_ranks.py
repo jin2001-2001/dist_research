@@ -1510,6 +1510,29 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             self._last_comm_plan[("SEND_B", bwd_chunk_id, modality)] = [0 for _ in range(max(1, num_splits))]
             return []
 
+        # DEBUG: 详细检查要发送的梯度大小
+        total_elements = 0
+        total_bytes = 0
+        valid_grads = 0
+        print(f"[SEND_SIZE_DEBUG][rank{dist.get_rank()}] Analyzing {modality} grads for mb={bwd_chunk_id}:")
+        for i, grad in enumerate(grads_tuple):
+            if grad is None:
+                print(f"  grad[{i}]: None")
+            elif not isinstance(grad, torch.Tensor):
+                print(f"  grad[{i}]: Not tensor ({type(grad)})")
+            else:
+                elements = grad.numel()
+                bytes_size = elements * grad.element_size()
+                total_elements += elements
+                total_bytes += bytes_size
+                valid_grads += 1
+                print(f"  grad[{i}]: shape={grad.shape}, elements={elements}, bytes={bytes_size}, dtype={grad.dtype}")
+
+        print(f"[SEND_SIZE_DEBUG][rank{dist.get_rank()}] {modality} total: {valid_grads} grads, {total_elements} elements, {total_bytes} bytes ({total_bytes/1024/1024:.2f}MB) to rank {dest_rank}")
+
+        if total_bytes > 1024 * 1024:  # 超过1MB
+            print(f"[SIZE_WARNING][rank{dist.get_rank()}] ⚠️ Large transfer detected for {modality}: {total_bytes/1024/1024:.2f}MB > 1MB buffer limit!")
+
         peer_global_rank = self._peer_global_rank(dest_rank)
 
         plans = []  # [(slot_idx, flat, slices)]
@@ -1524,6 +1547,11 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             flat = grad.contiguous().view(-1)
             slices = self._compute_1d_slices(flat.numel(), num_splits)
             plans.append((slot_ctr, flat, slices))
+            # DEBUG: 检查每个张量的分片大小
+            max_slice_size = max(ln for _, ln in slices) if slices else 0
+            max_slice_bytes = max_slice_size * grad.element_size()
+            if max_slice_bytes > 1024 * 1024:  # 超过1MB
+                print(f"[SLICE_WARNING][rank{dist.get_rank()}] ⚠️ Large slice for {modality} grad[{slot_ctr}]: {max_slice_bytes/1024/1024:.2f}MB")
             slot_ctr += 1
 
         ops: list[dist.P2POp] = []
@@ -1534,13 +1562,27 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     continue
                 off, ln = slices[split_idx]
                 chunk_view = flat.narrow(0, off, ln)
+                chunk_bytes = chunk_view.numel() * chunk_view.element_size()
+                # DEBUG: 详细检查每个发送块
+                print(f"[CHUNK_DEBUG][rank{dist.get_rank()}] {modality} mb={bwd_chunk_id} slot={slot_idx} split={split_idx}: {chunk_view.numel()} elements, {chunk_bytes} bytes ({chunk_bytes/1024:.1f}KB)")
+
+                if chunk_bytes > 1024 * 1024:  # 超过1MB
+                    print(f"[CHUNK_ERROR][rank{dist.get_rank()}] ❌ Chunk too large for {modality}: {chunk_bytes/1024/1024:.2f}MB > 1MB limit!")
+
+                if not chunk_view.is_contiguous():
+                    print(f"[CHUNK_ERROR][rank{dist.get_rank()}] ❌ Non-contiguous chunk for {modality}")
+
+                if chunk_view.numel() == 0:
+                    print(f"[CHUNK_ERROR][rank{dist.get_rank()}] ❌ Empty chunk for {modality}")
+
                 tag = _mk_tag(1, bwd_chunk_id, slot_idx, split_idx, MOD2ID[modality])
                 ops.append(dist.P2POp(dist.isend, chunk_view, peer_global_rank, self.group, tag=tag))
                 ops_per_chunk[split_idx] += 1
 
         self._last_comm_plan[("SEND_B", bwd_chunk_id, modality)] = ops_per_chunk
+        print(f"[SEND_FINAL_DEBUG][rank{dist.get_rank()}] {modality} mb={bwd_chunk_id}: {len(ops)} send operations created")
         # 选择是否在此处 pop 掉缓存；通常等三模态都发完后再清理上层字典更安全
-        
+
         return ops
 
 
@@ -1900,9 +1942,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 retain_graph_for_packed_mbs=True
             )
 
-        # DEBUG: 简化检查backward输出
-        valid_grads = sum(1 for grad in grads_input if grad is not None)
-        print(f"[PACKING_BACKWARD_DEBUG][rank{dist.get_rank()}] grads_input: {valid_grads}/{len(grads_input)} valid gradients")
 
         # 3) 把 grads_input（按 flat 顺序）拆回三路模态 -> mm_bwd_cache[mb][mod]
         #    - 目标长度：与 forward 时对应模态 mm_fwd_cache[mb][mod] 的 tuple 长度一致
@@ -1921,18 +1960,39 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
         # grads_input 的顺序与 input_values（即 forward 里 flatten_input_tensors）一致
         valid_grad_count = 0
-        for gi, tag in zip(grads_input, order):
+        print(f"[GRAD_SPLIT_DEBUG][rank{dist.get_rank()}] Splitting {len(grads_input)} gradients by modality:")
+
+        for i, (gi, tag) in enumerate(zip(grads_input, order)):
             if tag is None:
+                print(f"  grads_input[{i}]: tag=None (skipping)")
                 continue  # 非 head 来的张量（如 position_ids 占位）或非 tensor
             mod, local_idx = tag
-            # 只回传浮点/复数梯度，保持发送端过滤一致性
-            if isinstance(gi, torch.Tensor) and (gi.is_floating_point() or torch.is_complex(gi)):
-                # 安全：越界忽略
+
+            if gi is None:
+                print(f"  grads_input[{i}]: None -> {mod}[{local_idx}] ❌")
+            elif not isinstance(gi, torch.Tensor):
+                print(f"  grads_input[{i}]: {type(gi)} -> {mod}[{local_idx}] ❌")
+            elif not (gi.is_floating_point() or torch.is_complex(gi)):
+                print(f"  grads_input[{i}]: {gi.dtype} -> {mod}[{local_idx}] ❌ (not float/complex)")
+            else:
+                # 只回传浮点/复数梯度，保持发送端过滤一致性
                 if 0 <= local_idx < len(per_mod_lists[mod]):
                     per_mod_lists[mod][local_idx] = gi
                     valid_grad_count += 1
+                    grad_size = gi.numel() * gi.element_size()
+                    print(f"  grads_input[{i}]: shape={gi.shape} -> {mod}[{local_idx}] ✅ ({grad_size} bytes)")
+                else:
+                    print(f"  grads_input[{i}]: shape={gi.shape} -> {mod}[{local_idx}] ❌ (index out of bounds)")
 
-        print(f"[PACKING_BACKWARD_DEBUG][rank{dist.get_rank()}] Assigned {valid_grad_count} valid gradients to modalities")
+        # 检查每个模态的总大小
+        for mod in ("text", "audio", "vision"):
+            if len(per_mod_lists[mod]) > 0:
+                mod_grads = [g for g in per_mod_lists[mod] if g is not None]
+                if mod_grads:
+                    mod_total_bytes = sum(g.numel() * g.element_size() for g in mod_grads)
+                    print(f"[MOD_SIZE_DEBUG][rank{dist.get_rank()}] {mod}: {len(mod_grads)} grads, {mod_total_bytes} bytes ({mod_total_bytes/1024/1024:.2f}MB)")
+                    if mod_total_bytes > 1024 * 1024:
+                        print(f"[MOD_WARNING][rank{dist.get_rank()}] ⚠️ {mod} exceeds 1MB: {mod_total_bytes/1024/1024:.2f}MB")
 
         # 写入 mm_bwd_cache（tuple 形式，供 get_bwd_send_ops_mm 使用）
         for mod in ("text", "audio", "vision"):

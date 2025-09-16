@@ -289,10 +289,6 @@ def stage_backward(
     in the autograd trace) as well as return a list of the gradients for the
     input values
     """
-    # DEBUG: 简化检查 - 只显示关键的requires_grad信息
-    requires_grad_count = sum(1 for inp in input_values if isinstance(inp, torch.Tensor) and inp.requires_grad)
-    total_tensors = sum(1 for inp in input_values if isinstance(inp, torch.Tensor))
-    print(f"[BACKWARD_DEBUG][rank{dist.get_rank()}] input_values: {requires_grad_count}/{total_tensors} tensors with requires_grad=True")
     
     if outputs_with_grads_idxs is not None:
         # Deprecated, not used in runtime calls, only exists in compiler
@@ -394,12 +390,6 @@ def stage_backward(
         """
         raise RuntimeError(exc_msg) from e
 
-    # DEBUG: 最终结果检查
-    valid_grads = sum(1 for grad in grad_inputs if grad is not None)
-    total_grads = len(grad_inputs)
-    print(f"[BACKWARD_DEBUG][rank{dist.get_rank()}] Final: {valid_grads}/{total_grads} valid gradients")
-    if valid_grads == 0 and total_grads > 0:
-        print(f"  ❌ ALL gradients are None!")
 
     return tuple(grad_inputs)
 
