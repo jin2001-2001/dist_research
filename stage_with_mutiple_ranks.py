@@ -1903,7 +1903,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 continue  # 非 head 来的张量（如 position_ids 占位）或非 tensor
             mod, local_idx = tag
             # 只回传浮点/复数梯度，保持发送端过滤一致性
-            print(f"在这里 {gi}")
+            print(f"在这里 {gi} 第三方 {tag}")
             if isinstance(gi, torch.Tensor) and (gi.is_floating_point() or torch.is_complex(gi)):
                 # 安全：越界忽略
                 print(f"个拉拉")
