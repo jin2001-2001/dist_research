@@ -1207,7 +1207,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         with self._async_recv_lock:
                             self._bwd_recv_works[key] = []
                             self._bwd_recv_posted[key] = threading.Event()
-
+                        
+                        print(f"在这里 {ops}")
                         self._spawn_chunked_recv_worker(
                             kind="RECV_B", action=action, ops=ops, plan=plan,
                             chunk_deps=chunk_deps_for_m,
