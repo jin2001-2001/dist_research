@@ -293,13 +293,21 @@ class _PipelineStageBase(ABC):
 
     def _prepare_backward_infra(self, num_microbatches: int):
         # TODO: this is needed for backward_maybe_with_nosync
+        import torch.distributed as dist
+        print(f"[DEBUG] _prepare_backward_infra called: stage_index={self.stage_index}, num_microbatches={num_microbatches}, rank={dist.get_rank() if dist.is_initialized() else 'not_init'}")
+        print(f"[DEBUG] act_send_info: {getattr(self, 'act_send_info', 'not_set')}")
+        print(f"[DEBUG] has_backward: {self.has_backward}")
+
         self.chunks = num_microbatches
 
         for mb_index in range(num_microbatches):
+            print(f"[DEBUG] Processing mb_index {mb_index}")
             # `grad_recv_info` is a mirror of `act_send_info`
-            self.grad_recv_info[mb_index] = self._create_grad_recv_info(
+            grad_recv_result = self._create_grad_recv_info(
                 self.act_send_info
             )
+            self.grad_recv_info[mb_index] = grad_recv_result
+            print(f"[DEBUG] Set grad_recv_info[{mb_index}] = {grad_recv_result}")
 
     @abstractmethod
     def _create_grad_recv_info(
@@ -1501,13 +1509,20 @@ class PipelineStage(_PipelineStageBase):
         # only need the rank that is being sent to
         self.act_send_info: dict[int, list] = {}
 
-        for idx in range(len(self.get_outputs_meta())):
+        outputs_meta = self.get_outputs_meta()
+        print(f"[DEBUG] Setting up act_send_info: stage_index={self.stage_index}, is_last={self.is_last}")
+        print(f"[DEBUG] outputs_meta length: {len(outputs_meta)}")
+
+        for idx in range(len(outputs_meta)):
             # We assume we always send to stage + 1
             if not self.is_last:
                 self.act_send_info[idx] = [self.stage_index + 1]
+                print(f"[DEBUG] act_send_info[{idx}] = [{self.stage_index + 1}] (sending to next stage)")
             else:
                 self.act_send_info[idx] = []
+                print(f"[DEBUG] act_send_info[{idx}] = [] (last stage, no sending)")
 
+        print(f"[DEBUG] Final act_send_info: {self.act_send_info}")
         return outputs
 
     def _create_grad_recv_info(

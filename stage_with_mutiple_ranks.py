@@ -385,10 +385,23 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         Backward grads: 1D-flat irecv into final buffers.
         生成顺序：外层 split_idx，内层轮询所有目标缓冲；同时统计每个分块的 P2POp 数量。
         """
+        print(f"[DEBUG] get_bwd_recv_ops called: stage_index={self.stage_index}, model_type={getattr(self, 'model_type', 'None')}, bwd_chunk_id={bwd_chunk_id}, rank={dist.get_rank() if dist.is_initialized() else 'not_init'}")
+        print(f"[DEBUG] has_backward={self.has_backward}, is_last={self.is_last}")
+
         if not self.has_backward or self.is_last:
+            print(f"[DEBUG] Returning empty list due to has_backward={self.has_backward} or is_last={self.is_last}")
+            return []
+
+        print(f"[DEBUG] Available grad_recv_info keys: {list(self.grad_recv_info.keys())}")
+        print(f"[DEBUG] Looking for bwd_chunk_id: {bwd_chunk_id}")
+
+        if bwd_chunk_id not in self.grad_recv_info:
+            print(f"[DEBUG] ERROR: bwd_chunk_id {bwd_chunk_id} not found in grad_recv_info!")
             return []
 
         recv_infos = self.grad_recv_info[bwd_chunk_id]
+        print(f"[DEBUG] recv_infos for bwd_chunk_id {bwd_chunk_id}: {recv_infos}")
+        print(f"[DEBUG] recv_infos length: {len(recv_infos) if recv_infos else 'None'}")
         ops: list[dist.P2POp] = []
         ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
 
@@ -986,32 +999,49 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         self,
         act_send_info: dict,
     ) -> tuple:
+        print(f"[DEBUG] _create_grad_recv_info called: stage_index={self.stage_index}, model_type={getattr(self, 'model_type', 'None')}, rank={dist.get_rank() if dist.is_initialized() else 'not_init'}")
+        print(f"[DEBUG] act_send_info: {act_send_info}")
+        print(f"[DEBUG] is_last: {self.is_last}")
+
         grad_recv_info_list = []
         outputs_meta = self.get_outputs_meta()
+        print(f"[DEBUG] outputs_meta length: {len(outputs_meta)}")
+        print(f"[DEBUG] outputs_meta content: {[type(m).__name__ + str(getattr(m, 'shape', '')) + str(getattr(m, 'dtype', '')) for m in outputs_meta]}")
 
         if not self.is_last:
+            print(f"[DEBUG] Processing non-last stage...")
             for idx, dst_list in act_send_info.items():
+                print(f"[DEBUG] Processing idx={idx}, dst_list={dst_list}")
                 dst = dst_list[0]
                 meta = outputs_meta[idx] if idx < len(outputs_meta) else None
+                print(f"[DEBUG] meta for idx {idx}: {meta}, type: {type(meta) if meta is not None else 'None'}")
 
                 if meta is None or not torch.is_tensor(meta):
+                    print(f"[DEBUG] Skipping idx {idx}: meta is None or not tensor")
                     grad_recv_info_list.append(None)
                     continue
-                
+
+                print(f"[DEBUG] meta.is_floating_point(): {meta.is_floating_point()}, torch.is_complex(meta): {torch.is_complex(meta)}")
                 if not (meta.is_floating_point() or torch.is_complex(meta)):
+                    print(f"[DEBUG] Skipping idx {idx}: not floating point or complex")
                     grad_recv_info_list.append(None)
                     continue
 
                 buffer = _make_tensor_from_meta(meta, self.device)
-                grad_recv_info_list.append(
-                    _RecvInfo(
-                        f"recv_grad_for_{self.stage_index}_from_{dst}",
-                        dst,
-                        buffer,
-                    )
+                recv_info = _RecvInfo(
+                    f"recv_grad_for_{self.stage_index}_from_{dst}",
+                    dst,
+                    buffer,
                 )
+                print(f"[DEBUG] Created recv_info for idx {idx}: {recv_info}")
+                grad_recv_info_list.append(recv_info)
+        else:
+            print(f"[DEBUG] This is the last stage, no grad recv info needed")
 
-        return tuple(grad_recv_info_list)
+        result = tuple(grad_recv_info_list)
+        print(f"[DEBUG] Final grad_recv_info_list length: {len(result)}")
+        print(f"[DEBUG] Final grad_recv_info_list: {result}")
+        return result
     
     def _create_grad_send_info(
         self,
@@ -1552,13 +1582,28 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         """
         head 端从 packing 接收本模态的输入梯度；先收进临时 flat，finish_bwd_recv_mm 后落入 self.mm_bwd_cache[mb][modality]。
         """
+        print(f"[DEBUG] get_bwd_recv_ops_mm called: stage_index={self.stage_index}, model_type={getattr(self, 'model_type', 'None')}, modality={modality}, bwd_chunk_id={bwd_chunk_id}, rank={dist.get_rank() if dist.is_initialized() else 'not_init'}")
+
         self._ensure_mm_tables()
+        print(f"[DEBUG] has_backward={self.has_backward}, is_last={self.is_last}")
+
         if not self.has_backward or self.is_last:
+            print(f"[DEBUG] Returning empty list due to has_backward={self.has_backward} or is_last={self.is_last}")
             return []
 
-        # recv_infos = tuple(self.mm_grad_recv_info.get(bwd_chunk_id, {}).get(modality, ()))
+        print(f"[DEBUG] Available grad_recv_info keys: {list(self.grad_recv_info.keys())}")
+        print(f"[DEBUG] Looking for bwd_chunk_id: {bwd_chunk_id}")
+
+        if bwd_chunk_id not in self.grad_recv_info:
+            print(f"[DEBUG] ERROR: bwd_chunk_id {bwd_chunk_id} not found in grad_recv_info!")
+            return []
+
         recv_infos = self.grad_recv_info[bwd_chunk_id]
+        print(f"[DEBUG] recv_infos for bwd_chunk_id {bwd_chunk_id}: {recv_infos}")
+        print(f"[DEBUG] recv_infos length: {len(recv_infos) if recv_infos else 'None'}")
+
         if not recv_infos:
+            print(f"[DEBUG] recv_infos is empty, setting comm plan and returning empty list")
             self._last_comm_plan[("RECV_B", bwd_chunk_id, modality)] = [0 for _ in range(max(1, num_splits))]
             return []
 
