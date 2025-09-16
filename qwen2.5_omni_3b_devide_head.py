@@ -806,12 +806,26 @@ def main():
             }
 
         # Audio packing: pass through whatever processor returned
+        print(f"[DATA_DEBUG] Processing pack for audio...")
+        print(f"[DATA_DEBUG] pack type: {type(pack)}")
+        if isinstance(pack, dict):
+            print(f"[DATA_DEBUG] pack keys: {list(pack.keys())}")
+            # 检查每个键的值
+            for k, v in pack.items():
+                if hasattr(v, 'shape'):
+                    print(f"[DATA_DEBUG] pack[{k}]: shape={v.shape}, dtype={v.dtype}")
+                else:
+                    print(f"[DATA_DEBUG] pack[{k}]: type={type(v)}, value={v}")
+
         audio_inputs = None
         if isinstance(pack, dict):
             for k in ("input_values", "audio_values", "input_features"):
                 if k in pack:
+                    print(f"[DATA_DEBUG] Found audio key '{k}' in pack")
                     audio_inputs = {k: pack[k]}
                     break
+            else:
+                print(f"[DATA_DEBUG] No audio keys found in pack")
 
         return {
             "input_ids": input_ids,
