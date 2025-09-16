@@ -74,31 +74,41 @@ class AudioStage(nn.Module):
             audio_values = audio_values.type(self.audio_enc.get_dtype())
         audio_values = audio_values.to(next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else audio_values.device)
 
+        # 根据源代码，Qwen2_5OmniAudioEncoder需要feature_lens参数
+        batch_size, seq_len = audio_values.shape[:2]
+
+        # feature_lens: 每个样本的mel长度 (batch_size,)
+        feature_lens = torch.tensor([seq_len] * batch_size, dtype=torch.long, device=audio_values.device)
+
+        # aftercnn_lens: CNN后的长度，通常比原长度小
+        # 根据架构，audio通过CNN处理，长度会减少
+        aftercnn_lens = torch.tensor([seq_len // 4] * batch_size, dtype=torch.long, device=audio_values.device)
+
+        print(f"[AUDIO_DEBUG] Calling audio_enc with feature_lens={feature_lens.tolist()}, aftercnn_lens={aftercnn_lens.tolist()}")
+
         try:
-            # 尝试最基本的调用方式，不传递attention_mask
-            res = self.audio_enc(audio_values)
-            print(f"[AUDIO_DEBUG] Success! Basic audio encoding completed")
-        except Exception as e1:
-            print(f"[AUDIO_DEBUG] Basic call failed: {e1}")
+            # 使用正确的参数调用音频编码器
+            res = self.audio_enc(
+                input_features=audio_values,
+                feature_lens=feature_lens,
+                aftercnn_lens=aftercnn_lens
+            )
+            print(f"[AUDIO_DEBUG] Success! Audio encoding completed with correct parameters")
+        except Exception as e:
+            print(f"[AUDIO_DEBUG] Failed with correct parameters: {e}")
 
-            # 尝试传递None作为第二个参数
+            # 尝试只传递feature_lens
             try:
-                res = self.audio_enc(audio_values, None)
-                print(f"[AUDIO_DEBUG] Success! Audio encoding with None mask completed")
+                res = self.audio_enc(
+                    input_features=audio_values,
+                    feature_lens=feature_lens
+                )
+                print(f"[AUDIO_DEBUG] Success! Audio encoding with feature_lens only")
             except Exception as e2:
-                print(f"[AUDIO_DEBUG] Call with None failed: {e2}")
-
-                # 最后尝试传递空的attention_mask
-                try:
-                    batch_size = audio_values.shape[0]
-                    empty_mask = torch.zeros(batch_size, 0, dtype=torch.long, device=audio_values.device)
-                    res = self.audio_enc(audio_values, empty_mask)
-                    print(f"[AUDIO_DEBUG] Success! Audio encoding with empty mask completed")
-                except Exception as e3:
-                    print(f"[AUDIO_DEBUG] All attempts failed. Last error: {e3}")
-                    batch_size, seq_len = audio_values.shape[:2]
-                    device = audio_values.device
-                    return torch.zeros(batch_size, seq_len // 4, 768, device=device, dtype=torch.float32)
+                print(f"[AUDIO_DEBUG] Also failed with feature_lens only: {e2}")
+                # 返回dummy tensor
+                device = audio_values.device
+                return torch.zeros(batch_size, seq_len // 4, 768, device=device, dtype=torch.float32)
 
         # 处理结果
         audio_embeds = None
