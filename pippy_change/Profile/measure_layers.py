@@ -221,9 +221,9 @@ def main():
         handles.append(blk.register_forward_pre_hook(pre_hook(i)))
         handles.append(blk.register_forward_hook(fwd_hook(i)))
         # full backward hook (PyTorch 1.10+). If not available, comment out.
-        #if hasattr(blk, "register_full_backward_hook"):
-            #handles.append(blk.register_full_backward_pre_hook(pre_bwd_hook(i)))
-            #handles.append(blk.register_full_backward_hook(bwd_hook(i)))
+        if hasattr(blk, "register_full_backward_hook"):
+            handles.append(blk.register_full_backward_pre_hook(pre_bwd_hook(i)))
+            handles.append(blk.register_full_backward_hook(bwd_hook(i)))
 
     # Run
     iters = args.iters
