@@ -19,13 +19,13 @@ model_options="
                 --num_layers=${NUM_LAYERS}
                 --gbs=${GBS}
               "
-if [ "${MODEL_NAME}" == "GPT" ]; then
-  if [ "${MODEL_SIZE}" == "1.5B" ] ; then
-    HIDDEN_SIZE=4096
-    SEQUENCE_LENGTH=1024
-    NUM_LAYERS=10
-    VOCAB_SIZE=51200
-    ATTENTION_HEAD_SIZE=32
+if [ "${MODEL_NAME}" == "Qwen3" ]; then
+  if [ "${MODEL_SIZE}" == "0.6B" ] ; then
+    HIDDEN_SIZE=1024
+    SEQUENCE_LENGTH=256
+    NUM_LAYERS=28
+    VOCAB_SIZE=151936
+    ATTENTION_HEAD_SIZE=16
   fi
 
   model_specific_options="
