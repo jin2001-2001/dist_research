@@ -289,7 +289,24 @@ def stage_backward(
     in the autograd trace) as well as return a list of the gradients for the
     input values
     """
-    
+
+    import torch.distributed as dist
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    print(f"[STAGE_BACKWARD_INTERNAL_DEBUG][rank{rank}] stage_backward called:")
+    print(f"  retain_graph_for_packed_mbs: {retain_graph_for_packed_mbs}")
+    print(f"  input_values length: {len(input_values)}")
+    for i, inp in enumerate(input_values):
+        if isinstance(inp, torch.Tensor):
+            print(f"    input[{i}]: shape={inp.shape}, requires_grad={inp.requires_grad}, grad_fn={inp.grad_fn is not None}")
+
+    if isinstance(stage_output, torch.Tensor):
+        print(f"  stage_output: shape={stage_output.shape}, requires_grad={stage_output.requires_grad}, grad_fn={stage_output.grad_fn is not None}")
+    elif isinstance(stage_output, (list, tuple)):
+        print(f"  stage_output length: {len(stage_output)}")
+        for i, o in enumerate(stage_output):
+            if isinstance(o, torch.Tensor):
+                print(f"    stage_output[{i}]: shape={o.shape}, requires_grad={o.requires_grad}, grad_fn={o.grad_fn is not None}")
+
     if outputs_with_grads_idxs is not None:
         # Deprecated, not used in runtime calls, only exists in compiler
         stage_output = [stage_output[i] for i in outputs_with_grads_idxs]
@@ -353,11 +370,26 @@ def stage_backward(
             stage_output, output_grads, extract_tensors_with_grads
         )
 
+        print(f"[AUTOGRAD_BACKWARD_DEBUG][rank{rank}] About to call torch.autograd.backward:")
+        print(f"  stage_output_tensors length: {len(stage_output_tensors)}")
+        print(f"  output_grad_tensors length: {len(output_grad_tensors)}")
+        print(f"  retain_graph: {retain_graph_for_packed_mbs}")
+        for i, (out_tensor, grad_tensor) in enumerate(zip(stage_output_tensors, output_grad_tensors)):
+            print(f"    pair[{i}]: out_shape={out_tensor.shape}, out_requires_grad={out_tensor.requires_grad}, grad_shape={grad_tensor.shape if grad_tensor is not None else 'None'}")
+
         torch.autograd.backward(
             stage_output_tensors,
             grad_tensors=output_grad_tensors,  # type: ignore[arg-type]
             retain_graph= retain_graph_for_packed_mbs
         )
+
+        print(f"[AUTOGRAD_BACKWARD_DEBUG][rank{rank}] torch.autograd.backward completed")
+        print(f"  Checking input gradients:")
+        for i, val in enumerate(input_values):
+            if isinstance(val, torch.Tensor):
+                has_grad = val.grad is not None
+                grad_shape = val.grad.shape if has_grad else 'None'
+                print(f"    input[{i}]: requires_grad={val.requires_grad}, has_grad={has_grad}, grad_shape={grad_shape}")
 
         # Extract gradients wrt the input values
         grad_inputs: list[Optional[torch.Tensor]] = []

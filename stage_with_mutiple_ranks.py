@@ -717,15 +717,33 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             tuple[tuple[Optional[torch.Tensor], ...], Optional[list[dict[str, Any]]]],
         ]:
             if backward_type == "full":
-                return lambda: (
-                    stage_backward(
+                def full_backward_with_debug():
+                    print(f"[STAGE_BACKWARD_DEBUG][rank{dist.get_rank()}] About to call stage_backward:")
+                    print(f"  stage_output type: {type(bwd_kwargs['stage_output'])}")
+                    print(f"  output_grads type: {type(bwd_kwargs['output_grads'])}")
+                    print(f"  input_values length: {len(bwd_kwargs['input_values'])}")
+                    print(f"  retain_graph_for_packed_mbs: {retain_graph_for_packed_mbs}")
+
+                    result = stage_backward(
                         bwd_kwargs["stage_output"],
                         bwd_kwargs["output_grads"],
                         bwd_kwargs["input_values"],
                         retain_graph_for_packed_mbs=retain_graph_for_packed_mbs
-                    ),
-                    None,
-                )
+                    )
+
+                    print(f"[STAGE_BACKWARD_DEBUG][rank{dist.get_rank()}] stage_backward returned:")
+                    if result:
+                        print(f"  result length: {len(result)}")
+                        for i, r in enumerate(result):
+                            if r is None:
+                                print(f"    result[{i}]: None")
+                            elif isinstance(r, torch.Tensor):
+                                print(f"    result[{i}]: shape={r.shape}, requires_grad={r.requires_grad}")
+                    else:
+                        print(f"  result: None")
+
+                    return result, None
+                return full_backward_with_debug
             elif backward_type == "input":
                 return lambda: stage_backward_input(
                     bwd_kwargs["stage_output"],
@@ -1747,12 +1765,18 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] audio_tuple: {len(audio_tuple)} items, types={[type(t).__name__ for t in audio_tuple]}")
         print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] vision_tuple: {len(vision_tuple)} items, types={[type(t).__name__ for t in vision_tuple]}")
         print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] mm_fwd_cache keys: {list(mm.keys())}")
-        if len(text_tuple) > 0:
-            print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] text_tuple[0] shape: {text_tuple[0].shape if isinstance(text_tuple[0], torch.Tensor) else 'N/A'}")
-        if len(audio_tuple) > 0:
-            print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] audio_tuple[0] shape: {audio_tuple[0].shape if isinstance(audio_tuple[0], torch.Tensor) else 'N/A'}")
-        if len(vision_tuple) > 0:
-            print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] vision_tuple[0] shape: {vision_tuple[0].shape if isinstance(vision_tuple[0], torch.Tensor) else 'N/A'}")
+
+        # 检查所有输入张量的requires_grad状态
+        print(f"[REQUIRES_GRAD_DEBUG][rank{dist.get_rank()}] Input tensors requires_grad status:")
+        for i, t in enumerate(text_tuple):
+            if isinstance(t, torch.Tensor):
+                print(f"  text[{i}]: shape={t.shape}, requires_grad={t.requires_grad}, dtype={t.dtype}")
+        for i, t in enumerate(audio_tuple):
+            if isinstance(t, torch.Tensor):
+                print(f"  audio[{i}]: shape={t.shape}, requires_grad={t.requires_grad}, dtype={t.dtype}")
+        for i, t in enumerate(vision_tuple):
+            if isinstance(t, torch.Tensor):
+                print(f"  vision[{i}]: shape={t.shape}, requires_grad={t.requires_grad}, dtype={t.dtype}")
 
         hidden, attn_4d, position_ids, input_ids, attention_mask_2d = _parse_text_bundle(text_tuple)
         if hidden is None or attn_4d is None:
@@ -1799,8 +1823,22 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         self._validate_fwd_input(args_for_val, kwargs_for_val)
 
         # ---------- 真正前向 ----------
+        print(f"[FORWARD_INPUT_DEBUG][rank{dist.get_rank()}] About to call forward with:")
+        print(f"  composite_args: {len(composite_args)} items, types={[type(a).__name__ for a in composite_args]}")
+        print(f"  composite_kwargs keys: {list(composite_kwargs.keys())}")
+
         try:
             output = self.forward_maybe_with_nosync(*composite_args, **composite_kwargs)
+
+            print(f"[FORWARD_OUTPUT_DEBUG][rank{dist.get_rank()}] Forward completed, output type: {type(output)}")
+            if isinstance(output, torch.Tensor):
+                print(f"  output shape: {output.shape}, requires_grad: {output.requires_grad}")
+            elif isinstance(output, (list, tuple)):
+                print(f"  output length: {len(output)}")
+                for i, o in enumerate(output):
+                    if isinstance(o, torch.Tensor):
+                        print(f"    output[{i}]: shape={o.shape}, requires_grad={o.requires_grad}")
+
         except Exception as e:
             exc_msg = f"""
             {self.log_prefix} failed to run packing forward:
@@ -1914,8 +1952,23 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             print(f"[PACKING_BWD_START_DEBUG][rank{dist.get_rank()}] loss shape: {loss.shape}")
         self._check_chunk_id(bwd_chunk_id)
 
-        # 从 forward 的 fwd_cache 拿回 stage_output 和“扁平输入列表”
+        # 从 forward 的 fwd_cache 拿回 stage_output 和"扁平输入列表"
         stage_output, input_values = self.fwd_cache.pop(bwd_chunk_id)
+
+        print(f"[COMPUTE_GRAPH_DEBUG][rank{dist.get_rank()}] Retrieved from fwd_cache for mb={bwd_chunk_id}:")
+        print(f"  stage_output type: {type(stage_output)}")
+        if isinstance(stage_output, torch.Tensor):
+            print(f"  stage_output: shape={stage_output.shape}, requires_grad={stage_output.requires_grad}, grad_fn={stage_output.grad_fn}")
+        elif isinstance(stage_output, (list, tuple)):
+            print(f"  stage_output length: {len(stage_output)}")
+            for i, o in enumerate(stage_output):
+                if isinstance(o, torch.Tensor):
+                    print(f"    stage_output[{i}]: shape={o.shape}, requires_grad={o.requires_grad}, grad_fn={o.grad_fn is not None}")
+
+        print(f"  input_values length: {len(input_values)}")
+        for i, inp in enumerate(input_values):
+            if isinstance(inp, torch.Tensor):
+                print(f"    input_values[{i}]: shape={inp.shape}, requires_grad={inp.requires_grad}, grad_fn={inp.grad_fn is not None}")
 
         # 1) 组装 backward 输入
         if self.is_last:
@@ -1927,8 +1980,23 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             bwd_kwargs = {"stage_output": stage_output, "output_grads": grads_output, "input_values": input_values}
 
 
+        # 检查backward调用前的计算图连接状态
+        print(f"[PRE_BACKWARD_DEBUG][rank{dist.get_rank()}] Before calling backward_maybe_with_nosync:")
+        print(f"  bwd_kwargs keys: {list(bwd_kwargs.keys())}")
+        print(f"  retain_graph_for_packed_mbs=True (重要：保持计算图)")
+
+        # 检查input_values和stage_output的连接性
+        if 'input_values' in bwd_kwargs:
+            inp_vals = bwd_kwargs['input_values']
+            print(f"  input_values在backward前的状态:")
+            for i, inp in enumerate(inp_vals):
+                if isinstance(inp, torch.Tensor):
+                    has_grad_fn = inp.grad_fn is not None
+                    print(f"    input[{i}]: requires_grad={inp.requires_grad}, has_grad_fn={has_grad_fn}")
+
         # 2) 真正 backward（保持与父类一致，但确保保留计算图，因同一图要给三路上游发送）
         if full_backward:
+            print(f"[BACKWARD_CALL_DEBUG][rank{dist.get_rank()}] Calling full backward...")
             grads_input, _ = self.backward_maybe_with_nosync(
                 "full",
                 bwd_kwargs,
@@ -1936,6 +2004,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 retain_graph_for_packed_mbs=True  # 关键：packing 汇聚的图别提前释放
             )
         else:
+            print(f"[BACKWARD_CALL_DEBUG][rank{dist.get_rank()}] Calling partial backward...")
             # packing 一般不会拆成 input/weight 两段；如需支持，可参照父类写法加 input/weight 分支
             grads_input, _ = self.backward_maybe_with_nosync(
                 "full",
@@ -1943,6 +2012,17 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 last_backward=last_backward,
                 retain_graph_for_packed_mbs=True
             )
+
+        print(f"[POST_BACKWARD_DEBUG][rank{dist.get_rank()}] After backward_maybe_with_nosync:")
+        print(f"  grads_input length: {len(grads_input) if grads_input else 'None'}")
+        if grads_input:
+            for i, gi in enumerate(grads_input):
+                if gi is None:
+                    print(f"    grads_input[{i}]: None")
+                elif isinstance(gi, torch.Tensor):
+                    print(f"    grads_input[{i}]: shape={gi.shape}, requires_grad={gi.requires_grad}")
+                else:
+                    print(f"    grads_input[{i}]: {type(gi)}")
 
 
         # 3) 把 grads_input（按 flat 顺序）拆回三路模态 -> mm_bwd_cache[mb][mod]
