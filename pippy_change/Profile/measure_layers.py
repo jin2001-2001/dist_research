@@ -105,7 +105,7 @@ def main():
     args = ap.parse_args()
 
     # Resolve dtype
-    dtype_map = {"float32": torch.float32, "float32": torch.bfloat16, "float16": torch.float16}
+    dtype_map = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}
     dtype = dtype_map[args.dtype]
 
     # Load model locally
