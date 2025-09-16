@@ -1451,6 +1451,12 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 ops_per_chunk[split_idx] += 1
 
         self._last_comm_plan[("RECV_F", fwd_chunk_id, modality)] = ops_per_chunk
+        try:
+            print(
+                f"[rank{dist.get_rank()}] get_fwd_recv_ops_mm: mb={fwd_chunk_id} mod={modality} plans={len(plans)} ops_per_chunk={ops_per_chunk}"
+            )
+        except Exception:
+            pass
         return ops
 
 
@@ -1462,6 +1468,10 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         self._ensure_mm_tables()
         post_list = self._mm_fwd_post_recv.pop((fwd_chunk_id, modality), None)
         if not post_list:
+            try:
+                print(f"[rank{dist.get_rank()}] finish_fwd_recv_mm: mb={fwd_chunk_id} modality={modality} has no post_list; mm_fwd_cache keys now: {list(self.mm_fwd_cache.get(fwd_chunk_id, {}).keys())}")
+            except Exception:
+                pass
             return
         tensors = []
         for tmp_full_flat, shape, dtype, device in post_list:
@@ -1471,6 +1481,18 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 tensor = tensor.requires_grad_(True)
             tensors.append(tensor)
         self.mm_fwd_cache[fwd_chunk_id][modality] = tuple(tensors)
+
+        # Debug: summarize what we stored for this modality
+        try:
+            shapes = [tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__ for t in tensors]
+            dtypes = [str(t.dtype) if isinstance(t, torch.Tensor) else "N/A" for t in tensors]
+            reqgs  = [bool(getattr(t, 'requires_grad', False)) if isinstance(t, torch.Tensor) else False for t in tensors]
+            print(
+                f"[rank{dist.get_rank()}] finish_fwd_recv_mm: mb={fwd_chunk_id} modality={modality} stored {len(tensors)} tensors; "
+                f"shapes={shapes}, dtypes={dtypes}, requires_grad={reqgs}"
+            )
+        except Exception:
+            pass
 
 
     # =============== Backward: SEND（packing → heads）================
@@ -1486,12 +1508,33 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         packing 端把“已按模态切分好”的 grads（来自 self.mm_bwd_cache[mb][modality]）逐分片 isend。
         """
         if not self.has_backward or self.is_first:
+            try:
+                print(f"[rank{dist.get_rank()}] get_bwd_send_ops_mm(skip): has_backward={self.has_backward}, is_first={self.is_first}, mb={bwd_chunk_id}, mod={modality}")
+            except Exception:
+                pass
             return []
+
+        # Debug: before lookup, dump keys for this mb if any
+        try:
+            mb_keys = list(self.mm_bwd_cache.get(bwd_chunk_id, {}).keys())
+            print(f"[rank{dist.get_rank()}] get_bwd_send_ops_mm: mb={bwd_chunk_id} mod={modality} dest_rank={dest_rank}; mm_bwd_cache keys for mb: {mb_keys}")
+        except Exception:
+            pass
 
         grads_tuple = self.mm_bwd_cache.get(bwd_chunk_id, {}).get(modality, None)
         if not grads_tuple:
             # 该模态在本 mb 上可能为空（如该 batch 无音频）
             self._last_comm_plan[("SEND_B", bwd_chunk_id, modality)] = [0 for _ in range(max(1, num_splits))]
+            # Extra diagnostics: check mm_fwd_cache sizes and whether forward had this modality
+            try:
+                fwd_mods = self.mm_fwd_cache.get(bwd_chunk_id, {})
+                sizes = {k: (len(v) if isinstance(v, (list, tuple)) else 'n/a') for k, v in fwd_mods.items()}
+                print(
+                    f"[rank{dist.get_rank()}] get_bwd_send_ops_mm: grads_tuple EMPTY for mb={bwd_chunk_id}, mod={modality}. "
+                    f"mm_fwd_cache sizes={sizes}; will send 0 ops."
+                )
+            except Exception:
+                pass
             return []
 
         total_elements = 0
@@ -1512,6 +1555,12 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
 
         peer_global_rank = self._peer_global_rank(dest_rank)
+        try:
+            print(
+                f"[rank{dist.get_rank()}] get_bwd_send_ops_mm: mb={bwd_chunk_id} mod={modality} grads={len(grads_tuple)} -> peer_global_rank={peer_global_rank}"
+            )
+        except Exception:
+            pass
 
         plans = []  # [(slot_idx, flat, slices)]
         slot_ctr = 0
@@ -1544,6 +1593,12 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 ops_per_chunk[split_idx] += 1
 
         self._last_comm_plan[("SEND_B", bwd_chunk_id, modality)] = ops_per_chunk
+        try:
+            print(
+                f"[rank{dist.get_rank()}] get_bwd_send_ops_mm: mb={bwd_chunk_id} mod={modality} ops_per_chunk={ops_per_chunk} total_ops={len(ops)}"
+            )
+        except Exception:
+            pass
         # 选择是否在此处 pop 掉缓存；通常等三模态都发完后再清理上层字典更安全
 
         return ops
@@ -1717,6 +1772,11 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
         # ---------- 从模态缓存取数据 ----------
         mm = self.mm_fwd_cache.get(fwd_chunk_id, {})
+        try:
+            sizes_dbg = {k: (len(v) if isinstance(v, (list, tuple)) else 'n/a') for k, v in mm.items()}
+            print(f"[rank{dist.get_rank()}] packing.forward_one_chunk: mb={fwd_chunk_id} mm_fwd_cache modalities={list(mm.keys())} sizes={sizes_dbg}")
+        except Exception:
+            pass
         text_tuple   = mm.get("text",   tuple())
         vision_tuple = mm.get("vision", tuple())
         audio_tuple  = mm.get("audio",  tuple())
@@ -1766,6 +1826,19 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
         self._validate_fwd_input(args_for_val, kwargs_for_val)
 
+        # Debug: summarize inputs to submodule
+        try:
+            def _s(x):
+                return tuple(x.shape) if isinstance(x, torch.Tensor) else None
+            dbg = {
+                'hidden': _s(hidden), 'attn_4d': _s(attn_4d), 'position_ids': _s(position_ids),
+                'input_ids': _s(input_ids), 'attention_mask_2d': _s(attention_mask_2d),
+                'image_embeds': _s(image_embeds), 'grid_thw': _s(grid_thw), 'audio_embeds': _s(audio_embeds)
+            }
+            print(f"[rank{dist.get_rank()}] packing.forward_one_chunk: mb={fwd_chunk_id} composed inputs: {dbg}")
+        except Exception:
+            pass
+
         # ---------- 真正前向 ----------
         try:
             output = self.forward_maybe_with_nosync(*composite_args, **composite_kwargs)
@@ -1793,6 +1866,11 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         flat_args = flatten_args(composite_args)
         flat_kwargs = flatten_args(composite_kwargs)
         flatten_input_tensors = flat_args + flat_kwargs
+        try:
+            rg_flags = [bool(getattr(t, 'requires_grad', False)) if isinstance(t, torch.Tensor) else None for t in flatten_input_tensors]
+            print(f"[rank{dist.get_rank()}] packing.forward_one_chunk: mb={fwd_chunk_id} flatten_input_tensors={len(flatten_input_tensors)} requires_grad={rg_flags}")
+        except Exception:
+            pass
 
         # [LEAF TENSOR FIX] 确保输入张量 requires_grad=True 且保持 leaf tensor 状态
         # 不修改输出，而是确保输入能正确追踪梯度
@@ -1832,6 +1910,11 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 "vision": len(vision_tuple),
             },
         }
+        try:
+            per_mod_counts = {m: sum(1 for x in order_map if isinstance(x, tuple) and x[0]==m) for m in ('text','audio','vision')}
+            print(f"[rank{dist.get_rank()}] packing.forward_one_chunk: mb={fwd_chunk_id} pack_map.sizes={self._mm_pack_map[fwd_chunk_id]['sizes']} mapped_counts={per_mod_counts}")
+        except Exception:
+            pass
 
         # ---------- 保存 fwd_cache，并验证输出 ----------
         # 直接保存原始的input_values，保持它们作为叶子张量
@@ -1845,6 +1928,11 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 for t in output_tuple
             )
         self._validate_fwd_outputs(outputs_for_val)
+        try:
+            out_shapes = [tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__ for t in (output_tuple if isinstance(output_tuple, tuple) else (output_tuple,))]
+            print(f"[rank{dist.get_rank()}] packing.forward_one_chunk: mb={fwd_chunk_id} output_tuple={out_shapes}")
+        except Exception:
+            pass
 
         return output
 
@@ -1882,6 +1970,11 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             grads_output = self._avg_next_stage_grads(grads_output)
             bwd_kwargs = {"stage_output": stage_output, "output_grads": grads_output, "input_values": input_values}
 
+        try:
+            go_len = (len(bwd_kwargs["output_grads"]) if isinstance(bwd_kwargs.get("output_grads"), (list, tuple)) else None)
+            print(f"[rank{dist.get_rank()}] packing.backward_one_chunk: mb={bwd_chunk_id} prep done; input_values={len(input_values)} output_grads_len={go_len}")
+        except Exception:
+            pass
 
 
         # 2) 真正 backward（保持与父类一致，但确保保留计算图，因同一图要给三路上游发送）
@@ -1901,6 +1994,14 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 retain_graph_for_packed_mbs=True
             )
 
+        try:
+            gi_types = [
+                (tuple(g.shape) if isinstance(g, torch.Tensor) else None) if g is not None else None
+                for g in grads_input
+            ]
+            print(f"[rank{dist.get_rank()}] packing.backward_one_chunk: mb={bwd_chunk_id} grads_input len={len(grads_input)} shapes={gi_types}")
+        except Exception:
+            pass
 
 
         # 3) 把 grads_input（按 flat 顺序）拆回三路模态 -> mm_bwd_cache[mb][mod]
@@ -1945,6 +2046,14 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         for mod in ("text", "audio", "vision"):
             if len(per_mod_lists[mod]) > 0:
                 self.mm_bwd_cache[bwd_chunk_id][mod] = tuple(per_mod_lists[mod])
+
+        try:
+            filled_counts = {m: sum(1 for x in per_mod_lists[m] if isinstance(x, torch.Tensor)) for m in ("text","audio","vision")}
+            sizes_dbg = {m: len(per_mod_lists[m]) for m in ("text","audio","vision")}
+            present = list(self.mm_bwd_cache.get(bwd_chunk_id, {}).keys())
+            print(f"[rank{dist.get_rank()}] packing.backward_one_chunk: mb={bwd_chunk_id} per_mod sizes={sizes_dbg} filled={filled_counts} mm_bwd_cache keys={present}")
+        except Exception:
+            pass
 
         # 4) 兼容：也把 grads_input 留在 bwd_cache，避免外部调用到基类 send 流程时出错
         if self.grad_send_info is None:
