@@ -808,24 +808,58 @@ def main():
         # Audio packing: pass through whatever processor returned
         print(f"[DATA_DEBUG] Processing pack for audio...")
         print(f"[DATA_DEBUG] pack type: {type(pack)}")
-        if isinstance(pack, dict):
-            print(f"[DATA_DEBUG] pack keys: {list(pack.keys())}")
-            # 检查每个键的值
-            for k, v in pack.items():
-                if hasattr(v, 'shape'):
-                    print(f"[DATA_DEBUG] pack[{k}]: shape={v.shape}, dtype={v.dtype}")
-                else:
-                    print(f"[DATA_DEBUG] pack[{k}]: type={type(v)}, value={v}")
+
+        # 安全地检查pack的内容
+        try:
+            if hasattr(pack, 'keys'):
+                keys = list(pack.keys())
+                print(f"[DATA_DEBUG] pack keys: {keys}")
+
+                # 安全地检查每个键的值
+                for k in keys:
+                    try:
+                        v = pack[k]
+                        if hasattr(v, 'shape'):
+                            print(f"[DATA_DEBUG] pack[{k}]: shape={v.shape}, dtype={v.dtype}")
+                        elif v is None:
+                            print(f"[DATA_DEBUG] pack[{k}]: None")
+                        else:
+                            print(f"[DATA_DEBUG] pack[{k}]: type={type(v)}")
+                    except Exception as e:
+                        print(f"[DATA_DEBUG] Error accessing pack[{k}]: {e}")
+            else:
+                print(f"[DATA_DEBUG] pack has no keys attribute")
+                print(f"[DATA_DEBUG] pack dir: {[attr for attr in dir(pack) if not attr.startswith('_')]}")
+        except Exception as e:
+            print(f"[DATA_DEBUG] Error inspecting pack: {e}")
 
         audio_inputs = None
-        if isinstance(pack, dict):
-            for k in ("input_values", "audio_values", "input_features"):
-                if k in pack:
-                    print(f"[DATA_DEBUG] Found audio key '{k}' in pack")
-                    audio_inputs = {k: pack[k]}
-                    break
+        try:
+            if hasattr(pack, 'keys'):
+                for k in ("input_values", "audio_values", "input_features"):
+                    if k in pack:
+                        print(f"[DATA_DEBUG] Found audio key '{k}' in pack")
+                        audio_inputs = {k: pack[k]}
+                        if hasattr(pack[k], 'shape'):
+                            print(f"[DATA_DEBUG] audio_inputs[{k}] shape: {pack[k].shape}")
+                        break
+                else:
+                    print(f"[DATA_DEBUG] No audio keys found in pack")
+                    print(f"[DATA_DEBUG] Available keys: {list(pack.keys())}")
             else:
-                print(f"[DATA_DEBUG] No audio keys found in pack")
+                print(f"[DATA_DEBUG] pack is not dict-like, checking as BatchFeature...")
+                # BatchFeature可能需要不同的访问方式
+                if hasattr(pack, 'data'):
+                    print(f"[DATA_DEBUG] pack.data keys: {list(pack.data.keys())}")
+                    for k in ("input_values", "audio_values", "input_features"):
+                        if k in pack.data:
+                            print(f"[DATA_DEBUG] Found audio key '{k}' in pack.data")
+                            audio_inputs = {k: pack.data[k]}
+                            break
+        except Exception as e:
+            print(f"[DATA_DEBUG] Error processing audio inputs: {e}")
+
+        print(f"[DATA_DEBUG] Final audio_inputs: {audio_inputs is not None}")
 
         return {
             "input_ids": input_ids,
