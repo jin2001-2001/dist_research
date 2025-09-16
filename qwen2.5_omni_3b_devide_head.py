@@ -90,14 +90,15 @@ class AudioStage(nn.Module):
         print(f"[AUDIO_DEBUG] Transposed to expected format [batch={batch_size}, features={mel_features}, time={time_steps}]")
         print(f"[AUDIO_DEBUG] New audio_values shape: {audio_values.shape}")
 
-        # feature_lens应该是每个样本的实际时间步长度，不是特征维度
-        # 根据API文档，feature_lens指的是时间维度的长度
-        feature_lens = torch.tensor([time_steps] * batch_size, dtype=torch.long, device=audio_values.device)
+        # 根据错误信息，feature_lens是用来拆分特征维度的，总和必须等于特征维度
+        # 当前特征维度是3，所以feature_lens应该是拆分这3个特征的方式
+        # 尝试每个样本使用全部3个特征
+        feature_lens = torch.tensor([mel_features] * batch_size, dtype=torch.long, device=audio_values.device)
 
-        # aftercnn_lens是CNN处理后的长度，通常是原长度的1/4下采样
-        aftercnn_lens = torch.tensor([time_steps // 4] * batch_size, dtype=torch.long, device=audio_values.device)
+        # aftercnn_lens可能是处理后的特征数，保持和feature_lens一致
+        aftercnn_lens = torch.tensor([mel_features] * batch_size, dtype=torch.long, device=audio_values.device)
 
-        print(f"[AUDIO_DEBUG] Trying with feature_lens={feature_lens.tolist()} (mel features), aftercnn_lens={aftercnn_lens.tolist()}")
+        print(f"[AUDIO_DEBUG] Trying with feature_lens={feature_lens.tolist()} (feature split), aftercnn_lens={aftercnn_lens.tolist()}")
 
         try:
             # 使用正确的参数调用音频编码器
