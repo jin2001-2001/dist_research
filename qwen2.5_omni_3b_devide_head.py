@@ -76,42 +76,28 @@ class AudioStage(nn.Module):
 
         print(f"[AUDIO_DEBUG] Original audio_values shape: {audio_values.shape}")
 
-        # 检查并转换数据格式
-        # 原始: [batch, time, features] = [1, 128, 3]
-        # 期望: [batch, mel_channels, time] = [1, 128, time_steps]
+        # 保存原始维度用于错误处理
+        batch_size, original_seq_len = audio_values.shape[:2]
 
-        if audio_values.shape[-1] == 3 and audio_values.shape[1] == 128:
-            # 看起来我们的数据格式是 [batch, time=128, features=3]
-            # 但模型期望 [batch, mel_channels=128, time]
-            # 需要转置: [1, 128, 3] -> [1, 3, 128]
-            audio_values = audio_values.transpose(1, 2)
-            print(f"[AUDIO_DEBUG] Transposed to: {audio_values.shape}")
+        # 根据错误信息，模型期望的格式可能是 [batch, mel_features, time_steps]
+        # 但我们有 [batch, time_steps, features]
+        # 错误提示在padded_and_mask_function中，说明模型内部处理有问题
 
-            # 如果特征维度不是128，需要padding或重复
-            if audio_values.shape[1] != 128:
-                # 将3个特征扩展到128个mel频道
-                # 方法1：重复特征
-                repeat_factor = 128 // audio_values.shape[1]
-                remainder = 128 % audio_values.shape[1]
+        # 尝试不同的数据格式
+        # 方案1: 使用原始数据，但调整feature_lens
+        time_steps = audio_values.shape[1]  # 128
+        mel_features = audio_values.shape[2]  # 3
 
-                repeated = audio_values.repeat(1, repeat_factor, 1)
-                if remainder > 0:
-                    extra = audio_values[:, :remainder, :]
-                    audio_values = torch.cat([repeated, extra], dim=1)
-                else:
-                    audio_values = repeated
-                print(f"[AUDIO_DEBUG] Expanded to 128 mel channels: {audio_values.shape}")
+        print(f"[AUDIO_DEBUG] Using original format [batch={batch_size}, time={time_steps}, features={mel_features}]")
 
-        batch_size, mel_channels, time_steps = audio_values.shape
-
-        # feature_lens: 每个样本的时间步长度 (batch_size,)
+        # feature_lens应该是每个样本的实际时间步长度，不是特征维度
+        # 根据API文档，feature_lens指的是时间维度的长度
         feature_lens = torch.tensor([time_steps] * batch_size, dtype=torch.long, device=audio_values.device)
 
-        # aftercnn_lens: CNN后的长度，通常比原长度小
+        # aftercnn_lens是CNN处理后的长度，通常是原长度的1/4下采样
         aftercnn_lens = torch.tensor([time_steps // 4] * batch_size, dtype=torch.long, device=audio_values.device)
 
-        print(f"[AUDIO_DEBUG] Final audio_values shape: {audio_values.shape}")
-        print(f"[AUDIO_DEBUG] feature_lens: {feature_lens.tolist()}, aftercnn_lens: {aftercnn_lens.tolist()}")
+        print(f"[AUDIO_DEBUG] Trying with feature_lens={feature_lens.tolist()} (mel features), aftercnn_lens={aftercnn_lens.tolist()}")
 
         try:
             # 使用正确的参数调用音频编码器
@@ -135,7 +121,7 @@ class AudioStage(nn.Module):
                 print(f"[AUDIO_DEBUG] Also failed with feature_lens only: {e2}")
                 # 返回dummy tensor
                 device = audio_values.device
-                return torch.zeros(batch_size, seq_len // 4, 768, device=device, dtype=torch.float32)
+                return torch.zeros(batch_size, original_seq_len // 4, 768, device=device, dtype=torch.float32)
 
         # 处理结果
         audio_embeds = None
