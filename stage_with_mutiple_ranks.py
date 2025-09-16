@@ -1559,6 +1559,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         recv_infos = tuple(self.mm_grad_recv_info.get(bwd_chunk_id, {}).get(modality, ()))
         if not recv_infos:
             self._last_comm_plan[("RECV_B", bwd_chunk_id, modality)] = [0 for _ in range(max(1, num_splits))]
+            print(f"recv_infos为空")
             return []
 
         plans = []  # [(slot_idx, tmp_full_flat, slices, peer_global_rank, shape, dtype, device)]
