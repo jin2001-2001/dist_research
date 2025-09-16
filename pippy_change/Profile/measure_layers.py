@@ -75,7 +75,7 @@ def model_state_bytes(n_params: int,
     """
     p_sz = DT_SIZES[param_dtype]
     g_sz = DT_SIZES[grad_dtype] if grad_dtype else p_sz            # grads default to param dtype
-    a_sz = DT_SIZES[adam_state_dtype]
+    a_sz = p_sz
 
     bytes_params = n_params * p_sz
     bytes_grads  = n_params * g_sz
@@ -95,13 +95,13 @@ def model_state_bytes(n_params: int,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model_path", type=str, default="Qwen/Qwen3-0.6B", help="HF name or local path")
-    ap.add_argument("--seq_len", type=int, default=2048)
-    ap.add_argument("--batch", type=int, required=True)
+    ap.add_argument("--seq_len", type=int, default=256)
+    ap.add_argument("--batch", type=int, default=5)
     ap.add_argument("--dtype", type=str, default="bfloat16", choices=["float32","bfloat16","float16"])
     ap.add_argument("--iters", type=int, default=2)
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--out", type=str, required=True)
-    ap.add_argument("--host", type=str, default="cpu1", help="Identifier for this machine, e.g., cpu1")
+    ap.add_argument("--host", type=str, default="CPU100", help="Identifier for this machine, e.g., cpu1")
     args = ap.parse_args()
 
     # Resolve dtype
@@ -304,7 +304,7 @@ def main():
         original_mem = pbytes[i]
         #JIn: now, we do a general estimiation of runtime mem...
 
-        runingM = model_state_bytes(original_mem, param_dtype=args.dtype)["total_model_states"]
+        runingM = model_state_bytes(original_mem, param_dtype=args.dtype)["total_model_states"]/1024
         metis_result["execution_memory"]["layer_memory_total_mb"].append(runingM)
         metis_result["execution_memory"]["total_memory"]+=runingM
 

@@ -12,7 +12,7 @@ def parse_hostfile(file_path: str) -> Dict[int, Dict[str, Union[str, int]]]:
         while line:
             splitted_data = line.split(' ')
             ip = splitted_data[0]
-            num_device = int(splitted_data[1][6:7])
+            num_device = int(splitted_data[1])
 
             hostfile_info[num_node] = dict()
             hostfile_info[num_node]["ip"] = ip
@@ -48,6 +48,14 @@ class DeviceType(Enum):
     V100 = "v100"
     P100 = "p100"
     T4 = "t4"
+    CPU100 = "cpu100"
+    CPU90 = "cpu90"
+    CPU80 = "cpu80"
+    CPU70 = "cpu70"
+    CPU60 = "cpu60"
+    CPU50 = "cpu50"
+    CPU40 = "cpu40"
+    CPU30 = "cpu30"
 
     @staticmethod
     def from_string(s: str) -> 'DeviceType':
