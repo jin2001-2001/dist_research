@@ -67,64 +67,37 @@ class AudioStage(nn.Module):
 
         # 确保audio_values是float类型
         if audio_values.dtype != torch.float32:
-            print(f"[AUDIO_DEBUG] Converting audio_values from {audio_values.dtype} to float32")
             audio_values = audio_values.float()
 
         if hasattr(self.audio_enc, "get_dtype"):
             audio_values = audio_values.type(self.audio_enc.get_dtype())
         audio_values = audio_values.to(next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else audio_values.device)
 
-        print(f"[AUDIO_DEBUG] Original audio_values shape: {audio_values.shape}")
-
-        # 保存原始维度用于错误处理
         batch_size, original_seq_len = audio_values.shape[:2]
+        time_steps = audio_values.shape[1]
+        mel_features = audio_values.shape[2]
 
-        # 根据错误信息，模型期望的格式是 [batch, mel_features, time_steps]
-        # 但我们有 [batch, time_steps, features]，需要转置
-        time_steps = audio_values.shape[1]  # 128
-        mel_features = audio_values.shape[2]  # 3
+        audio_values = audio_values.transpose(1, 2)
 
-        # 转置到期望的格式：[batch, features, time]
-        audio_values = audio_values.transpose(1, 2)  # [1, 128, 3] -> [1, 3, 128]
-
-        print(f"[AUDIO_DEBUG] Transposed to expected format [batch={batch_size}, features={mel_features}, time={time_steps}]")
-        print(f"[AUDIO_DEBUG] New audio_values shape: {audio_values.shape}")
-
-        # 根据错误信息，feature_lens是用来拆分特征维度的，总和必须等于特征维度
-        # 当前特征维度是3，所以feature_lens应该是拆分这3个特征的方式
-        # 尝试每个样本使用全部3个特征
         feature_lens = torch.tensor([mel_features] * batch_size, dtype=torch.long, device=audio_values.device)
-
-        # aftercnn_lens可能是处理后的特征数，保持和feature_lens一致
         aftercnn_lens = torch.tensor([mel_features] * batch_size, dtype=torch.long, device=audio_values.device)
 
-        print(f"[AUDIO_DEBUG] Trying with feature_lens={feature_lens.tolist()} (feature split), aftercnn_lens={aftercnn_lens.tolist()}")
-
         try:
-            # 使用正确的参数调用音频编码器
             res = self.audio_enc(
                 input_features=audio_values,
                 feature_lens=feature_lens,
                 aftercnn_lens=aftercnn_lens
             )
-            print(f"[AUDIO_DEBUG] Success! Audio encoding completed with correct parameters")
-        except Exception as e:
-            print(f"[AUDIO_DEBUG] Failed with correct parameters: {e}")
-
-            # 尝试只传递feature_lens
+        except Exception:
             try:
                 res = self.audio_enc(
                     input_features=audio_values,
                     feature_lens=feature_lens
                 )
-                print(f"[AUDIO_DEBUG] Success! Audio encoding with feature_lens only")
-            except Exception as e2:
-                print(f"[AUDIO_DEBUG] Also failed with feature_lens only: {e2}")
-                # 返回dummy tensor
+            except Exception:
                 device = audio_values.device
                 return torch.zeros(batch_size, original_seq_len // 4, 768, device=device, dtype=torch.float32)
 
-        # 处理结果
         audio_embeds = None
         if isinstance(res, torch.Tensor):
             audio_embeds = res
@@ -141,10 +114,8 @@ class AudioStage(nn.Module):
                         break
 
         if isinstance(audio_embeds, torch.Tensor):
-            print(f"[AUDIO_DEBUG] Success! Output shape: {audio_embeds.shape}")
             return audio_embeds.contiguous()
         else:
-            print(f"[AUDIO_DEBUG] No valid tensor output, returning dummy")
             device = audio_values.device
             batch_size, seq_len = audio_values.shape[:2]
             return torch.zeros(batch_size, seq_len // 4, 768, device=device, dtype=torch.float32)
