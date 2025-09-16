@@ -97,7 +97,7 @@ def main():
     ap.add_argument("--model_path", type=str, default="Qwen/Qwen3-0.6B", help="HF name or local path")
     ap.add_argument("--seq_len", type=int, default=256)
     ap.add_argument("--batch", type=int, default=1)
-    ap.add_argument("--dtype", type=str, default="bfloat16", choices=["float32","bfloat16","float16"])
+    ap.add_argument("--dtype", type=str, default="float32", choices=["float32","bfloat16","float16"])
     ap.add_argument("--iters", type=int, default=2)
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--out", type=str, required=True)
