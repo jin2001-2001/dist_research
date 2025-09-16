@@ -206,7 +206,8 @@ class TextStage(nn.Module):
         # 在头部阶段直接给出基础 position_ids（三路堆叠），避免下游元信息校验因 None 失败
         base_pos = torch.arange(T, device=device).unsqueeze(0).repeat(B, 1)
         position_ids = torch.stack([base_pos, base_pos, base_pos], dim=0).contiguous()
-        return hidden.contiguous(), attn_4d.contiguous(), position_ids
+        # 额外返回 input_ids 和 attention_mask，供 packing 阶段做多模态替换与位置计算
+        return hidden.contiguous(), attn_4d.contiguous(), position_ids, input_ids.contiguous(), attention_mask.contiguous()
 
 
 # -----------------------------
@@ -222,6 +223,59 @@ class Stage1(nn.Module):
         cfg = getattr(text_model, "config", None)
         self.image_token_id = getattr(cfg, "image_token_id", None)
         self.audio_token_id = getattr(cfg, "audio_token_id", None)
+
+        # 推断与适配工具（不引入新可训练参数，保持最小侵入）
+        self._hidden_size = getattr(getattr(text_model, 'embed_tokens', None), 'weight', None)
+        if self._hidden_size is not None and hasattr(self._hidden_size, 'shape'):
+            self._hidden_size = int(self._hidden_size.shape[1])
+        else:
+            self._hidden_size = None
+
+    @staticmethod
+    def _adapt_feats_to_hidden(feats: torch.Tensor, hidden_dim: int) -> torch.Tensor:
+        """将任意形状 [..., D] 的特征适配为 [N, hidden_dim]：
+        - 若 feats.dim() == 3，拉平成 [N, D]
+        - 若 D < hidden_dim：在最后一维右侧 zero-pad 保持梯度传递（使用 cat）
+        - 若 D > hidden_dim：直接截断到左侧 hidden_dim（保持梯度传递）
+        不引入可训练参数，最大限度减少侵入。
+        """
+        if feats is None:
+            return feats
+        if feats.dim() == 3:
+            feats = feats.reshape(-1, feats.size(-1))
+        elif feats.dim() == 2:
+            pass
+        else:
+            feats = feats.reshape(-1, feats.size(-1))
+
+        D = feats.size(-1)
+        if D == hidden_dim:
+            return feats
+        if D < hidden_dim:
+            pad = torch.zeros(feats.size(0), hidden_dim - D, device=feats.device, dtype=feats.dtype)
+            return torch.cat([feats, pad], dim=-1)
+        else:  # D > hidden_dim
+            return feats[:, :hidden_dim]
+
+    @staticmethod
+    def _infer_token_id_by_count(input_ids: torch.Tensor, expected_count: int, prefer_large_id: bool = True) -> int | None:
+        """在 input_ids 中根据出现次数推断特殊 token 的 id。
+        - 统计每个 id 的出现次数，寻找与 expected_count 恰好相等的 id；
+        - 若有多个候选，返回数值更大的 id（通常新增特殊 token id 较大）；
+        - 若找不到，返回 None。
+        """
+        if input_ids is None or expected_count <= 0:
+            return None
+        ids = input_ids.reshape(-1)
+        uniq, cnt = torch.unique(ids, return_counts=True)
+        mask = (cnt == expected_count)
+        cand = uniq[mask]
+        if cand.numel() == 0:
+            return None
+        if cand.numel() == 1:
+            return int(cand.item())
+        # 多候选：选取较大的 id（启发式）
+        return int(torch.max(cand).item()) if prefer_large_id else int(torch.min(cand).item())
 
     @staticmethod
     def _replace_feats_by_token_id(input_ids, inputs_embeds, feats, special_token_id):
@@ -314,8 +368,30 @@ class Stage1(nn.Module):
 
         # 1) pack：若提供了任一模态特征且有 input_ids，则做按位替换
         if input_ids is not None:
+            # 目标 hidden 维度
+            H = hidden.size(-1)
+
+            # 视觉替换：维度自适配 + id 推断
             if image_embeds is not None:
-                hidden = self._replace_feats_by_token_id(input_ids, hidden, image_embeds, image_token_id)
+                img_feats = self._adapt_feats_to_hidden(image_embeds, H)
+                # 若未提供 token_id，依据计数推断
+                if image_token_id is None:
+                    image_token_id = self._infer_token_id_by_count(input_ids, expected_count=img_feats.size(0))
+                    try:
+                        import torch.distributed as dist
+                        rid = dist.get_rank() if dist.is_initialized() else -1
+                        print(f"[rank{rid}] Stage1.forward: inferred image_token_id={image_token_id} from count={img_feats.size(0)}")
+                    except Exception:
+                        pass
+                if image_token_id is not None:
+                    hidden = self._replace_feats_by_token_id(input_ids, hidden, img_feats, image_token_id)
+                else:
+                    try:
+                        import torch.distributed as dist
+                        rid = dist.get_rank() if dist.is_initialized() else -1
+                        print(f"[rank{rid}] Stage1.forward: could not infer image_token_id; skip image replace")
+                    except Exception:
+                        pass
             else:
                 try:
                     import torch.distributed as dist
@@ -323,8 +399,27 @@ class Stage1(nn.Module):
                     print(f"[rank{rid}] Stage1.forward: skip image replace; image_embeds is None")
                 except Exception:
                     pass
+
+            # 音频替换：拉平为 [N, D] + 维度自适配 + id 推断
             if audio_embeds is not None:
-                hidden = self._replace_feats_by_token_id(input_ids, hidden, audio_embeds, audio_token_id)
+                aud_feats = self._adapt_feats_to_hidden(audio_embeds, H)
+                if audio_token_id is None:
+                    audio_token_id = self._infer_token_id_by_count(input_ids, expected_count=aud_feats.size(0))
+                    try:
+                        import torch.distributed as dist
+                        rid = dist.get_rank() if dist.is_initialized() else -1
+                        print(f"[rank{rid}] Stage1.forward: inferred audio_token_id={audio_token_id} from count={aud_feats.size(0)}")
+                    except Exception:
+                        pass
+                if audio_token_id is not None:
+                    hidden = self._replace_feats_by_token_id(input_ids, hidden, aud_feats, audio_token_id)
+                else:
+                    try:
+                        import torch.distributed as dist
+                        rid = dist.get_rank() if dist.is_initialized() else -1
+                        print(f"[rank{rid}] Stage1.forward: could not infer audio_token_id; skip audio replace")
+                    except Exception:
+                        pass
             else:
                 try:
                     import torch.distributed as dist
