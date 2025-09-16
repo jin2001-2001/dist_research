@@ -613,7 +613,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         # 对于第一阶段，如果有kwargs数据，空args是正常的
         is_first_stage = getattr(self, 'prev_group', None) is None
-        has_kwargs_data = kwargs and any(kwargs.values())
+        has_kwargs_data = kwargs and any(v is not None for v in kwargs.values())
 
         if composite_args is None or (len(composite_args) == 0 and not (is_first_stage and has_kwargs_data)):
             raise RuntimeError(
