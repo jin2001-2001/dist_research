@@ -1,0 +1,26 @@
+{
+  "IP1": {
+    "instance_type": "V100",
+    "inter_bandwidth": 312500000.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 16
+  },
+  "IP2": {
+    "instance_type": "P100",
+    "inter_bandwidth": 312500000.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 15
+  },
+  "IP3": {
+    "instance_type": "T4",
+    "inter_bandwidth": 312500000.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 15
+  },
+  "IP4": {
+    "instance_type": "A100",
+    "inter_bandwidth": 312500000.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 80
+  }
+}
