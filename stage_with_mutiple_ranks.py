@@ -1498,8 +1498,16 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         if not self.has_backward or self.is_first:
             return []
 
+        # [DEBUG] 检查mm_bwd_cache状态
+        print(f"[BWD_CACHE_DEBUG][rank{dist.get_rank()}] mb={bwd_chunk_id} checking modality '{modality}'")
+        print(f"[BWD_CACHE_DEBUG][rank{dist.get_rank()}] mm_bwd_cache keys: {list(self.mm_bwd_cache.keys())}")
+        if bwd_chunk_id in self.mm_bwd_cache:
+            print(f"[BWD_CACHE_DEBUG][rank{dist.get_rank()}] mb={bwd_chunk_id} available modalities: {list(self.mm_bwd_cache[bwd_chunk_id].keys())}")
+        else:
+            print(f"[BWD_CACHE_DEBUG][rank{dist.get_rank()}] mb={bwd_chunk_id} NOT FOUND in mm_bwd_cache!")
+
         grads_tuple = self.mm_bwd_cache.get(bwd_chunk_id, {}).get(modality, None)
-        print(f"在这里 {modality} {grads_tuple}")
+        print(f"[BWD_CACHE_DEBUG][rank{dist.get_rank()}] {modality} grads_tuple: {grads_tuple}")
         if not grads_tuple:
             # 该模态在本 mb 上可能为空（如该 batch 无音频）
             self._last_comm_plan[("SEND_B", bwd_chunk_id, modality)] = [0 for _ in range(max(1, num_splits))]
@@ -1734,6 +1742,18 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         vision_tuple = mm.get("vision", tuple())
         audio_tuple  = mm.get("audio",  tuple())
 
+        print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id} Received modality inputs:")
+        print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] text_tuple: {len(text_tuple)} items, types={[type(t).__name__ for t in text_tuple]}")
+        print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] audio_tuple: {len(audio_tuple)} items, types={[type(t).__name__ for t in audio_tuple]}")
+        print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] vision_tuple: {len(vision_tuple)} items, types={[type(t).__name__ for t in vision_tuple]}")
+        print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] mm_fwd_cache keys: {list(mm.keys())}")
+        if len(text_tuple) > 0:
+            print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] text_tuple[0] shape: {text_tuple[0].shape if isinstance(text_tuple[0], torch.Tensor) else 'N/A'}")
+        if len(audio_tuple) > 0:
+            print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] audio_tuple[0] shape: {audio_tuple[0].shape if isinstance(audio_tuple[0], torch.Tensor) else 'N/A'}")
+        if len(vision_tuple) > 0:
+            print(f"[MODALITY_INPUT_DEBUG][rank{dist.get_rank()}] vision_tuple[0] shape: {vision_tuple[0].shape if isinstance(vision_tuple[0], torch.Tensor) else 'N/A'}")
+
         hidden, attn_4d, position_ids, input_ids, attention_mask_2d = _parse_text_bundle(text_tuple)
         if hidden is None or attn_4d is None:
             raise RuntimeError(
@@ -1804,18 +1824,40 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         flat_kwargs = flatten_args(composite_kwargs)
         flatten_input_tensors = flat_args + flat_kwargs
 
+        print(f"[FWD_FLAT_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id} flattened {len(flatten_input_tensors)} input tensors")
+        print(f"[FWD_FLAT_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id} tensor types: {[type(t).__name__ for t in flatten_input_tensors]}")
+        print(f"[FWD_FLAT_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id} tensor shapes: {[t.shape if isinstance(t, torch.Tensor) else 'N/A' for t in flatten_input_tensors]}")
 
         order_map: list[Optional[tuple[str, int]]] = []
-        for ten in flatten_input_tensors:
+        for i, ten in enumerate(flatten_input_tensors):
             if not isinstance(ten, torch.Tensor):
-                order_map.append(None); continue
+                order_map.append(None)
+                print(f"[ORDER_MAP_DEBUG][rank{dist.get_rank()}] flatten[{i}]: Non-tensor, appending None")
+                continue
             j = _find_idx_in_tuple(text_tuple, ten)
-            if j is not None: order_map.append(("text", j));  continue
+            if j is not None:
+                order_map.append(("text", j))
+                print(f"[ORDER_MAP_DEBUG][rank{dist.get_rank()}] flatten[{i}]: Found in text_tuple[{j}], shape={ten.shape}")
+                continue
             j = _find_idx_in_tuple(audio_tuple, ten)
-            if j is not None: order_map.append(("audio", j)); continue
+            if j is not None:
+                order_map.append(("audio", j))
+                print(f"[ORDER_MAP_DEBUG][rank{dist.get_rank()}] flatten[{i}]: Found in audio_tuple[{j}], shape={ten.shape}")
+                continue
             j = _find_idx_in_tuple(vision_tuple, ten)
-            if j is not None: order_map.append(("vision", j)); continue
+            if j is not None:
+                order_map.append(("vision", j))
+                print(f"[ORDER_MAP_DEBUG][rank{dist.get_rank()}] flatten[{i}]: Found in vision_tuple[{j}], shape={ten.shape}")
+                continue
             order_map.append(None)  # 非 head 来源（如新建的空 pos 张量等），无需回传
+            print(f"[ORDER_MAP_DEBUG][rank{dist.get_rank()}] flatten[{i}]: Not found in any modality tuples, appending None")
+
+        print(f"[PACK_MAP_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id} Input tuple sizes: text={len(text_tuple)}, audio={len(audio_tuple)}, vision={len(vision_tuple)}")
+        print(f"[PACK_MAP_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id} Order map: {order_map}")
+        print(f"[PACK_MAP_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id} Order map stats:")
+        for mod in ["text", "audio", "vision"]:
+            count = sum(1 for tag in order_map if tag is not None and tag[0] == mod)
+            print(f"  {mod}: {count} tensors mapped")
 
         if not hasattr(self, "_mm_pack_map"):
             self._mm_pack_map = {}
@@ -1863,6 +1905,13 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             )
 
         # ========== packing backward ==========
+        print(f"[PACKING_BWD_START_DEBUG][rank{dist.get_rank()}] Starting packing backward for mb={bwd_chunk_id}")
+        print(f"[PACKING_BWD_START_DEBUG][rank{dist.get_rank()}] full_backward={full_backward}, last_backward={last_backward}")
+        print(f"[PACKING_BWD_START_DEBUG][rank{dist.get_rank()}] loss type: {type(loss)}")
+        if isinstance(loss, (list, tuple)):
+            print(f"[PACKING_BWD_START_DEBUG][rank{dist.get_rank()}] loss shapes: {[l.shape if isinstance(l, torch.Tensor) else type(l) for l in loss]}")
+        elif isinstance(loss, torch.Tensor):
+            print(f"[PACKING_BWD_START_DEBUG][rank{dist.get_rank()}] loss shape: {loss.shape}")
         self._check_chunk_id(bwd_chunk_id)
 
         # 从 forward 的 fwd_cache 拿回 stage_output 和“扁平输入列表”
@@ -1898,12 +1947,21 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
         # 3) 把 grads_input（按 flat 顺序）拆回三路模态 -> mm_bwd_cache[mb][mod]
         #    - 目标长度：与 forward 时对应模态 mm_fwd_cache[mb][mod] 的 tuple 长度一致
+        print(f"[PACK_MAP_RETRIEVAL_DEBUG][rank{dist.get_rank()}] bwd_chunk_id={bwd_chunk_id}")
+        print(f"[PACK_MAP_RETRIEVAL_DEBUG][rank{dist.get_rank()}] Available pack_map keys: {list(self._mm_pack_map.keys())}")
+
         pack_map = self._mm_pack_map.pop(bwd_chunk_id, None)
         if pack_map is None:
+            print(f"[PACK_MAP_ERROR][rank{dist.get_rank()}] pack_map is None for mb={bwd_chunk_id}!")
             raise RuntimeError(f"[rank{dist.get_rank()}] packing backward missing pack_map for mb={bwd_chunk_id}")
 
         order: list[Optional[tuple[str, int]]] = pack_map["order"]
         sizes: dict[str, int] = pack_map["sizes"]
+
+        print(f"[PACK_MAP_RETRIEVAL_DEBUG][rank{dist.get_rank()}] Retrieved pack_map for mb={bwd_chunk_id}:")
+        print(f"[PACK_MAP_RETRIEVAL_DEBUG][rank{dist.get_rank()}] Order length: {len(order)}")
+        print(f"[PACK_MAP_RETRIEVAL_DEBUG][rank{dist.get_rank()}] Sizes: {sizes}")
+        print(f"[PACK_MAP_RETRIEVAL_DEBUG][rank{dist.get_rank()}] grads_input length: {len(grads_input)}")
 
         per_mod_lists = {
             "text":  [None] * sizes.get("text", 0),
@@ -1913,28 +1971,36 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
         # grads_input 的顺序与 input_values（即 forward 里 flatten_input_tensors）一致
         valid_grad_count = 0
-        for gi, tag in zip(grads_input, order):
+        print(f"[GRAD_ASSIGNMENT_DEBUG][rank{dist.get_rank()}] Starting gradient assignment for mb={bwd_chunk_id}")
+
+        for grad_idx, (gi, tag) in enumerate(zip(grads_input, order)):
             if tag is None:
+                print(f"[GRAD_ASSIGNMENT_DEBUG][rank{dist.get_rank()}] grad[{grad_idx}]: tag=None, skipping")
                 continue  # 非 head 来的张量（如 position_ids 占位）或非 tensor
             mod, local_idx = tag
 
             if gi is None:
-                pass
+                print(f"[GRAD_ASSIGNMENT_DEBUG][rank{dist.get_rank()}] grad[{grad_idx}]: None -> {mod}[{local_idx}] (skipped)")
             elif not isinstance(gi, torch.Tensor):
-                pass
+                print(f"[GRAD_ASSIGNMENT_DEBUG][rank{dist.get_rank()}] grad[{grad_idx}]: {type(gi)} -> {mod}[{local_idx}] (not tensor)")
             elif not (gi.is_floating_point() or torch.is_complex(gi)):
-                pass
+                print(f"[GRAD_ASSIGNMENT_DEBUG][rank{dist.get_rank()}] grad[{grad_idx}]: {gi.dtype} -> {mod}[{local_idx}] (not float/complex)")
             else:
                 # 只回传浮点/复数梯度，保持发送端过滤一致性
                 if 0 <= local_idx < len(per_mod_lists[mod]):
                     per_mod_lists[mod][local_idx] = gi
                     valid_grad_count += 1
+                    print(f"[GRAD_ASSIGNMENT_DEBUG][rank{dist.get_rank()}] grad[{grad_idx}]: shape={gi.shape} -> {mod}[{local_idx}] ✅")
+                else:
+                    print(f"[GRAD_ASSIGNMENT_DEBUG][rank{dist.get_rank()}] grad[{grad_idx}]: shape={gi.shape} -> {mod}[{local_idx}] ❌ (index out of bounds, list len={len(per_mod_lists[mod])})")
 
 
         # 写入 mm_bwd_cache（tuple 形式，供 get_bwd_send_ops_mm 使用）
         for mod in ("text", "audio", "vision"):
             if len(per_mod_lists[mod]) > 0:
                 self.mm_bwd_cache[bwd_chunk_id][mod] = tuple(per_mod_lists[mod])
+                print(f"[BWD_SPLIT_DEBUG][rank{dist.get_rank()}] Saved {mod} grads for mb={bwd_chunk_id}: {len([g for g in per_mod_lists[mod] if g is not None])} non-None grads out of {len(per_mod_lists[mod])} total")
+                print(f"[BWD_SPLIT_DEBUG][rank{dist.get_rank()}] {mod} grads summary: {[(i, g.shape if g is not None else 'None') for i, g in enumerate(per_mod_lists[mod])]}")
 
         # 4) 兼容：也把 grads_input 留在 bwd_cache，避免外部调用到基类 send 流程时出错
         if self.grad_send_info is None:
