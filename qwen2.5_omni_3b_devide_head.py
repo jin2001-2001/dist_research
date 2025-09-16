@@ -225,11 +225,6 @@ class Stage1(nn.Module):
         self.audio_token_id = getattr(cfg, "audio_token_id", None)
 
         # 推断与适配工具（不引入新可训练参数，保持最小侵入）
-        self._hidden_size = getattr(getattr(text_model, 'embed_tokens', None), 'weight', None)
-        if self._hidden_size is not None and hasattr(self._hidden_size, 'shape'):
-            self._hidden_size = int(self._hidden_size.shape[1])
-        else:
-            self._hidden_size = None
 
     @staticmethod
     def _adapt_feats_to_hidden(feats: torch.Tensor, hidden_dim: int) -> torch.Tensor:
