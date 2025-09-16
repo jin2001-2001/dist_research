@@ -1688,7 +1688,18 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             # 音频缺省：当没有audio_inputs时，返回dummy tensor而不是空tuple
             if mt == "audio":
                 ai = (clean_kwargs or {}).get("audio_inputs", None)
-                if ai is None:
+                print(f"[FORWARD_CHUNK_DEBUG] Checking audio_inputs: ai is None = {ai is None}")
+                if ai is not None:
+                    print(f"[FORWARD_CHUNK_DEBUG] audio_inputs exists, type: {type(ai)}")
+                    if isinstance(ai, dict):
+                        print(f"[FORWARD_CHUNK_DEBUG] audio_inputs dict keys: {list(ai.keys())}")
+                        if "input_features" in ai:
+                            print(f"[FORWARD_CHUNK_DEBUG] input_features shape: {ai['input_features'].shape}")
+                        if "feature_attention_mask" in ai:
+                            print(f"[FORWARD_CHUNK_DEBUG] feature_attention_mask shape: {ai['feature_attention_mask'].shape}")
+                    print(f"[FORWARD_CHUNK_DEBUG] Will proceed to call parent with real audio data")
+                else:
+                    print(f"[FORWARD_CHUNK_DEBUG] audio_inputs is None, returning dummy tensor directly")
                     from pipelining_source_code._utils import flatten_args as _flat
                     flat_args = _flat(args)
                     flat_kwargs = _flat(clean_kwargs or {})
@@ -1706,6 +1717,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
                     output_tuple = (dummy_audio_embeds,)
                     self.fwd_cache[fwd_chunk_id] = (output_tuple, flat_args + flat_kwargs)
+                    print(f"[FORWARD_CHUNK_DEBUG] Returning dummy output early, shape: {dummy_audio_embeds.shape}")
                     return output_tuple
 
 
