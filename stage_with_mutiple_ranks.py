@@ -710,12 +710,12 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             tuple[tuple[Optional[torch.Tensor], ...], Optional[list[dict[str, Any]]]],
         ]:
             if backward_type == "full":
-                return lambda: stage_backward(
+                return lambda: (stage_backward(
                     bwd_kwargs["stage_output"],
                     bwd_kwargs["output_grads"],
                     bwd_kwargs["input_values"],
                     retain_graph_for_packed_mbs=retain_graph_for_packed_mbs
-                )
+                ), None)
             elif backward_type == "input":
                 return lambda: stage_backward_input(
                     bwd_kwargs["stage_output"],
