@@ -65,6 +65,11 @@ class AudioStage(nn.Module):
             device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
             return torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
 
+        # 确保audio_values是float类型
+        if audio_values.dtype != torch.float32:
+            print(f"[AUDIO_DEBUG] Converting audio_values from {audio_values.dtype} to float32")
+            audio_values = audio_values.float()
+
         if hasattr(self.audio_enc, "get_dtype"):
             audio_values = audio_values.type(self.audio_enc.get_dtype())
         audio_values = audio_values.to(next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else audio_values.device)
@@ -72,8 +77,13 @@ class AudioStage(nn.Module):
         # 如果没有feature_attention_mask，创建一个全1的mask
         if feature_attention_mask is None:
             batch_size, seq_len = audio_values.shape[:2]
-            feature_attention_mask = torch.ones(batch_size, seq_len, dtype=torch.int32, device=audio_values.device)
+            feature_attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long, device=audio_values.device)
+            print(f"[AUDIO_DEBUG] Created feature_attention_mask with dtype {feature_attention_mask.dtype}")
         else:
+            # 确保feature_attention_mask是正确的数据类型
+            if feature_attention_mask.dtype not in (torch.long, torch.int64):
+                print(f"[AUDIO_DEBUG] Converting feature_attention_mask from {feature_attention_mask.dtype} to long")
+                feature_attention_mask = feature_attention_mask.long()
             feature_attention_mask = feature_attention_mask.to(audio_values.device)
 
         print(f"[AUDIO_DEBUG] Calling audio_enc with input shape {audio_values.shape}, mask shape {feature_attention_mask.shape}")
