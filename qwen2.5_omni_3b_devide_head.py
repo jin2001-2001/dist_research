@@ -74,21 +74,31 @@ class AudioStage(nn.Module):
             audio_values = audio_values.type(self.audio_enc.get_dtype())
         audio_values = audio_values.to(next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else audio_values.device)
 
-        # 为音频序列创建正确的attention mask
-        batch_size, seq_len = audio_values.shape[:2]
-
-        # 忽略数据中的feature_attention_mask，因为它的长度不匹配
-        # 直接为整个音频序列创建全1的mask
-        feature_attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long, device=audio_values.device)
-
         try:
-            res = self.audio_enc(audio_values, feature_attention_mask)
-            print(f"[AUDIO_DEBUG] Success! Audio encoding completed")
-        except Exception as e:
-            print(f"[AUDIO_DEBUG] Failed: {e}")
-            batch_size, seq_len = audio_values.shape[:2]
-            device = audio_values.device
-            return torch.zeros(batch_size, seq_len // 4, 768, device=device, dtype=torch.float32)
+            # 尝试最基本的调用方式，不传递attention_mask
+            res = self.audio_enc(audio_values)
+            print(f"[AUDIO_DEBUG] Success! Basic audio encoding completed")
+        except Exception as e1:
+            print(f"[AUDIO_DEBUG] Basic call failed: {e1}")
+
+            # 尝试传递None作为第二个参数
+            try:
+                res = self.audio_enc(audio_values, None)
+                print(f"[AUDIO_DEBUG] Success! Audio encoding with None mask completed")
+            except Exception as e2:
+                print(f"[AUDIO_DEBUG] Call with None failed: {e2}")
+
+                # 最后尝试传递空的attention_mask
+                try:
+                    batch_size = audio_values.shape[0]
+                    empty_mask = torch.zeros(batch_size, 0, dtype=torch.long, device=audio_values.device)
+                    res = self.audio_enc(audio_values, empty_mask)
+                    print(f"[AUDIO_DEBUG] Success! Audio encoding with empty mask completed")
+                except Exception as e3:
+                    print(f"[AUDIO_DEBUG] All attempts failed. Last error: {e3}")
+                    batch_size, seq_len = audio_values.shape[:2]
+                    device = audio_values.device
+                    return torch.zeros(batch_size, seq_len // 4, 768, device=device, dtype=torch.float32)
 
         # 处理结果
         audio_embeds = None
