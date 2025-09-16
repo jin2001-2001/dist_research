@@ -1634,12 +1634,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             # 过滤与当前模态无关的 kwargs，避免子模块收到多余参数报错
             mt = getattr(self, "model_type", None)
 
-            import time
-            start_time = time.time()
-            print(f"[FORWARD_CHUNK_DEBUG] forward_one_chunk called: model_type={mt}, fwd_chunk_id={fwd_chunk_id}")
-            print(f"[FORWARD_CHUNK_DEBUG] Raw args: {len(args) if args else 0} items")
-            print(f"[FORWARD_CHUNK_DEBUG] Raw kwargs: {list(kwargs.keys()) if kwargs else []}")
-
             allow = set()
             if mt == "audio":
                 allow = {"audio_inputs"}
@@ -1648,26 +1642,10 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             elif mt == "text":
                 allow = {"input_ids", "attention_mask"}
 
-            print(f"[FORWARD_CHUNK_DEBUG] Allowed kwargs for {mt}: {allow}")
-
             # 仅保留允许的键，其余丢弃
             clean_kwargs = None
             if kwargs:
                 clean_kwargs = {k: v for k, v in kwargs.items() if k in allow}
-                print(f"[FORWARD_CHUNK_DEBUG] Filtered kwargs: {list(clean_kwargs.keys()) if clean_kwargs else []}")
-
-                # 详细检查audio_inputs
-                if mt == "audio" and "audio_inputs" in clean_kwargs:
-                    audio_inputs = clean_kwargs["audio_inputs"]
-                    print(f"[FORWARD_CHUNK_DEBUG] audio_inputs type: {type(audio_inputs)}")
-                    print(f"[FORWARD_CHUNK_DEBUG] audio_inputs is None: {audio_inputs is None}")
-                    if audio_inputs is not None:
-                        if hasattr(audio_inputs, 'shape'):
-                            print(f"[FORWARD_CHUNK_DEBUG] audio_inputs shape: {audio_inputs.shape}")
-                            print(f"[FORWARD_CHUNK_DEBUG] audio_inputs dtype: {audio_inputs.dtype}")
-                            print(f"[FORWARD_CHUNK_DEBUG] audio_inputs device: {audio_inputs.device}")
-                        elif isinstance(audio_inputs, dict):
-                            print(f"[FORWARD_CHUNK_DEBUG] audio_inputs is dict with keys: {list(audio_inputs.keys())}")
 
             # Debug (可通过环境变量开启)
             import os as _os
@@ -1688,27 +1666,15 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             # 音频缺省：当没有audio_inputs时，返回dummy tensor而不是空tuple
             if mt == "audio":
                 ai = (clean_kwargs or {}).get("audio_inputs", None)
-                print(f"[FORWARD_CHUNK_DEBUG] Checking audio_inputs: ai is None = {ai is None}")
-                if ai is not None:
-                    print(f"[FORWARD_CHUNK_DEBUG] audio_inputs exists, type: {type(ai)}")
-                    if isinstance(ai, dict):
-                        print(f"[FORWARD_CHUNK_DEBUG] audio_inputs dict keys: {list(ai.keys())}")
-                        if "input_features" in ai:
-                            print(f"[FORWARD_CHUNK_DEBUG] input_features shape: {ai['input_features'].shape}")
-                        if "feature_attention_mask" in ai:
-                            print(f"[FORWARD_CHUNK_DEBUG] feature_attention_mask shape: {ai['feature_attention_mask'].shape}")
-                    print(f"[FORWARD_CHUNK_DEBUG] Will proceed to call parent with real audio data")
-                else:
-                    print(f"[FORWARD_CHUNK_DEBUG] audio_inputs is None, returning dummy tensor directly")
+                if ai is None:
                     from pipelining_source_code._utils import flatten_args as _flat
                     flat_args = _flat(args)
                     flat_kwargs = _flat(clean_kwargs or {})
 
                     # 创建一个dummy的audio embedding tensor
-                    # 假设batch size为1，audio embedding维度为合理的默认值
                     batch_size = 1
-                    audio_seq_len = 32  # 合理的音频序列长度
-                    audio_dim = 512     # 合理的音频特征维度
+                    audio_seq_len = 32
+                    audio_dim = 512
 
                     dummy_audio_embeds = torch.zeros(
                         batch_size, audio_seq_len, audio_dim,
@@ -1717,38 +1683,9 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
                     output_tuple = (dummy_audio_embeds,)
                     self.fwd_cache[fwd_chunk_id] = (output_tuple, flat_args + flat_kwargs)
-                    print(f"[FORWARD_CHUNK_DEBUG] Returning dummy output early, shape: {dummy_audio_embeds.shape}")
                     return output_tuple
 
-
-            print(f"[FORWARD_CHUNK_DEBUG] About to call parent forward_one_chunk")
-            print(f"[FORWARD_CHUNK_DEBUG] Final args: {len(args) if args else 0} items")
-            print(f"[FORWARD_CHUNK_DEBUG] Final clean_kwargs: {list(clean_kwargs.keys()) if clean_kwargs else []}")
-
-            if mt == "audio" and clean_kwargs and "audio_inputs" in clean_kwargs:
-                print(f"[FORWARD_CHUNK_DEBUG] About to call AudioStage with audio_inputs")
-
-            parent_start_time = time.time()
-            result = super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
-            parent_end_time = time.time()
-
-            print(f"[FORWARD_CHUNK_DEBUG] Parent forward_one_chunk took {parent_end_time - parent_start_time:.4f} seconds")
-            print(f"[FORWARD_CHUNK_DEBUG] Result type: {type(result)}")
-
-            if isinstance(result, (tuple, list)):
-                print(f"[FORWARD_CHUNK_DEBUG] Result is sequence, length: {len(result)}")
-                for i, item in enumerate(result):
-                    if hasattr(item, 'shape'):
-                        print(f"[FORWARD_CHUNK_DEBUG] Result[{i}] shape: {item.shape}, dtype: {item.dtype}")
-                    else:
-                        print(f"[FORWARD_CHUNK_DEBUG] Result[{i}] type: {type(item)}")
-            elif hasattr(result, 'shape'):
-                print(f"[FORWARD_CHUNK_DEBUG] Result shape: {result.shape}, dtype: {result.dtype}")
-
-            end_time = time.time()
-            print(f"[FORWARD_CHUNK_DEBUG] Total forward_one_chunk time: {end_time - start_time:.4f} seconds")
-
-            return result
+            return super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
 
         # ---------- helpers（局部，无外部依赖） ----------
         def _is_float_tensor(x):
