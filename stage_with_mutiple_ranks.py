@@ -1796,6 +1796,14 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         flat_kwargs = flatten_args(composite_kwargs)
         flatten_input_tensors = flat_args + flat_kwargs
 
+        # DEBUG: 检查flatten_input_tensors的requires_grad设置
+        print(f"[PACKING_FORWARD_DEBUG][rank{dist.get_rank()}] flatten_input_tensors for mb={fwd_chunk_id}:")
+        for i, tensor in enumerate(flatten_input_tensors):
+            if isinstance(tensor, torch.Tensor):
+                print(f"  flatten_input_tensors[{i}]: shape={tensor.shape}, requires_grad={tensor.requires_grad}, grad_fn={tensor.grad_fn is not None}, device={tensor.device}")
+            else:
+                print(f"  flatten_input_tensors[{i}]: {type(tensor)}")
+
         order_map: list[Optional[tuple[str, int]]] = []
         for ten in flatten_input_tensors:
             if not isinstance(ten, torch.Tensor):
@@ -1820,6 +1828,16 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         }
 
         # ---------- 保存 fwd_cache，并验证输出 ----------
+        print(f"[PACKING_FORWARD_DEBUG][rank{dist.get_rank()}] Saving to fwd_cache[{fwd_chunk_id}]:")
+        print(f"  output_tuple length: {len(output_tuple)}")
+        print(f"  flatten_input_tensors length: {len(flatten_input_tensors)}")
+        # 检查保存到fwd_cache的flatten_input_tensors是否保持requires_grad
+        requires_grad_count = 0
+        for i, tensor in enumerate(flatten_input_tensors):
+            if isinstance(tensor, torch.Tensor) and tensor.requires_grad:
+                requires_grad_count += 1
+        print(f"  Tensors with requires_grad=True: {requires_grad_count}/{len(flatten_input_tensors)}")
+
         self.fwd_cache[fwd_chunk_id] = (output_tuple, flatten_input_tensors)
 
         outputs_for_val = output_tuple
@@ -1866,7 +1884,18 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             grads_output = self._avg_next_stage_grads(grads_output)
             bwd_kwargs = {"stage_output": stage_output, "output_grads": grads_output, "input_values": input_values}
 
+        # DEBUG: 检查backward输入参数
+        print(f"[PACKING_BACKWARD_DEBUG][rank{dist.get_rank()}] bwd_chunk_id={bwd_chunk_id}")
+        print(f"  stage_output type: {type(stage_output)}, is_last: {self.is_last}")
+        if hasattr(stage_output, '__len__'):
+            print(f"  stage_output length: {len(stage_output)}")
+        print(f"  input_values length: {len(input_values)}")
+        for i, inp in enumerate(input_values):
+            if isinstance(inp, torch.Tensor):
+                print(f"    input_values[{i}]: shape={inp.shape}, requires_grad={inp.requires_grad}, grad_fn={inp.grad_fn is not None}")
+
         # 2) 真正 backward（保持与父类一致，但确保保留计算图，因同一图要给三路上游发送）
+        print(f"[PACKING_BACKWARD_DEBUG][rank{dist.get_rank()}] Calling backward_maybe_with_nosync")
         if full_backward:
             grads_input, _ = self.backward_maybe_with_nosync(
                 "full",
@@ -1883,6 +1912,20 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 retain_graph_for_packed_mbs=True
             )
 
+        # DEBUG: 检查backward输出
+        print(f"[PACKING_BACKWARD_DEBUG][rank{dist.get_rank()}] backward_maybe_with_nosync returned:")
+        print(f"  grads_input type: {type(grads_input)}, length: {len(grads_input)}")
+        none_grad_count = 0
+        for i, grad in enumerate(grads_input):
+            if grad is None:
+                none_grad_count += 1
+                print(f"    grads_input[{i}]: None")
+            elif isinstance(grad, torch.Tensor):
+                print(f"    grads_input[{i}]: shape={grad.shape}, dtype={grad.dtype}")
+            else:
+                print(f"    grads_input[{i}]: {type(grad)}")
+        print(f"  Total None gradients: {none_grad_count}/{len(grads_input)}")
+
         # 3) 把 grads_input（按 flat 顺序）拆回三路模态 -> mm_bwd_cache[mb][mod]
         #    - 目标长度：与 forward 时对应模态 mm_fwd_cache[mb][mod] 的 tuple 长度一致
         pack_map = self._mm_pack_map.pop(bwd_chunk_id, None)
@@ -1891,29 +1934,58 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
         order: list[Optional[tuple[str, int]]] = pack_map["order"]
         sizes: dict[str, int] = pack_map["sizes"]
+
+        # DEBUG: 检查pack_map信息
+        print(f"[PACKING_BACKWARD_DEBUG][rank{dist.get_rank()}] pack_map info:")
+        print(f"  order length: {len(order)}")
+        print(f"  sizes: {sizes}")
+        print(f"  order entries:")
+        for i, tag in enumerate(order):
+            print(f"    order[{i}]: {tag}")
+
         per_mod_lists = {
             "text":  [None] * sizes.get("text", 0),
             "audio": [None] * sizes.get("audio", 0),
             "vision":[None] * sizes.get("vision", 0),
         }
+        print(f"  per_mod_lists sizes: text={len(per_mod_lists['text'])}, audio={len(per_mod_lists['audio'])}, vision={len(per_mod_lists['vision'])}")
 
         # grads_input 的顺序与 input_values（即 forward 里 flatten_input_tensors）一致
-        for gi, tag in zip(grads_input, order):
+        print(f"[PACKING_BACKWARD_DEBUG][rank{dist.get_rank()}] Mapping gradients to modalities:")
+        valid_grad_count = 0
+        for i, (gi, tag) in enumerate(zip(grads_input, order)):
             if tag is None:
+                print(f"  grads_input[{i}]: tag=None (skipping)")
                 continue  # 非 head 来的张量（如 position_ids 占位）或非 tensor
             mod, local_idx = tag
+            print(f"  grads_input[{i}]: grad={'None' if gi is None else f'Tensor{gi.shape}'}, tag=({mod}, {local_idx})")
+
             # 只回传浮点/复数梯度，保持发送端过滤一致性
-            print(f"在这里 {gi} 第三方 {tag}")
             if isinstance(gi, torch.Tensor) and (gi.is_floating_point() or torch.is_complex(gi)):
                 # 安全：越界忽略
-                print(f"个拉拉")
                 if 0 <= local_idx < len(per_mod_lists[mod]):
                     per_mod_lists[mod][local_idx] = gi
+                    valid_grad_count += 1
+                    print(f"    ✅ Successfully assigned to {mod}[{local_idx}]")
+                else:
+                    print(f"    ⚠️  Index {local_idx} out of bounds for {mod} (size: {len(per_mod_lists[mod])})")
+            else:
+                if gi is None:
+                    print(f"    ❌ Gradient is None for {mod}[{local_idx}]")
+                else:
+                    print(f"    ⚠️  Gradient is not float/complex tensor: {type(gi)}")
+
+        print(f"[PACKING_BACKWARD_DEBUG][rank{dist.get_rank()}] Total valid gradients assigned: {valid_grad_count}")
 
         # 写入 mm_bwd_cache（tuple 形式，供 get_bwd_send_ops_mm 使用）
+        print(f"[PACKING_BACKWARD_DEBUG][rank{dist.get_rank()}] Writing to mm_bwd_cache:")
         for mod in ("text", "audio", "vision"):
             if len(per_mod_lists[mod]) > 0:
                 self.mm_bwd_cache[bwd_chunk_id][mod] = tuple(per_mod_lists[mod])
+                valid_grads = sum(1 for g in per_mod_lists[mod] if g is not None)
+                print(f"  {mod}: {valid_grads}/{len(per_mod_lists[mod])} valid gradients")
+            else:
+                print(f"  {mod}: empty (size=0)")
 
         # 4) 兼容：也把 grads_input 留在 bwd_cache，避免外部调用到基类 send 流程时出错
         if self.grad_send_info is None:
@@ -1930,6 +2002,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 if not t._is_view():
                     t.detach_()
 
+        print(f"[PACKING_BACKWARD_DEBUG][rank{dist.get_rank()}] Packing backward completed for chunk {bwd_chunk_id}")
         logger.debug("%s Backwarded (packing) chunk %s", self.log_prefix, bwd_chunk_id)
 
     

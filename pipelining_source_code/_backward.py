@@ -289,8 +289,30 @@ def stage_backward(
     in the autograd trace) as well as return a list of the gradients for the
     input values
     """
-    # if dist.get_rank() == 0:
-    #     print(f"❤️stage_output:{stage_output}\noutput_grads:{output_grads}\ninput_values:{input_values}")
+    # DEBUG: 详细检查输入参数
+    print(f"[BACKWARD_DEBUG][rank{dist.get_rank()}] stage_backward called:")
+    print(f"  stage_output type: {type(stage_output)}")
+    if isinstance(stage_output, (list, tuple)):
+        print(f"  stage_output length: {len(stage_output)}")
+        for i, out in enumerate(stage_output):
+            if isinstance(out, torch.Tensor):
+                print(f"    stage_output[{i}]: shape={out.shape}, requires_grad={out.requires_grad}, grad_fn={out.grad_fn is not None}")
+
+    print(f"  output_grads type: {type(output_grads)}")
+    if isinstance(output_grads, (list, tuple)):
+        print(f"  output_grads length: {len(output_grads)}")
+        for i, grad in enumerate(output_grads):
+            if isinstance(grad, torch.Tensor):
+                print(f"    output_grads[{i}]: shape={grad.shape}, dtype={grad.dtype}")
+            else:
+                print(f"    output_grads[{i}]: {type(grad)}")
+
+    print(f"  input_values length: {len(input_values)}")
+    for i, inp in enumerate(input_values):
+        if isinstance(inp, torch.Tensor):
+            print(f"    input_values[{i}]: shape={inp.shape}, requires_grad={inp.requires_grad}, grad_fn={inp.grad_fn is not None}, grad={inp.grad is not None}")
+        else:
+            print(f"    input_values[{i}]: {type(inp)}")
     
     if outputs_with_grads_idxs is not None:
         # Deprecated, not used in runtime calls, only exists in compiler
@@ -355,19 +377,40 @@ def stage_backward(
             stage_output, output_grads, extract_tensors_with_grads
         )
 
+        # DEBUG: 检查autograd.backward的输入
+        print(f"[BACKWARD_DEBUG][rank{dist.get_rank()}] Before torch.autograd.backward:")
+        print(f"  stage_output_tensors length: {len(stage_output_tensors)}")
+        for i, tensor in enumerate(stage_output_tensors):
+            print(f"    stage_output_tensors[{i}]: shape={tensor.shape}, requires_grad={tensor.requires_grad}, grad_fn={tensor.grad_fn is not None}")
+        print(f"  output_grad_tensors length: {len(output_grad_tensors)}")
+        for i, grad in enumerate(output_grad_tensors):
+            if grad is not None:
+                print(f"    output_grad_tensors[{i}]: shape={grad.shape}, dtype={grad.dtype}")
+            else:
+                print(f"    output_grad_tensors[{i}]: None")
+        print(f"  retain_graph_for_packed_mbs: {retain_graph_for_packed_mbs}")
+
         torch.autograd.backward(
             stage_output_tensors,
             grad_tensors=output_grad_tensors,  # type: ignore[arg-type]
             retain_graph= retain_graph_for_packed_mbs
         )
 
+        print(f"[BACKWARD_DEBUG][rank{dist.get_rank()}] After torch.autograd.backward completed")
+
         # Extract gradients wrt the input values
         grad_inputs: list[Optional[torch.Tensor]] = []
-        for val in input_values:
+        print(f"[BACKWARD_DEBUG][rank{dist.get_rank()}] Extracting gradients from input_values:")
+        for i, val in enumerate(input_values):
             if isinstance(val, torch.Tensor):
-                grad_inputs.append(val.grad)
+                grad = val.grad
+                grad_inputs.append(grad)
+                print(f"    input_values[{i}]: grad is {'None' if grad is None else f'Tensor{grad.shape}'}")
+                if grad is None:
+                    print(f"      ⚠️  WARNING: input_values[{i}] has no gradient! requires_grad={val.requires_grad}, grad_fn={val.grad_fn is not None}")
             else:
                 grad_inputs.append(None)
+                print(f"    input_values[{i}]: not a tensor, appending None")
 
         # Alternative impl: `torch.autograd.grad`.
         # Note that `torch.autograd.grad` will not accumulate gradients into the
@@ -392,9 +435,14 @@ def stage_backward(
         """
         raise RuntimeError(exc_msg) from e
 
-    # if dist.get_rank() == 2:
-    #     print(f"✅是否为空{grad_inputs}")
-     
+    # DEBUG: 最终结果检查
+    print(f"[BACKWARD_DEBUG][rank{dist.get_rank()}] Final grad_inputs:")
+    none_count = sum(1 for grad in grad_inputs if grad is None)
+    total_count = len(grad_inputs)
+    print(f"  Total: {total_count}, None: {none_count}, Valid: {total_count - none_count}")
+    if none_count == total_count and total_count > 0:
+        print(f"  ❌ ERROR: ALL gradients are None! This indicates a problem.")
+
     return tuple(grad_inputs)
 
 
