@@ -226,10 +226,22 @@ class Stage1(nn.Module):
     @staticmethod
     def _replace_feats_by_token_id(input_ids, inputs_embeds, feats, special_token_id):
         if feats is None or special_token_id is None or input_ids is None:
+            try:
+                import torch.distributed as dist
+                rid = dist.get_rank() if dist.is_initialized() else -1
+                print(f"[rank{rid}] Stage1._replace_feats_by_token_id: skip replacement due to feats/input_ids/token_id None. token_id={special_token_id} feats={(None if feats is None else tuple(feats.shape))} input_ids_is_none={input_ids is None}")
+            except Exception:
+                pass
             return inputs_embeds
         flat_mask = (input_ids == special_token_id).reshape(-1)
         n_tokens = int(flat_mask.sum().item())
         if n_tokens == 0:
+            try:
+                import torch.distributed as dist
+                rid = dist.get_rank() if dist.is_initialized() else -1
+                print(f"[rank{rid}] Stage1._replace_feats_by_token_id: no tokens for token_id={special_token_id}; feats_shape={(tuple(feats.shape) if hasattr(feats,'shape') else type(feats).__name__)}")
+            except Exception:
+                pass
             return inputs_embeds
         if feats.size(0) != n_tokens:
             raise RuntimeError(
@@ -239,6 +251,12 @@ class Stage1(nn.Module):
         emb_flat = inputs_embeds.reshape(-1, inputs_embeds.size(-1))
         feats = feats.to(device=emb_flat.device, dtype=emb_flat.dtype)
         emb_flat[flat_mask] = feats
+        try:
+            import torch.distributed as dist
+            rid = dist.get_rank() if dist.is_initialized() else -1
+            print(f"[rank{rid}] Stage1._replace_feats_by_token_id: replaced token_id={special_token_id} count={n_tokens} feats_shape={tuple(feats.shape)} emb_dim={emb_flat.size(-1)}")
+        except Exception:
+            pass
         return emb_flat.view_as(inputs_embeds)
 
     def forward(self, *args, **kwargs):
@@ -272,12 +290,55 @@ class Stage1(nn.Module):
         image_token_id = kwargs.get('image_token_id', self.image_token_id)
         audio_token_id = kwargs.get('audio_token_id', self.audio_token_id)
 
+        # Debug: summarize inputs to Stage1
+        try:
+            import torch.distributed as dist
+            rid = dist.get_rank() if dist.is_initialized() else -1
+            def _s(x):
+                return tuple(x.shape) if isinstance(x, torch.Tensor) else None
+            img_cnt = None
+            aud_cnt = None
+            if isinstance(input_ids, torch.Tensor):
+                try:
+                    img_cnt = int((input_ids == (image_token_id if image_token_id is not None else -999999)).sum().item())
+                    aud_cnt = int((input_ids == (audio_token_id if audio_token_id is not None else -999999)).sum().item())
+                except Exception:
+                    pass
+            print(
+                f"[rank{rid}] Stage1.forward: input_ids={_s(input_ids)} attention_mask_2d={_s(attention_mask_2d)} grid_thw={_s(grid_thw)} "
+                f"image_embeds={_s(image_embeds)} audio_embeds={_s(audio_embeds)} image_token_id={image_token_id} audio_token_id={audio_token_id} "
+                f"counts(img,aud)=({img_cnt},{aud_cnt})"
+            )
+        except Exception:
+            pass
+
         # 1) pack：若提供了任一模态特征且有 input_ids，则做按位替换
         if input_ids is not None:
             if image_embeds is not None:
                 hidden = self._replace_feats_by_token_id(input_ids, hidden, image_embeds, image_token_id)
+            else:
+                try:
+                    import torch.distributed as dist
+                    rid = dist.get_rank() if dist.is_initialized() else -1
+                    print(f"[rank{rid}] Stage1.forward: skip image replace; image_embeds is None")
+                except Exception:
+                    pass
             if audio_embeds is not None:
                 hidden = self._replace_feats_by_token_id(input_ids, hidden, audio_embeds, audio_token_id)
+            else:
+                try:
+                    import torch.distributed as dist
+                    rid = dist.get_rank() if dist.is_initialized() else -1
+                    print(f"[rank{rid}] Stage1.forward: skip audio replace; audio_embeds is None")
+                except Exception:
+                    pass
+        else:
+            try:
+                import torch.distributed as dist
+                rid = dist.get_rank() if dist.is_initialized() else -1
+                print(f"[rank{rid}] Stage1.forward: input_ids is None; cannot perform multimodal replacement")
+            except Exception:
+                pass
 
         # 2) 计算/补全 position_ids：
         #    - 若 TextStage 已给出 position_ids，可直接沿用；
@@ -296,6 +357,13 @@ class Stage1(nn.Module):
                 B, T, _ = hidden.shape
                 base_pos = torch.arange(T, device=hidden.device).unsqueeze(0).repeat(B, 1)
                 position_ids = torch.stack([base_pos, base_pos, base_pos], dim=0).contiguous()
+
+        try:
+            import torch.distributed as dist
+            rid = dist.get_rank() if dist.is_initialized() else -1
+            print(f"[rank{rid}] Stage1.forward: final position_ids shape={(tuple(position_ids.shape) if isinstance(position_ids, torch.Tensor) else None)}")
+        except Exception:
+            pass
 
         # 3) 原有 Transformer 前向保持不变
         if position_ids.dim() == 2:

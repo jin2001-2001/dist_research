@@ -1537,6 +1537,18 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 pass
             return []
 
+        # Per-element diagnostics of grads_tuple
+        try:
+            details = []
+            for i, g in enumerate(grads_tuple):
+                if isinstance(g, torch.Tensor):
+                    details.append((i, tuple(g.shape), str(g.dtype), bool(g.is_floating_point() or torch.is_complex(g))))
+                else:
+                    details.append((i, None, None, False))
+            print(f"[rank{dist.get_rank()}] get_bwd_send_ops_mm: mb={bwd_chunk_id} mod={modality} grads_tuple_details={details}")
+        except Exception:
+            pass
+
         total_elements = 0
         total_bytes = 0
         valid_grads = 0
@@ -1912,7 +1924,8 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
         }
         try:
             per_mod_counts = {m: sum(1 for x in order_map if isinstance(x, tuple) and x[0]==m) for m in ('text','audio','vision')}
-            print(f"[rank{dist.get_rank()}] packing.forward_one_chunk: mb={fwd_chunk_id} pack_map.sizes={self._mm_pack_map[fwd_chunk_id]['sizes']} mapped_counts={per_mod_counts}")
+            idxs = {m: [i for i,x in enumerate(order_map) if isinstance(x, tuple) and x[0]==m] for m in ('text','audio','vision')}
+            print(f"[rank{dist.get_rank()}] packing.forward_one_chunk: mb={fwd_chunk_id} pack_map.sizes={self._mm_pack_map[fwd_chunk_id]['sizes']} mapped_counts={per_mod_counts} mapped_idxs={idxs}")
         except Exception:
             pass
 
@@ -2000,6 +2013,17 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 for g in grads_input
             ]
             print(f"[rank{dist.get_rank()}] packing.backward_one_chunk: mb={bwd_chunk_id} grads_input len={len(grads_input)} shapes={gi_types}")
+            # Map grads to modalities by order
+            pack_map_dbg = self._mm_pack_map.get(bwd_chunk_id, None)
+            om = order if pack_map_dbg is None else pack_map_dbg.get('order', order)
+            mod_to_details = {'text': [], 'audio': [], 'vision': []}
+            for idx, tag in enumerate(om):
+                if isinstance(tag, tuple):
+                    m, local_idx = tag
+                    g = grads_input[idx]
+                    mod_to_details.setdefault(m, []).append((idx, local_idx, (tuple(g.shape) if isinstance(g, torch.Tensor) else None)))
+            print(f"[rank{dist.get_rank()}] packing.backward_one_chunk: mb={bwd_chunk_id} grads mapping: "
+                  f"text={mod_to_details.get('text')}, audio={mod_to_details.get('audio')}, vision={mod_to_details.get('vision')}")
         except Exception:
             pass
 
