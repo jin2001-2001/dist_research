@@ -79,16 +79,16 @@ class AudioStage(nn.Module):
         # 保存原始维度用于错误处理
         batch_size, original_seq_len = audio_values.shape[:2]
 
-        # 根据错误信息，模型期望的格式可能是 [batch, mel_features, time_steps]
-        # 但我们有 [batch, time_steps, features]
-        # 错误提示在padded_and_mask_function中，说明模型内部处理有问题
-
-        # 尝试不同的数据格式
-        # 方案1: 使用原始数据，但调整feature_lens
+        # 根据错误信息，模型期望的格式是 [batch, mel_features, time_steps]
+        # 但我们有 [batch, time_steps, features]，需要转置
         time_steps = audio_values.shape[1]  # 128
         mel_features = audio_values.shape[2]  # 3
 
-        print(f"[AUDIO_DEBUG] Using original format [batch={batch_size}, time={time_steps}, features={mel_features}]")
+        # 转置到期望的格式：[batch, features, time]
+        audio_values = audio_values.transpose(1, 2)  # [1, 128, 3] -> [1, 3, 128]
+
+        print(f"[AUDIO_DEBUG] Transposed to expected format [batch={batch_size}, features={mel_features}, time={time_steps}]")
+        print(f"[AUDIO_DEBUG] New audio_values shape: {audio_values.shape}")
 
         # feature_lens应该是每个样本的实际时间步长度，不是特征维度
         # 根据API文档，feature_lens指的是时间维度的长度
