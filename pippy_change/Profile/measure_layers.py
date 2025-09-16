@@ -217,9 +217,9 @@ def main():
         return _bwd
 
     handles = []
-    #for i, blk in enumerate(blocks):
-        #handles.append(blk.register_forward_pre_hook(pre_hook(i)))
-        #handles.append(blk.register_forward_hook(fwd_hook(i)))
+    for i, blk in enumerate(blocks):
+        handles.append(blk.register_forward_pre_hook(pre_hook(i)))
+        handles.append(blk.register_forward_hook(fwd_hook(i)))
         # full backward hook (PyTorch 1.10+). If not available, comment out.
         #if hasattr(blk, "register_full_backward_hook"):
             #handles.append(blk.register_full_backward_pre_hook(pre_bwd_hook(i)))
