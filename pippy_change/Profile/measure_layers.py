@@ -97,7 +97,7 @@ def main():
     ap.add_argument("--model_path", type=str, default="Qwen/Qwen3-0.6B", help="HF name or local path")
     ap.add_argument("--seq_len", type=int, default=256)
     ap.add_argument("--batch", type=int, default=1)
-    ap.add_argument("--dtype", type=str, default="bfloat16", choices=["float32","bfloat16","float16"])
+    ap.add_argument("--dtype", type=str, default="float32", choices=["float32","bfloat16","float16"])
     ap.add_argument("--iters", type=int, default=1)
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--out", type=str, required=True)
@@ -105,7 +105,7 @@ def main():
     args = ap.parse_args()
 
     # Resolve dtype
-    dtype_map = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}
+    dtype_map = {"float32": torch.float32, "float32": torch.bfloat16, "float16": torch.float16}
     dtype = dtype_map[args.dtype]
 
     # Load model locally
