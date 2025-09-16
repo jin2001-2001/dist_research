@@ -1850,6 +1850,25 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
 
         output_tuple = _normalize_model_output_as_tuple(output)
 
+
+        if self.is_last:
+            self.output_chunks.append(output)
+
+        # ---------- 第二点：记录 flat 输入到 (modality, local_idx) 的映射（供 backward 用） ----------
+        def _find_idx_in_tuple(tup, ten):
+            for i, x in enumerate(tup):
+                if isinstance(x, torch.Tensor) and (x is ten):
+                    return i
+            return None
+
+        flat_args = flatten_args(composite_args)
+        flat_kwargs = flatten_args(composite_kwargs)
+        flatten_input_tensors = flat_args + flat_kwargs
+
+        print(f"[FWD_FLAT_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id} flattened {len(flatten_input_tensors)} input tensors")
+        print(f"[FWD_FLAT_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id} tensor types: {[type(t).__name__ for t in flatten_input_tensors]}")
+        print(f"[FWD_FLAT_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id} tensor shapes: {[t.shape if isinstance(t, torch.Tensor) else 'N/A' for t in flatten_input_tensors]}")
+
         # [FORCE FIX] 强制建立所有输入到输出的计算图连接
         print(f"[FORCE_GRAD_FN_DEBUG][rank{dist.get_rank()}] Forcing computation graph connections...")
 
@@ -1885,24 +1904,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             for i, o in enumerate(output_tuple):
                 if isinstance(o, torch.Tensor):
                     print(f"    output[{i}]: shape={o.shape}, requires_grad={o.requires_grad}, grad_fn={o.grad_fn is not None}")
-
-        if self.is_last:
-            self.output_chunks.append(output)
-
-        # ---------- 第二点：记录 flat 输入到 (modality, local_idx) 的映射（供 backward 用） ----------
-        def _find_idx_in_tuple(tup, ten):
-            for i, x in enumerate(tup):
-                if isinstance(x, torch.Tensor) and (x is ten):
-                    return i
-            return None
-
-        flat_args = flatten_args(composite_args)
-        flat_kwargs = flatten_args(composite_kwargs)
-        flatten_input_tensors = flat_args + flat_kwargs
-
-        print(f"[FWD_FLAT_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id} flattened {len(flatten_input_tensors)} input tensors")
-        print(f"[FWD_FLAT_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id} tensor types: {[type(t).__name__ for t in flatten_input_tensors]}")
-        print(f"[FWD_FLAT_DEBUG][rank{dist.get_rank()}] mb={fwd_chunk_id} tensor shapes: {[t.shape if isinstance(t, torch.Tensor) else 'N/A' for t in flatten_input_tensors]}")
 
         order_map: list[Optional[tuple[str, int]]] = []
         for i, ten in enumerate(flatten_input_tensors):
