@@ -297,16 +297,19 @@ class Stage1(nn.Module):
                 f"Feature count mismatch for token_id={special_token_id}: "
                 f"tokens={n_tokens} vs feats={feats.size(0)}"
             )
+        # 使用 out-of-place scatter 构造替换后的新张量，避免对 view/leaf 的就地写入
         emb_flat = inputs_embeds.reshape(-1, inputs_embeds.size(-1))
         feats = feats.to(device=emb_flat.device, dtype=emb_flat.dtype)
-        emb_flat[flat_mask] = feats
+        idx = torch.nonzero(flat_mask, as_tuple=False).squeeze(1).to(dtype=torch.long)
+        idx2 = idx.unsqueeze(1).expand(-1, emb_flat.size(1))
+        out_flat = emb_flat.scatter(0, idx2, feats)
         try:
             import torch.distributed as dist
             rid = dist.get_rank() if dist.is_initialized() else -1
             print(f"[rank{rid}] Stage1._replace_feats_by_token_id: replaced token_id={special_token_id} count={n_tokens} feats_shape={tuple(feats.shape)} emb_dim={emb_flat.size(-1)}")
         except Exception:
             pass
-        return emb_flat.view_as(inputs_embeds)
+        return out_flat.view_as(inputs_embeds)
 
     def forward(self, *args, **kwargs):
         """
