@@ -125,32 +125,33 @@ class AudioStage(nn.Module):
 
         _post_shape = tuple(input_feats.shape)
 
-        # 计算 feature_lens：优先用 mask.sum(-1)，否则直接用 T = input_feats.size(1)
-        if isinstance(feature_attention_mask, torch.Tensor):
-            feature_lens = feature_attention_mask.sum(-1).to(torch.long)
-        else:
-            feature_lens = torch.full((B,), int(input_feats.size(1)), dtype=torch.long, device=input_feats.device)
+        # 扁平 batch：拼到 [1, sumT, 128] 并构造 feature_lens=[T1..TB]（单位：帧）
+        per_list = []
+        T_list = []
+        for i in range(B):
+            t_i = input_feats[i:i+1]              # [1, T_i, 128]
+            per_list.append(t_i)
+            T_list.append(int(t_i.size(1)))
+        feats_cat = torch.cat(per_list, dim=1)     # [1, sumT, 128]
+        feature_lens = torch.tensor(T_list, dtype=torch.long, device=feats_cat.device)  # [B]
 
-        # 若与实际时间轴不一致，优先保证与实际 T 对齐（打印告警以便排查）
-        total_lens = int(feature_lens.sum().item())
-        post_dim1 = int(input_feats.size(1))
-        if total_lens != post_dim1 and B == 1:
-            try:
-                print(f"[rank{rid}] AudioStage.forward: WARN lens_sum({total_lens}) != post_dim1({post_dim1}); override lens to T")
-            except Exception:
-                pass
-            feature_lens = torch.tensor([post_dim1] * B, dtype=torch.long, device=input_feats.device)
-
-        # 计算 aftercnn_lens（优先用模型提供的工具函数）
+        # 由模型工具函数推导卷积后的长度
         try:
             aftercnn_lens, _ = self.audio_enc._get_feat_extract_output_lengths(feature_lens)
         except Exception:
             aftercnn_lens = feature_lens.clone()
 
+        # dtype 对齐到卷积权重（避免 conv 类型不匹配）
+        try:
+            want_dtype = self.audio_enc.conv1.weight.dtype  # type: ignore[attr-defined]
+        except Exception:
+            want_dtype = feats_cat.dtype
+        feats_cat = feats_cat.to(want_dtype)
+
         try:
             print(
-                f"[rank{rid}] AudioStage.forward: layout pre={_pre_shape} -> post={_post_shape}; "
-                f"feature_lens={feature_lens.tolist()} aftercnn_lens={aftercnn_lens.tolist()}"
+                f"[rank{rid}] AudioStage.forward: pre={_pre_shape} mid={_post_shape} post={tuple(feats_cat.shape)} "
+                f"feature_lens={feature_lens.tolist()} aftercnn_lens={aftercnn_lens.tolist()} dtype={feats_cat.dtype}"
             )
         except Exception:
             pass
@@ -158,9 +159,9 @@ class AudioStage(nn.Module):
         _path = "main"
         try:
             res = self.audio_enc(
-                input_features=input_feats,
-                feature_lens=feature_lens,
-                aftercnn_lens=aftercnn_lens
+                input_features=feats_cat,      # [1, sumT, 128]，时间在 dim=1
+                feature_lens=feature_lens,     # [B]
+                aftercnn_lens=aftercnn_lens    # [B]
             )
         except Exception as e1:
             try:
