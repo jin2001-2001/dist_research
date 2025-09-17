@@ -104,29 +104,35 @@ class AudioStage(nn.Module):
         input_feats = None
 
         if D1 in typical_mels:
-            # [B, n_mels, n_frames] -> 转成 [B, n_frames, n_mels]
+            # [B, n_mels, n_frames]，保持 dim=1 为 n_mels
             n_mels, n_frames = D1, D2
-            input_feats = audio_values.transpose(1, 2)
-        elif D2 in typical_mels:
-            # [B, n_frames, n_mels]，已符合期望
-            n_mels, n_frames = D2, D1
             input_feats = audio_values
+        elif D2 in typical_mels:
+            # [B, n_frames, n_mels] -> 转成 [B, n_mels, n_frames]，保持 dim=1 为 n_mels
+            n_mels, n_frames = D2, D1
+            input_feats = audio_values.transpose(1, 2)
         else:
             # 启发式：把较大的维度当作帧数，较小的当作梅尔通道
             if D1 >= D2:
-                # [B, frames, mels]
+                # [B, frames, mels] -> 转到 [B, mels, frames]
                 n_mels, n_frames = D2, D1
-                input_feats = audio_values
-            else:
-                # [B, mels, frames] -> 转成 [B, frames, mels]
-                n_mels, n_frames = D1, D2
                 input_feats = audio_values.transpose(1, 2)
+            else:
+                # [B, mels, frames]
+                n_mels, n_frames = D1, D2
+                input_feats = audio_values
 
         _post_shape = tuple(input_feats.shape)
 
-        # lens 使用帧数；aftercnn_lens 若未知，同步为帧数
-        feature_lens = torch.tensor([n_frames] * B, dtype=torch.long, device=input_feats.device)
-        aftercnn_lens = torch.tensor([n_frames] * B, dtype=torch.long, device=input_feats.device)
+        # 与音频塔期望对齐：很多实现会在 dim=1 依据 feature_lens split
+        # 因此设置 feature_lens = input_feats.size(1)
+        dim1 = int(input_feats.size(1))
+        feature_lens = torch.tensor([dim1] * B, dtype=torch.long, device=input_feats.device)
+        aftercnn_lens = torch.tensor([dim1] * B, dtype=torch.long, device=input_feats.device)
+        try:
+            print(f"[rank{rid}] AudioStage.forward: adapt n_mels={n_mels} n_frames={n_frames} chosen_dim1={dim1} pre={_pre_shape} post={_post_shape}")
+        except Exception:
+            pass
 
         _path = "main"
         try:
