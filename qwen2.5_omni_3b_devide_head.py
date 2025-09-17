@@ -47,9 +47,22 @@ class AudioStage(nn.Module):
         返回: audio_embeds
         要求: collate 后的 audio_inputs（dict 或 tensor）其拼接顺序要与 input_ids 中 audio_token 的扫描顺序一致。
         """
+        import time
+        _t0 = time.perf_counter()
+        try:
+            import torch.distributed as dist
+            rid = dist.get_rank() if dist.is_initialized() else -1
+        except Exception:
+            rid = -1
+
         if audio_inputs is None:
             device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
-            return torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
+            out = torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
+            try:
+                print(f"[rank{rid}] AudioStage.forward: audio_inputs=None -> return zeros {tuple(out.shape)}")
+            except Exception:
+                pass
+            return out
 
         if isinstance(audio_inputs, dict):
             audio_values = (audio_inputs.get("input_values")
@@ -63,7 +76,12 @@ class AudioStage(nn.Module):
 
         if audio_values is None:
             device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
-            return torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
+            out = torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
+            try:
+                print(f"[rank{rid}] AudioStage.forward: audio_values=None -> return zeros {tuple(out.shape)}")
+            except Exception:
+                pass
+            return out
 
         # 确保audio_values是float类型
         if audio_values.dtype != torch.float32:
@@ -76,12 +94,15 @@ class AudioStage(nn.Module):
         batch_size, original_seq_len = audio_values.shape[:2]
         time_steps = audio_values.shape[1]
         mel_features = audio_values.shape[2]
+        _pre_shape = tuple(audio_values.shape)
 
         audio_values = audio_values.transpose(1, 2)
+        _post_shape = tuple(audio_values.shape)
 
         feature_lens = torch.tensor([mel_features] * batch_size, dtype=torch.long, device=audio_values.device)
         aftercnn_lens = torch.tensor([mel_features] * batch_size, dtype=torch.long, device=audio_values.device)
 
+        _path = "main"
         try:
             res = self.audio_enc(
                 input_features=audio_values,
@@ -90,13 +111,21 @@ class AudioStage(nn.Module):
             )
         except Exception:
             try:
+                _path = "fallback_no_aftercnn_lens"
                 res = self.audio_enc(
                     input_features=audio_values,
                     feature_lens=feature_lens
                 )
             except Exception:
+                _path = "zeros_fallback"
                 device = audio_values.device
-                return torch.zeros(batch_size, original_seq_len // 4, 768, device=device, dtype=torch.float32)
+                out = torch.zeros(batch_size, original_seq_len // 4, 768, device=device, dtype=torch.float32)
+                try:
+                    _ms = (time.perf_counter() - _t0) * 1000.0
+                    print(f"[rank{rid}] AudioStage.forward: path={_path} -> zeros {tuple(out.shape)} took={_ms:.2f}ms pre={_pre_shape} post={_post_shape}")
+                except Exception:
+                    pass
+                return out
 
         audio_embeds = None
         if isinstance(res, torch.Tensor):
@@ -114,11 +143,32 @@ class AudioStage(nn.Module):
                         break
 
         if isinstance(audio_embeds, torch.Tensor):
-            return audio_embeds.contiguous()
+            out = audio_embeds.contiguous()
+            try:
+                _ms = (time.perf_counter() - _t0) * 1000.0
+                abs_mean = float(out.detach().abs().mean().item())
+                enc_norm = None
+                try:
+                    # 简单统计编码器参数范数
+                    ps = list(self.audio_enc.parameters())
+                    if ps:
+                        enc_norm = float(sum(p.detach().norm().item() for p in ps[:3]))  # 采样前3个层参数
+                except Exception:
+                    pass
+                print(f"[rank{rid}] AudioStage.forward: path={_path} in={_pre_shape}->{_post_shape} out={tuple(out.shape)} took={_ms:.2f}ms abs_mean={abs_mean:.3e} enc_norm={enc_norm}")
+            except Exception:
+                pass
+            return out
         else:
             device = audio_values.device
             batch_size, seq_len = audio_values.shape[:2]
-            return torch.zeros(batch_size, seq_len // 4, 768, device=device, dtype=torch.float32)
+            out = torch.zeros(batch_size, seq_len // 4, 768, device=device, dtype=torch.float32)
+            try:
+                _ms = (time.perf_counter() - _t0) * 1000.0
+                print(f"[rank{rid}] AudioStage.forward: no tensor in result -> zeros {tuple(out.shape)} took={_ms:.2f}ms pre={_pre_shape} post={_post_shape}")
+            except Exception:
+                pass
+            return out
 
 
 class VisionStage(nn.Module):

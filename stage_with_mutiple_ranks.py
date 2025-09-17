@@ -1731,7 +1731,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     self.fwd_cache[fwd_chunk_id] = (output_tuple, flat_args + flat_kwargs)
                     return output_tuple
 
-            # 在 text 头部增加前后耗时与形状的调试信息
+            # 在 text/audio 头部增加前后耗时与形状的调试信息
             if mt == "text":
                 import time
                 _t0 = time.perf_counter()
@@ -1753,6 +1753,31 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     out_tup = _normalize_model_output_as_tuple(out)
                     oshapes = [tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__ for t in out_tup]
                     print(f"[rank{rid}] [text] forward_one_chunk exit: mb={fwd_chunk_id} took={_ms:.2f}ms outputs={oshapes}")
+                except Exception:
+                    pass
+                return out
+
+            if mt == "audio":
+                import time
+                _t0 = time.perf_counter()
+                try:
+                    import torch.distributed as dist
+                    rid = dist.get_rank() if dist.is_initialized() else -1
+                    def _shape(x):
+                        return tuple(x.shape) if isinstance(x, torch.Tensor) else None
+                    _arg_shapes = [_shape(a) for a in args]
+                    _kw_shapes = {k: _shape(v) for k, v in (clean_kwargs or {}).items()}
+                    print(f"[rank{rid}] [audio] forward_one_chunk enter: mb={fwd_chunk_id} args={_arg_shapes} kwargs={_kw_shapes}")
+                except Exception:
+                    pass
+                out = super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
+                try:
+                    import torch.distributed as dist
+                    rid = dist.get_rank() if dist.is_initialized() else -1
+                    _ms = (time.perf_counter() - _t0) * 1000.0
+                    out_tup = _normalize_model_output_as_tuple(out)
+                    oshapes = [tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__ for t in out_tup]
+                    print(f"[rank{rid}] [audio] forward_one_chunk exit: mb={fwd_chunk_id} took={_ms:.2f}ms outputs={oshapes}")
                 except Exception:
                     pass
                 return out
@@ -1987,7 +2012,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 其它模态 stage 直接用父类实现。
         """
         if getattr(self, "model_type", None) != "packing":
-            # 头部 stage：沿用父类逻辑，但在 text 上打印耗时与梯度统计
+            # 头部 stage：沿用父类逻辑，但在 text/audio 上打印耗时与梯度统计
             mt = getattr(self, "model_type", None)
             if mt == "text":
                 import time
@@ -2024,6 +2049,48 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                                 pass
                     print(
                         f"[rank{rid}] [text] backward_one_chunk exit: mb={bwd_chunk_id} took={_ms:.2f}ms "
+                        f"grads_in_len={len(ginfo)} shapes={ginfo} param_grads={with_grad}/{total_params} "
+                        f"avg_abs_grad_sum={grad_norm_sum:.3e}"
+                    )
+                except Exception:
+                    pass
+                return ret
+
+            if mt == "audio":
+                import time
+                _t0 = time.perf_counter()
+                try:
+                    import torch.distributed as dist
+                    rid = dist.get_rank() if dist.is_initialized() else -1
+                    print(f"[rank{rid}] [audio] backward_one_chunk enter: mb={bwd_chunk_id} full={full_backward} last={last_backward}")
+                except Exception:
+                    pass
+                ret = super().backward_one_chunk(
+                    bwd_chunk_id, loss, full_backward, last_backward, retain_graph_for_packed_mbs
+                )
+                try:
+                    import torch.distributed as dist
+                    rid = dist.get_rank() if dist.is_initialized() else -1
+                    _ms = (time.perf_counter() - _t0) * 1000.0
+                    grads_in = self.bwd_cache.get(bwd_chunk_id, ())
+                    ginfo = [
+                        (tuple(g.shape) if isinstance(g, torch.Tensor) else None) if g is not None else None
+                        for g in grads_in
+                    ]
+                    # 统计参数梯度情况
+                    total_params = 0
+                    with_grad = 0
+                    grad_norm_sum = 0.0
+                    for p in self.submod.parameters():
+                        total_params += 1
+                        if p.grad is not None and isinstance(p.grad, torch.Tensor):
+                            with_grad += 1
+                            try:
+                                grad_norm_sum += float(p.grad.detach().abs().mean().item())
+                            except Exception:
+                                pass
+                    print(
+                        f"[rank{rid}] [audio] backward_one_chunk exit: mb={bwd_chunk_id} took={_ms:.2f}ms "
                         f"grads_in_len={len(ginfo)} shapes={ginfo} param_grads={with_grad}/{total_params} "
                         f"avg_abs_grad_sum={grad_norm_sum:.3e}"
                     )
