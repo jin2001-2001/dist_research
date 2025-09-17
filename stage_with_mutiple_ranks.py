@@ -1732,6 +1732,32 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     self.fwd_cache[fwd_chunk_id] = (output_tuple, flat_args + flat_kwargs)
                     return output_tuple
 
+            # 在 text 头部增加前后耗时与形状的调试信息
+            if mt == "text":
+                import time
+                _t0 = time.perf_counter()
+                try:
+                    import torch.distributed as dist
+                    rid = dist.get_rank() if dist.is_initialized() else -1
+                    def _shape(x):
+                        return tuple(x.shape) if isinstance(x, torch.Tensor) else None
+                    _arg_shapes = [_shape(a) for a in args]
+                    _kw_shapes = {k: _shape(v) for k, v in (clean_kwargs or {}).items()}
+                    print(f"[rank{rid}] [text] forward_one_chunk enter: mb={fwd_chunk_id} args={_arg_shapes} kwargs={_kw_shapes}")
+                except Exception:
+                    pass
+                out = super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
+                try:
+                    import torch.distributed as dist
+                    rid = dist.get_rank() if dist.is_initialized() else -1
+                    _ms = (time.perf_counter() - _t0) * 1000.0
+                    out_tup = _normalize_model_output_as_tuple(out)
+                    oshapes = [tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__ for t in out_tup]
+                    print(f"[rank{rid}] [text] forward_one_chunk exit: mb={fwd_chunk_id} took={_ms:.2f}ms outputs={oshapes}")
+                except Exception:
+                    pass
+                return out
+
             return super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
 
         # ---------- helpers（局部，无外部依赖） ----------
@@ -1962,7 +1988,34 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 其它模态 stage 直接用父类实现。
         """
         if getattr(self, "model_type", None) != "packing":
-            # 头部 stage：沿用父类逻辑
+            # 头部 stage：沿用父类逻辑，但在 text 上打印耗时与梯度统计
+            mt = getattr(self, "model_type", None)
+            if mt == "text":
+                import time
+                _t0 = time.perf_counter()
+                try:
+                    import torch.distributed as dist
+                    rid = dist.get_rank() if dist.is_initialized() else -1
+                    print(f"[rank{rid}] [text] backward_one_chunk enter: mb={bwd_chunk_id} full={full_backward} last={last_backward}")
+                except Exception:
+                    pass
+                ret = super().backward_one_chunk(
+                    bwd_chunk_id, loss, full_backward, last_backward, retain_graph_for_packed_mbs
+                )
+                try:
+                    import torch.distributed as dist
+                    rid = dist.get_rank() if dist.is_initialized() else -1
+                    _ms = (time.perf_counter() - _t0) * 1000.0
+                    grads_in = self.bwd_cache.get(bwd_chunk_id, ())
+                    ginfo = [
+                        (tuple(g.shape) if isinstance(g, torch.Tensor) else None) if g is not None else None
+                        for g in grads_in
+                    ]
+                    print(f"[rank{rid}] [text] backward_one_chunk exit: mb={bwd_chunk_id} took={_ms:.2f}ms grads_in_len={len(ginfo)} shapes={ginfo}")
+                except Exception:
+                    pass
+                return ret
+
             return super().backward_one_chunk(
                 bwd_chunk_id, loss, full_backward, last_backward, retain_graph_for_packed_mbs
             )

@@ -190,6 +190,8 @@ class TextStage(nn.Module):
             attn_4d: [B, 1, T, T]（含 pad 与因果遮罩）
             position_ids: 这里返回 None，交由 Stage1 统一计算（含多模态感知索引）
         """
+        import time
+        _t0 = time.perf_counter()
         device = input_ids.device
         B, T = input_ids.shape
 
@@ -207,7 +209,19 @@ class TextStage(nn.Module):
         base_pos = torch.arange(T, device=device).unsqueeze(0).repeat(B, 1)
         position_ids = torch.stack([base_pos, base_pos, base_pos], dim=0).contiguous()
         # 额外返回 input_ids 和 attention_mask，供 packing 阶段做多模态替换与位置计算
-        return hidden.contiguous(), attn_4d.contiguous(), position_ids, input_ids.contiguous(), attention_mask.contiguous()
+        out = (hidden.contiguous(), attn_4d.contiguous(), position_ids, input_ids.contiguous(), attention_mask.contiguous())
+        try:
+            import torch.distributed as dist
+            rid = dist.get_rank() if dist.is_initialized() else -1
+            _ms = (time.perf_counter() - _t0) * 1000.0
+            # 简要统计，避免过重代价
+            attn_sum = int(attention_mask.sum().item()) if isinstance(attention_mask, torch.Tensor) else -1
+            uid_min = int(input_ids.min().item()) if isinstance(input_ids, torch.Tensor) else -1
+            uid_max = int(input_ids.max().item()) if isinstance(input_ids, torch.Tensor) else -1
+            print(f"[rank{rid}] TextStage.forward: B={B} T={T} attn_sum={attn_sum} input_ids[min,max]=({uid_min},{uid_max}) took={_ms:.2f}ms")
+        except Exception:
+            pass
+        return out
 
 
 # -----------------------------
