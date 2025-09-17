@@ -104,21 +104,23 @@ class AudioStage(nn.Module):
         input_feats = None
 
         if D1 in typical_mels:
-            # [B, n_mels, n_frames]
+            # [B, n_mels, n_frames] -> 转成 [B, n_frames, n_mels]
             n_mels, n_frames = D1, D2
-            input_feats = audio_values
-        elif D2 in typical_mels:
-            # [B, n_frames, n_mels] -> 转置
-            n_mels, n_frames = D2, D1
             input_feats = audio_values.transpose(1, 2)
+        elif D2 in typical_mels:
+            # [B, n_frames, n_mels]，已符合期望
+            n_mels, n_frames = D2, D1
+            input_feats = audio_values
         else:
             # 启发式：把较大的维度当作帧数，较小的当作梅尔通道
             if D1 >= D2:
+                # [B, frames, mels]
                 n_mels, n_frames = D2, D1
-                input_feats = audio_values.transpose(1, 2)
-            else:
-                n_mels, n_frames = D1, D2
                 input_feats = audio_values
+            else:
+                # [B, mels, frames] -> 转成 [B, frames, mels]
+                n_mels, n_frames = D1, D2
+                input_feats = audio_values.transpose(1, 2)
 
         _post_shape = tuple(input_feats.shape)
 
