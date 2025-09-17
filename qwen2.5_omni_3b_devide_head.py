@@ -1044,6 +1044,29 @@ def main():
             truncation=True
         )
 
+        # Debug once or twice: what keys does processor return, and are there audio keys?
+        try:
+            if not hasattr(collate_fn, "_dbg_count"):
+                collate_fn._dbg_count = 0
+            if collate_fn._dbg_count < 2:
+                def _shape(x):
+                    import torch
+                    if isinstance(x, torch.Tensor):
+                        return (tuple(x.shape), str(x.dtype))
+                    return type(x).__name__
+                keys = list(pack.keys()) if hasattr(pack, 'keys') else []
+                print(f"[rank0] collate_fn: processor pack keys: {keys}")
+                for k in ("pixel_values", "image_grid_thw", "input_values", "input_features", "audio_values", "feature_attention_mask"):
+                    if hasattr(pack, 'get'):
+                        v = pack.get(k, None)
+                        if v is not None:
+                            print(f"[rank0] collate_fn: pack[{k}] -> {_shape(v)}")
+                        else:
+                            print(f"[rank0] collate_fn: pack[{k}] -> None")
+                collate_fn._dbg_count += 1
+        except Exception:
+            pass
+
         input_ids = pack["input_ids"]
         attention_mask = pack["attention_mask"]
         labels = input_ids.clone()
@@ -1087,6 +1110,22 @@ def main():
                     if "feature_attention_mask" in pack:
                         audio_inputs["feature_attention_mask"] = pack["feature_attention_mask"]
                     break
+
+        # Debug once or twice: what did we build for audio_inputs?
+        try:
+            if not hasattr(collate_fn, "_dbg_audio_count"):
+                collate_fn._dbg_audio_count = 0
+            if collate_fn._dbg_audio_count < 2:
+                if audio_inputs is None:
+                    print(f"[rank0] collate_fn: built audio_inputs=None")
+                else:
+                    import torch
+                    kv = {k: (tuple(v.shape), str(v.dtype)) if isinstance(v, torch.Tensor) else type(v).__name__
+                          for k, v in audio_inputs.items()}
+                    print(f"[rank0] collate_fn: built audio_inputs keys/shapes: {kv}")
+                collate_fn._dbg_audio_count += 1
+        except Exception:
+            pass
 
         return {
             "input_ids": input_ids,
@@ -1179,6 +1218,19 @@ def main():
                 buf_aud = [aud_pack]
                 dist.broadcast_object_list(buf_aud, src=0)
 
+                # Debug first two steps: what will we broadcast for audio
+                if step < 2:
+                    if aud_pack is None:
+                        print(f"[rank0] train-step {step}: aud_pack=None (no audio_inputs)")
+                    else:
+                        try:
+                            import torch
+                            kv = {k: (tuple(v.shape), str(v.dtype)) if isinstance(v, torch.Tensor) else type(v).__name__
+                                  for k, v in aud_pack.items()}
+                            print(f"[rank0] train-step {step}: aud_pack keys/shapes: {kv}")
+                        except Exception:
+                            print(f"[rank0] train-step {step}: aud_pack present but cannot summarize")
+
                 # Local step for audio head：作为 kwargs 传入，并带上 attention_mask 以便 microbatch 大小推断
                 sched.step(audio_inputs=aud_pack, attention_mask=attn, target=tgt)
 
@@ -1200,6 +1252,20 @@ def main():
                 buf_aud = [None]
                 dist.broadcast_object_list(buf_aud, src=0)
                 aud_pack = buf_aud[0]
+
+                # Debug first two steps: confirm reception on non-zero ranks
+                if step < 2:
+                    rk = rank
+                    if aud_pack is None:
+                        print(f"[rank{rk}] train-step {step}: received aud_pack=None")
+                    else:
+                        try:
+                            import torch
+                            kv = {k: (tuple(v.shape), str(v.dtype)) if isinstance(v, torch.Tensor) else type(v).__name__
+                                  for k, v in aud_pack.items()}
+                            print(f"[rank{rk}] train-step {step}: received aud_pack keys/shapes: {kv}")
+                        except Exception:
+                            print(f"[rank{rk}] train-step {step}: received aud_pack present but cannot summarize")
 
                 if rank == 1:
                     # Vision head executes with vision inputs：作为 kwargs 传入，并带上 attention_mask 以便 microbatch 大小推断
