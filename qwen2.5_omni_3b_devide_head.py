@@ -50,7 +50,7 @@ class AudioStage(nn.Module):
         import time
         _t0 = time.perf_counter()
         try:
-            import torch.distributed as dist
+            
             rid = dist.get_rank() if dist.is_initialized() else -1
         except Exception:
             rid = -1
@@ -327,7 +327,7 @@ class TextStage(nn.Module):
         # 额外返回 input_ids 和 attention_mask，供 packing 阶段做多模态替换与位置计算
         out = (hidden.contiguous(), attn_4d.contiguous(), position_ids, input_ids.contiguous(), attention_mask.contiguous())
         try:
-            import torch.distributed as dist
+            
             rid = dist.get_rank() if dist.is_initialized() else -1
             _ms = (time.perf_counter() - _t0) * 1000.0
             # 简要统计，避免过重代价
@@ -462,7 +462,7 @@ class Stage1(nn.Module):
     def _replace_feats_by_token_id(input_ids, inputs_embeds, feats, special_token_id):
         if feats is None or special_token_id is None or input_ids is None:
             try:
-                import torch.distributed as dist
+                
                 rid = dist.get_rank() if dist.is_initialized() else -1
                 print(f"[rank{rid}] Stage1._replace_feats_by_token_id: skip replacement due to feats/input_ids/token_id None. token_id={special_token_id} feats={(None if feats is None else tuple(feats.shape))} input_ids_is_none={input_ids is None}")
             except Exception:
@@ -472,7 +472,7 @@ class Stage1(nn.Module):
         n_tokens = int(flat_mask.sum().item())
         if n_tokens == 0:
             try:
-                import torch.distributed as dist
+                
                 rid = dist.get_rank() if dist.is_initialized() else -1
                 print(f"[rank{rid}] Stage1._replace_feats_by_token_id: no tokens for token_id={special_token_id}; feats_shape={(tuple(feats.shape) if hasattr(feats,'shape') else type(feats).__name__)}")
             except Exception:
@@ -490,7 +490,7 @@ class Stage1(nn.Module):
         idx2 = idx.unsqueeze(1).expand(-1, emb_flat.size(1))
         out_flat = emb_flat.scatter(0, idx2, feats)
         try:
-            import torch.distributed as dist
+            
             rid = dist.get_rank() if dist.is_initialized() else -1
             print(f"[rank{rid}] Stage1._replace_feats_by_token_id: replaced token_id={special_token_id} count={n_tokens} feats_shape={tuple(feats.shape)} emb_dim={emb_flat.size(-1)}")
         except Exception:
@@ -530,7 +530,7 @@ class Stage1(nn.Module):
 
         # Debug: summarize inputs to Stage1
         try:
-            import torch.distributed as dist
+            
             rid = dist.get_rank() if dist.is_initialized() else -1
             def _s(x):
                 return tuple(x.shape) if isinstance(x, torch.Tensor) else None
@@ -562,7 +562,7 @@ class Stage1(nn.Module):
                 if image_token_id is None:
                     image_token_id = self._infer_token_id_by_count(input_ids, expected_count=img_feats.size(0))
                     try:
-                        import torch.distributed as dist
+                        
                         rid = dist.get_rank() if dist.is_initialized() else -1
                         print(f"[rank{rid}] Stage1.forward: inferred image_token_id={image_token_id} from count={img_feats.size(0)}")
                     except Exception:
@@ -573,7 +573,7 @@ class Stage1(nn.Module):
                     if run_id is not None and run_len > 0:
                         image_token_id = run_id
                         try:
-                            import torch.distributed as dist
+                            
                             rid = dist.get_rank() if dist.is_initialized() else -1
                             print(f"[rank{rid}] Stage1.forward: fallback longest-run image_token_id={image_token_id}, run_len={run_len}")
                         except Exception:
@@ -590,21 +590,21 @@ class Stage1(nn.Module):
                         hidden = self._replace_feats_by_token_id(input_ids, hidden, img_feats, image_token_id)
                     except Exception as e:
                         try:
-                            import torch.distributed as dist
+                            
                             rid = dist.get_rank() if dist.is_initialized() else -1
                             print(f"[rank{rid}] Stage1.forward: image replace failed with {type(e).__name__}: {e}")
                         except Exception:
                             pass
                 else:
                     try:
-                        import torch.distributed as dist
+                        
                         rid = dist.get_rank() if dist.is_initialized() else -1
                         print(f"[rank{rid}] Stage1.forward: could not infer image_token_id; skip image replace")
                     except Exception:
                         pass
             else:
                 try:
-                    import torch.distributed as dist
+                    
                     rid = dist.get_rank() if dist.is_initialized() else -1
                     print(f"[rank{rid}] Stage1.forward: skip image replace; image_embeds is None")
                 except Exception:
@@ -616,7 +616,7 @@ class Stage1(nn.Module):
                 if audio_token_id is None:
                     audio_token_id = self._infer_token_id_by_count(input_ids, expected_count=aud_feats.size(0))
                     try:
-                        import torch.distributed as dist
+                        
                         rid = dist.get_rank() if dist.is_initialized() else -1
                         print(f"[rank{rid}] Stage1.forward: inferred audio_token_id={audio_token_id} from count={aud_feats.size(0)}")
                     except Exception:
@@ -626,7 +626,7 @@ class Stage1(nn.Module):
                     if run_id is not None and run_len > 0:
                         audio_token_id = run_id
                         try:
-                            import torch.distributed as dist
+                            
                             rid = dist.get_rank() if dist.is_initialized() else -1
                             print(f"[rank{rid}] Stage1.forward: fallback longest-run audio_token_id={audio_token_id}, run_len={run_len}")
                         except Exception:
@@ -641,28 +641,28 @@ class Stage1(nn.Module):
                         hidden = self._replace_feats_by_token_id(input_ids, hidden, aud_feats, audio_token_id)
                     except Exception as e:
                         try:
-                            import torch.distributed as dist
+                            
                             rid = dist.get_rank() if dist.is_initialized() else -1
                             print(f"[rank{rid}] Stage1.forward: audio replace failed with {type(e).__name__}: {e}")
                         except Exception:
                             pass
                 else:
                     try:
-                        import torch.distributed as dist
+                        
                         rid = dist.get_rank() if dist.is_initialized() else -1
                         print(f"[rank{rid}] Stage1.forward: could not infer audio_token_id; skip audio replace")
                     except Exception:
                         pass
             else:
                 try:
-                    import torch.distributed as dist
+                    
                     rid = dist.get_rank() if dist.is_initialized() else -1
                     print(f"[rank{rid}] Stage1.forward: skip audio replace; audio_embeds is None")
                 except Exception:
                     pass
         else:
             try:
-                import torch.distributed as dist
+                
                 rid = dist.get_rank() if dist.is_initialized() else -1
                 print(f"[rank{rid}] Stage1.forward: input_ids is None; cannot perform multimodal replacement")
             except Exception:
@@ -687,7 +687,7 @@ class Stage1(nn.Module):
                 position_ids = torch.stack([base_pos, base_pos, base_pos], dim=0).contiguous()
 
         try:
-            import torch.distributed as dist
+            
             rid = dist.get_rank() if dist.is_initialized() else -1
             print(f"[rank{rid}] Stage1.forward: final position_ids shape={(tuple(position_ids.shape) if isinstance(position_ids, torch.Tensor) else None)}")
         except Exception:
