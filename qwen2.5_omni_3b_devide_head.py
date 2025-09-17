@@ -65,11 +65,13 @@ class AudioStage(nn.Module):
             return out
 
         if isinstance(audio_inputs, dict):
-            audio_values = (
-                audio_inputs.get("input_features")
-                or audio_inputs.get("input_values")
-                or audio_inputs.get("audio_values")
-            )
+            # 避免对张量做布尔短路判断，逐键安全取值
+            audio_values = None
+            for k in ("input_features", "input_values", "audio_values"):
+                v = audio_inputs.get(k, None)
+                if v is not None:
+                    audio_values = v
+                    break
             feature_attention_mask = audio_inputs.get("feature_attention_mask", None)
         else:
             audio_values = audio_inputs
