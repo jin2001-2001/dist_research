@@ -65,10 +65,11 @@ class AudioStage(nn.Module):
             return out
 
         if isinstance(audio_inputs, dict):
-            audio_values = (audio_inputs.get("input_values")
-                            or audio_inputs.get("audio_values")
-                            or audio_inputs.get("input_features"))
-            # 获取feature_attention_mask如果存在
+            audio_values = (
+                audio_inputs.get("input_features")
+                or audio_inputs.get("input_values")
+                or audio_inputs.get("audio_values")
+            )
             feature_attention_mask = audio_inputs.get("feature_attention_mask", None)
         else:
             audio_values = audio_inputs
@@ -91,21 +92,42 @@ class AudioStage(nn.Module):
             audio_values = audio_values.type(self.audio_enc.get_dtype())
         audio_values = audio_values.to(next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else audio_values.device)
 
-        batch_size, original_seq_len = audio_values.shape[:2]
-        time_steps = audio_values.shape[1]
-        mel_features = audio_values.shape[2]
+        B, D1, D2 = audio_values.shape[:3]
         _pre_shape = tuple(audio_values.shape)
 
-        audio_values = audio_values.transpose(1, 2)
-        _post_shape = tuple(audio_values.shape)
+        # 维度自适配：推断 [B, n_mels, n_frames] 或 [B, n_frames, n_mels]
+        typical_mels = {64, 80, 96, 128}
+        n_mels = None
+        n_frames = None
+        input_feats = None
 
-        feature_lens = torch.tensor([mel_features] * batch_size, dtype=torch.long, device=audio_values.device)
-        aftercnn_lens = torch.tensor([mel_features] * batch_size, dtype=torch.long, device=audio_values.device)
+        if D1 in typical_mels:
+            # [B, n_mels, n_frames]
+            n_mels, n_frames = D1, D2
+            input_feats = audio_values
+        elif D2 in typical_mels:
+            # [B, n_frames, n_mels] -> 转置
+            n_mels, n_frames = D2, D1
+            input_feats = audio_values.transpose(1, 2)
+        else:
+            # 启发式：把较大的维度当作帧数，较小的当作梅尔通道
+            if D1 >= D2:
+                n_mels, n_frames = D2, D1
+                input_feats = audio_values.transpose(1, 2)
+            else:
+                n_mels, n_frames = D1, D2
+                input_feats = audio_values
+
+        _post_shape = tuple(input_feats.shape)
+
+        # lens 使用帧数；aftercnn_lens 若未知，同步为帧数
+        feature_lens = torch.tensor([n_frames] * B, dtype=torch.long, device=input_feats.device)
+        aftercnn_lens = torch.tensor([n_frames] * B, dtype=torch.long, device=input_feats.device)
 
         _path = "main"
         try:
             res = self.audio_enc(
-                input_features=audio_values,
+                input_features=input_feats,
                 feature_lens=feature_lens,
                 aftercnn_lens=aftercnn_lens
             )
@@ -113,13 +135,15 @@ class AudioStage(nn.Module):
             try:
                 _path = "fallback_no_aftercnn_lens"
                 res = self.audio_enc(
-                    input_features=audio_values,
+                    input_features=input_feats,
                     feature_lens=feature_lens
                 )
             except Exception as e2:
                 _path = "zeros_fallback"
-                device = audio_values.device
-                out = torch.zeros(batch_size, original_seq_len // 4, 768, device=device, dtype=torch.float32)
+                device = input_feats.device
+                # 兜底：按启发式估算下采样后序列长度
+                out_len = max(1, n_frames // 4)
+                out = torch.zeros(B, out_len, 768, device=device, dtype=torch.float32)
                 try:
                     _ms = (time.perf_counter() - _t0) * 1000.0
                     print(
