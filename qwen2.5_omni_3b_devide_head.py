@@ -916,7 +916,7 @@ parser.add_argument("--plan_loc", type=str, required=True,
                     help='the json file that stores the sharding plans...')
 args = parser.parse_args()
 def main():
-
+    import torch  # ensure local binding to avoid UnboundLocalError in some environments
     dist.init_process_group("gloo", init_method="env://")
 
     rank = int(os.environ["RANK"])
