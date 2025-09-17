@@ -922,8 +922,6 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         - Supports Tensor / list / tuple / None (None is passed through).
         - In-place scaling is used to avoid extra allocations.
         """
-        import torch
-        import torch.distributed as dist
 
         fan_in = len(self.next_group) if self.next_group is not None else 1
         if grads is None or fan_in <= 1:
@@ -1753,18 +1751,30 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 import time
                 _t0 = time.perf_counter()
                 try:
-                    import torch.distributed as dist
+
                     rid = dist.get_rank() if dist.is_initialized() else -1
-                    def _shape(x):
-                        return tuple(x.shape) if isinstance(x, torch.Tensor) else None
-                    _arg_shapes = [_shape(a) for a in args]
-                    _kw_shapes = {k: _shape(v) for k, v in (clean_kwargs or {}).items()}
+
+                    def _summ(x, depth: int = 0):
+                        if isinstance(x, torch.Tensor):
+                            return f"Tensor{tuple(x.shape)}:{x.dtype}"
+                        if isinstance(x, dict):
+                            if depth >= 1:
+                                return {k: type(v).__name__ for k, v in x.items()}
+                            return {k: _summ(v, depth + 1) for k, v in x.items()}
+                        if isinstance(x, (list, tuple)):
+                            if depth >= 1:
+                                return [type(v).__name__ for v in x]
+                            return [_summ(v, depth + 1) for v in x]
+                        return type(x).__name__
+
+                    _arg_shapes = [_summ(a) for a in args]
+                    _kw_shapes = {k: _summ(v) for k, v in (clean_kwargs or {}).items()}
                     print(f"[rank{rid}] [text] forward_one_chunk enter: mb={fwd_chunk_id} args={_arg_shapes} kwargs={_kw_shapes}")
                 except Exception:
                     pass
                 out = super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
                 try:
-                    import torch.distributed as dist
+                    
                     rid = dist.get_rank() if dist.is_initialized() else -1
                     _ms = (time.perf_counter() - _t0) * 1000.0
                     out_tup = _normalize_model_output_as_tuple(out)
@@ -1778,18 +1788,30 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 import time
                 _t0 = time.perf_counter()
                 try:
-                    import torch.distributed as dist
+
                     rid = dist.get_rank() if dist.is_initialized() else -1
-                    def _shape(x):
-                        return tuple(x.shape) if isinstance(x, torch.Tensor) else None
-                    _arg_shapes = [_shape(a) for a in args]
-                    _kw_shapes = {k: _shape(v) for k, v in (clean_kwargs or {}).items()}
+
+                    def _summ(x, depth: int = 0):
+                        if isinstance(x, torch.Tensor):
+                            return f"Tensor{tuple(x.shape)}:{x.dtype}"
+                        if isinstance(x, dict):
+                            if depth >= 1:
+                                return {k: type(v).__name__ for k, v in x.items()}
+                            return {k: _summ(v, depth + 1) for k, v in x.items()}
+                        if isinstance(x, (list, tuple)):
+                            if depth >= 1:
+                                return [type(v).__name__ for v in x]
+                            return [_summ(v, depth + 1) for v in x]
+                        return type(x).__name__
+
+                    _arg_shapes = [_summ(a) for a in args]
+                    _kw_shapes = {k: _summ(v) for k, v in (clean_kwargs or {}).items()}
                     print(f"[rank{rid}] [audio] forward_one_chunk enter: mb={fwd_chunk_id} args={_arg_shapes} kwargs={_kw_shapes}")
                 except Exception:
                     pass
                 out = super().forward_one_chunk(fwd_chunk_id, args, clean_kwargs, pack_size)
                 try:
-                    import torch.distributed as dist
+                    
                     rid = dist.get_rank() if dist.is_initialized() else -1
                     _ms = (time.perf_counter() - _t0) * 1000.0
                     out_tup = _normalize_model_output_as_tuple(out)
@@ -1848,7 +1870,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             for t in tensors:
                 if _is_float_tensor(t): return t
             return None
-
+        # 以下全是packing的逻辑
         # ---------- 从模态缓存取数据 ----------
         mm = self.mm_fwd_cache.get(fwd_chunk_id, {})
         try:
@@ -2035,7 +2057,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 import time
                 _t0 = time.perf_counter()
                 try:
-                    import torch.distributed as dist
+                    
                     rid = dist.get_rank() if dist.is_initialized() else -1
                     print(f"[rank{rid}] [text] backward_one_chunk enter: mb={bwd_chunk_id} full={full_backward} last={last_backward}")
                 except Exception:
@@ -2044,7 +2066,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     bwd_chunk_id, loss, full_backward, last_backward, retain_graph_for_packed_mbs
                 )
                 try:
-                    import torch.distributed as dist
+                    
                     rid = dist.get_rank() if dist.is_initialized() else -1
                     _ms = (time.perf_counter() - _t0) * 1000.0
                     grads_in = self.bwd_cache.get(bwd_chunk_id, ())
@@ -2077,7 +2099,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                 import time
                 _t0 = time.perf_counter()
                 try:
-                    import torch.distributed as dist
+                    
                     rid = dist.get_rank() if dist.is_initialized() else -1
                     print(f"[rank{rid}] [audio] backward_one_chunk enter: mb={bwd_chunk_id} full={full_backward} last={last_backward}")
                 except Exception:
@@ -2086,7 +2108,7 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     bwd_chunk_id, loss, full_backward, last_backward, retain_graph_for_packed_mbs
                 )
                 try:
-                    import torch.distributed as dist
+                    
                     rid = dist.get_rank() if dist.is_initialized() else -1
                     _ms = (time.perf_counter() - _t0) * 1000.0
                     grads_in = self.bwd_cache.get(bwd_chunk_id, ())
