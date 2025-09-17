@@ -273,6 +273,53 @@ class Stage1(nn.Module):
         return int(torch.max(cand).item()) if prefer_large_id else int(torch.min(cand).item())
 
     @staticmethod
+    def _infer_token_id_by_longest_run(input_ids: torch.Tensor) -> tuple[int | None, int]:
+        """在 input_ids 的单样本序列中寻找最长连续相同 id 的片段，返回 (id, run_len)。
+        B>1 时取第一个样本。若失败，返回 (None, 0)。
+        """
+        if input_ids is None or not isinstance(input_ids, torch.Tensor) or input_ids.dim() != 2 or input_ids.numel() == 0:
+            return None, 0
+        ids = input_ids[0].detach()
+        best_id = None
+        best_len = 0
+        cur_id = None
+        cur_len = 0
+        for v in ids:
+            v = int(v.item())
+            if cur_id is None or v != cur_id:
+                if cur_len > best_len:
+                    best_id, best_len = cur_id, cur_len
+                cur_id, cur_len = v, 1
+            else:
+                cur_len += 1
+        if cur_len > best_len:
+            best_id, best_len = cur_id, cur_len
+        return best_id, best_len
+
+    @staticmethod
+    def _align_feats_length(feats: torch.Tensor, target_len: int) -> torch.Tensor:
+        """将 feats 的第一维（N）对齐到 target_len：
+        - N == target_len: 直接返回
+        - N > target_len: 截断到前 target_len
+        - N < target_len: 重复最后一个向量或零填充到 target_len（使用重复以保持梯度可传）
+        """
+        if feats is None:
+            return feats
+        N = feats.size(0)
+        if N == target_len:
+            return feats
+        if N > target_len:
+            return feats[:target_len]
+        # N < target_len
+        if N == 0:
+            # 退化：构造全零（保持 dtype/device）
+            return torch.zeros(target_len, feats.size(1), device=feats.device, dtype=feats.dtype)
+        # 重复最后一个向量填充到目标长度
+        pad_count = target_len - N
+        last_vec = feats[-1:].expand(pad_count, -1)
+        return torch.cat([feats, last_vec], dim=0)
+
+    @staticmethod
     def _replace_feats_by_token_id(input_ids, inputs_embeds, feats, special_token_id):
         if feats is None or special_token_id is None or input_ids is None:
             try:
@@ -369,7 +416,7 @@ class Stage1(nn.Module):
             # 目标 hidden 维度
             H = hidden.size(-1)
 
-            # 视觉替换：维度自适配 + id 推断
+            # 视觉替换：维度自适配 + id 推断（计数匹配失败时用最长连续片段回退，并对齐长度）
             if image_embeds is not None:
                 img_feats = self._adapt_feats_to_hidden(image_embeds, H)
                 # 若未提供 token_id，依据计数推断
@@ -381,8 +428,34 @@ class Stage1(nn.Module):
                         print(f"[rank{rid}] Stage1.forward: inferred image_token_id={image_token_id} from count={img_feats.size(0)}")
                     except Exception:
                         pass
+                if image_token_id is None:
+                    # 回退：最长连续片段
+                    run_id, run_len = self._infer_token_id_by_longest_run(input_ids)
+                    if run_id is not None and run_len > 0:
+                        image_token_id = run_id
+                        try:
+                            import torch.distributed as dist
+                            rid = dist.get_rank() if dist.is_initialized() else -1
+                            print(f"[rank{rid}] Stage1.forward: fallback longest-run image_token_id={image_token_id}, run_len={run_len}")
+                        except Exception:
+                            pass
+                        # 根据 run_len 对齐特征长度
+                        img_feats = self._align_feats_length(img_feats, run_len)
                 if image_token_id is not None:
-                    hidden = self._replace_feats_by_token_id(input_ids, hidden, img_feats, image_token_id)
+                    try:
+                        # 计算 mask 长度，确保与特征长度一致
+                        flat_mask = (input_ids == image_token_id).reshape(-1)
+                        n_tokens = int(flat_mask.sum().item())
+                        if img_feats.size(0) != n_tokens:
+                            img_feats = self._align_feats_length(img_feats, n_tokens)
+                        hidden = self._replace_feats_by_token_id(input_ids, hidden, img_feats, image_token_id)
+                    except Exception as e:
+                        try:
+                            import torch.distributed as dist
+                            rid = dist.get_rank() if dist.is_initialized() else -1
+                            print(f"[rank{rid}] Stage1.forward: image replace failed with {type(e).__name__}: {e}")
+                        except Exception:
+                            pass
                 else:
                     try:
                         import torch.distributed as dist
@@ -398,7 +471,7 @@ class Stage1(nn.Module):
                 except Exception:
                     pass
 
-            # 音频替换：拉平为 [N, D] + 维度自适配 + id 推断
+            # 音频替换：拉平为 [N, D] + 维度自适配 + id 推断（计数失败回退最长连续片段，并对齐长度）
             if audio_embeds is not None:
                 aud_feats = self._adapt_feats_to_hidden(audio_embeds, H)
                 if audio_token_id is None:
@@ -409,8 +482,31 @@ class Stage1(nn.Module):
                         print(f"[rank{rid}] Stage1.forward: inferred audio_token_id={audio_token_id} from count={aud_feats.size(0)}")
                     except Exception:
                         pass
+                if audio_token_id is None:
+                    run_id, run_len = self._infer_token_id_by_longest_run(input_ids)
+                    if run_id is not None and run_len > 0:
+                        audio_token_id = run_id
+                        try:
+                            import torch.distributed as dist
+                            rid = dist.get_rank() if dist.is_initialized() else -1
+                            print(f"[rank{rid}] Stage1.forward: fallback longest-run audio_token_id={audio_token_id}, run_len={run_len}")
+                        except Exception:
+                            pass
+                        aud_feats = self._align_feats_length(aud_feats, run_len)
                 if audio_token_id is not None:
-                    hidden = self._replace_feats_by_token_id(input_ids, hidden, aud_feats, audio_token_id)
+                    try:
+                        flat_mask = (input_ids == audio_token_id).reshape(-1)
+                        n_tokens = int(flat_mask.sum().item())
+                        if aud_feats.size(0) != n_tokens:
+                            aud_feats = self._align_feats_length(aud_feats, n_tokens)
+                        hidden = self._replace_feats_by_token_id(input_ids, hidden, aud_feats, audio_token_id)
+                    except Exception as e:
+                        try:
+                            import torch.distributed as dist
+                            rid = dist.get_rank() if dist.is_initialized() else -1
+                            print(f"[rank{rid}] Stage1.forward: audio replace failed with {type(e).__name__}: {e}")
+                        except Exception:
+                            pass
                 else:
                     try:
                         import torch.distributed as dist
