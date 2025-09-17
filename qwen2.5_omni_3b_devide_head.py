@@ -103,34 +103,55 @@ class AudioStage(nn.Module):
         n_frames = None
         input_feats = None
 
+        # 目标：让“时间轴”在 dim=1，便于与 feature_lens 对齐
         if D1 in typical_mels:
-            # [B, n_mels, n_frames]，保持 dim=1 为 n_mels
+            # 当前是 [B, mels, frames] -> 转成 [B, frames, mels]
             n_mels, n_frames = D1, D2
-            input_feats = audio_values
-        elif D2 in typical_mels:
-            # [B, n_frames, n_mels] -> 转成 [B, n_mels, n_frames]，保持 dim=1 为 n_mels
-            n_mels, n_frames = D2, D1
             input_feats = audio_values.transpose(1, 2)
+        elif D2 in typical_mels:
+            # 已是 [B, frames, mels]
+            n_mels, n_frames = D2, D1
+            input_feats = audio_values
         else:
             # 启发式：把较大的维度当作帧数，较小的当作梅尔通道
             if D1 >= D2:
-                # [B, frames, mels] -> 转到 [B, mels, frames]
+                # [B, frames, mels]
                 n_mels, n_frames = D2, D1
-                input_feats = audio_values.transpose(1, 2)
-            else:
-                # [B, mels, frames]
-                n_mels, n_frames = D1, D2
                 input_feats = audio_values
+            else:
+                # [B, mels, frames] -> 转到 [B, frames, mels]
+                n_mels, n_frames = D1, D2
+                input_feats = audio_values.transpose(1, 2)
 
         _post_shape = tuple(input_feats.shape)
 
-        # 与音频塔期望对齐：很多实现会在 dim=1 依据 feature_lens split
-        # 因此设置 feature_lens = input_feats.size(1)
-        dim1 = int(input_feats.size(1))
-        feature_lens = torch.tensor([dim1] * B, dtype=torch.long, device=input_feats.device)
-        aftercnn_lens = torch.tensor([dim1] * B, dtype=torch.long, device=input_feats.device)
+        # 计算 feature_lens：优先用 mask.sum(-1)，否则直接用 T = input_feats.size(1)
+        if isinstance(feature_attention_mask, torch.Tensor):
+            feature_lens = feature_attention_mask.sum(-1).to(torch.long)
+        else:
+            feature_lens = torch.full((B,), int(input_feats.size(1)), dtype=torch.long, device=input_feats.device)
+
+        # 若与实际时间轴不一致，优先保证与实际 T 对齐（打印告警以便排查）
+        total_lens = int(feature_lens.sum().item())
+        post_dim1 = int(input_feats.size(1))
+        if total_lens != post_dim1 and B == 1:
+            try:
+                print(f"[rank{rid}] AudioStage.forward: WARN lens_sum({total_lens}) != post_dim1({post_dim1}); override lens to T")
+            except Exception:
+                pass
+            feature_lens = torch.tensor([post_dim1] * B, dtype=torch.long, device=input_feats.device)
+
+        # 计算 aftercnn_lens（优先用模型提供的工具函数）
         try:
-            print(f"[rank{rid}] AudioStage.forward: adapt n_mels={n_mels} n_frames={n_frames} chosen_dim1={dim1} pre={_pre_shape} post={_post_shape}")
+            aftercnn_lens, _ = self.audio_enc._get_feat_extract_output_lengths(feature_lens)
+        except Exception:
+            aftercnn_lens = feature_lens.clone()
+
+        try:
+            print(
+                f"[rank{rid}] AudioStage.forward: layout pre={_pre_shape} -> post={_post_shape}; "
+                f"feature_lens={feature_lens.tolist()} aftercnn_lens={aftercnn_lens.tolist()}"
+            )
         except Exception:
             pass
 
