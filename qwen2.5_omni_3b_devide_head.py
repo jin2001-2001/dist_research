@@ -196,18 +196,24 @@ class TextStage(nn.Module):
         B, T = input_ids.shape
 
         # 文本嵌入
+        _t_emb0 = time.perf_counter()
         hidden = self.embed_tokens(input_ids)
+        _t_emb1 = time.perf_counter()
 
         # 4D attention mask（因果+pad）
         if attention_mask is None:
             attention_mask = torch.ones(B, T, dtype=torch.long, device=device)
+        _t_attn0 = time.perf_counter()
         attn_4d = build_causal(T, device=device).expand(B, -1, -1, -1).clone()
         pad = (attention_mask == 0).view(B, 1, 1, T)
         attn_4d = attn_4d.masked_fill(pad, float("-inf")).contiguous()
+        _t_attn1 = time.perf_counter()
 
         # 在头部阶段直接给出基础 position_ids（三路堆叠），避免下游元信息校验因 None 失败
+        _t_pos0 = time.perf_counter()
         base_pos = torch.arange(T, device=device).unsqueeze(0).repeat(B, 1)
         position_ids = torch.stack([base_pos, base_pos, base_pos], dim=0).contiguous()
+        _t_pos1 = time.perf_counter()
         # 额外返回 input_ids 和 attention_mask，供 packing 阶段做多模态替换与位置计算
         out = (hidden.contiguous(), attn_4d.contiguous(), position_ids, input_ids.contiguous(), attention_mask.contiguous())
         try:
@@ -218,7 +224,16 @@ class TextStage(nn.Module):
             attn_sum = int(attention_mask.sum().item()) if isinstance(attention_mask, torch.Tensor) else -1
             uid_min = int(input_ids.min().item()) if isinstance(input_ids, torch.Tensor) else -1
             uid_max = int(input_ids.max().item()) if isinstance(input_ids, torch.Tensor) else -1
-            print(f"[rank{rid}] TextStage.forward: B={B} T={T} attn_sum={attn_sum} input_ids[min,max]=({uid_min},{uid_max}) took={_ms:.2f}ms")
+            emb_ms = (_t_emb1 - _t_emb0) * 1000.0
+            attn_ms = (_t_attn1 - _t_attn0) * 1000.0
+            pos_ms = (_t_pos1 - _t_pos0) * 1000.0
+            ham = float(hidden.detach().abs().mean().item()) if isinstance(hidden, torch.Tensor) else float('nan')
+            try:
+                w = self.embed_tokens.weight
+                enorm = float(w.detach().norm().item())
+            except Exception:
+                enorm = float('nan')
+            print(f"[rank{rid}] TextStage.forward: B={B} T={T} attn_sum={attn_sum} input_ids[min,max]=({uid_min},{uid_max}) took={_ms:.2f}ms; parts: emb={emb_ms:.2f}ms, attn={attn_ms:.2f}ms, pos={pos_ms:.2f}ms; hidden_abs_mean={ham:.3e}, embed_norm={enorm:.3e}")
         except Exception:
             pass
         return out

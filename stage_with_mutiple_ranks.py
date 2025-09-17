@@ -1320,7 +1320,6 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
             return []
 
         output_tuple, _ = self.fwd_cache[fwd_chunk_id]
-        print(f"哈哈哈 {modality} {output_tuple}")
     
         ops: list[dist.P2POp] = []
         ops_per_chunk: list[int] = [0 for _ in range(max(1, num_splits))]
@@ -2011,7 +2010,23 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                         (tuple(g.shape) if isinstance(g, torch.Tensor) else None) if g is not None else None
                         for g in grads_in
                     ]
-                    print(f"[rank{rid}] [text] backward_one_chunk exit: mb={bwd_chunk_id} took={_ms:.2f}ms grads_in_len={len(ginfo)} shapes={ginfo}")
+                    # 统计参数梯度情况
+                    total_params = 0
+                    with_grad = 0
+                    grad_norm_sum = 0.0
+                    for p in self.submod.parameters():
+                        total_params += 1
+                        if p.grad is not None and isinstance(p.grad, torch.Tensor):
+                            with_grad += 1
+                            try:
+                                grad_norm_sum += float(p.grad.detach().abs().mean().item())
+                            except Exception:
+                                pass
+                    print(
+                        f"[rank{rid}] [text] backward_one_chunk exit: mb={bwd_chunk_id} took={_ms:.2f}ms "
+                        f"grads_in_len={len(ginfo)} shapes={ginfo} param_grads={with_grad}/{total_params} "
+                        f"avg_abs_grad_sum={grad_norm_sum:.3e}"
+                    )
                 except Exception:
                     pass
                 return ret
