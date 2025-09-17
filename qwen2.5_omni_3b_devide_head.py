@@ -109,20 +109,24 @@ class AudioStage(nn.Module):
                 feature_lens=feature_lens,
                 aftercnn_lens=aftercnn_lens
             )
-        except Exception:
+        except Exception as e1:
             try:
                 _path = "fallback_no_aftercnn_lens"
                 res = self.audio_enc(
                     input_features=audio_values,
                     feature_lens=feature_lens
                 )
-            except Exception:
+            except Exception as e2:
                 _path = "zeros_fallback"
                 device = audio_values.device
                 out = torch.zeros(batch_size, original_seq_len // 4, 768, device=device, dtype=torch.float32)
                 try:
                     _ms = (time.perf_counter() - _t0) * 1000.0
-                    print(f"[rank{rid}] AudioStage.forward: path={_path} -> zeros {tuple(out.shape)} took={_ms:.2f}ms pre={_pre_shape} post={_post_shape}")
+                    print(
+                        f"[rank{rid}] AudioStage.forward: path={_path} -> zeros {tuple(out.shape)} took={_ms:.2f}ms pre={_pre_shape} post={_post_shape}; "
+                        f"feature_lens={feature_lens.tolist()} aftercnn_lens={aftercnn_lens.tolist()} "
+                        f"errors=({type(e1).__name__}: {e1}; {type(e2).__name__}: {e2})"
+                    )
                 except Exception:
                     pass
                 return out
@@ -1050,7 +1054,6 @@ def main():
                 collate_fn._dbg_count = 0
             if collate_fn._dbg_count < 2:
                 def _shape(x):
-                    import torch
                     if isinstance(x, torch.Tensor):
                         return (tuple(x.shape), str(x.dtype))
                     return type(x).__name__
@@ -1119,7 +1122,6 @@ def main():
                 if audio_inputs is None:
                     print(f"[rank0] collate_fn: built audio_inputs=None")
                 else:
-                    import torch
                     kv = {k: (tuple(v.shape), str(v.dtype)) if isinstance(v, torch.Tensor) else type(v).__name__
                           for k, v in audio_inputs.items()}
                     print(f"[rank0] collate_fn: built audio_inputs keys/shapes: {kv}")
@@ -1224,7 +1226,6 @@ def main():
                         print(f"[rank0] train-step {step}: aud_pack=None (no audio_inputs)")
                     else:
                         try:
-                            import torch
                             kv = {k: (tuple(v.shape), str(v.dtype)) if isinstance(v, torch.Tensor) else type(v).__name__
                                   for k, v in aud_pack.items()}
                             print(f"[rank0] train-step {step}: aud_pack keys/shapes: {kv}")
@@ -1260,7 +1261,6 @@ def main():
                         print(f"[rank{rk}] train-step {step}: received aud_pack=None")
                     else:
                         try:
-                            import torch
                             kv = {k: (tuple(v.shape), str(v.dtype)) if isinstance(v, torch.Tensor) else type(v).__name__
                                   for k, v in aud_pack.items()}
                             print(f"[rank{rk}] train-step {step}: received aud_pack keys/shapes: {kv}")
