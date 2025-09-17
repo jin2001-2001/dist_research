@@ -462,6 +462,24 @@ class _PipelineSchedule(ABC):
                 self._args_chunk_spec,
                 self._kwargs_chunk_spec,
             )
+            # Debug once: verify how audio_inputs is split into microbatches
+            try:
+                import os
+                if (os.environ.get("RANK", "0") == "0") and isinstance(kwargs_split, list) and len(kwargs_split) > 0:
+                    kw0 = kwargs_split[0]
+                    if isinstance(kw0, dict) and "audio_inputs" in kw0:
+                        ai = kw0.get("audio_inputs")
+                        if isinstance(ai, dict):
+                            feat = ai.get("input_features")
+                            fam = ai.get("feature_attention_mask")
+                            def _s(x):
+                                import torch
+                                return (tuple(x.shape), str(x.dtype)) if torch.is_tensor(x) else type(x).__name__
+                            print(f"[rank0] split-debug: kwargs_split[0].audio_inputs.input_features={_s(feat)} feature_attention_mask={_s(fam)}")
+                        else:
+                            print(f"[rank0] split-debug: kwargs_split[0].audio_inputs type={type(ai).__name__}")
+            except Exception:
+                pass
             return args_split, kwargs_split
         else:
             # Empty inputs (e.g. when called on middle stages)

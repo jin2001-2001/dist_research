@@ -1233,6 +1233,23 @@ class PipelineStage_Multimodality(PipelineStage_with_mutiple_ranks):
                     # 最低保真占位
                     self.inputs_meta = (torch.empty(1, device=self.device).to('meta'),)
 
+                # Debug: dump clean_kwargs keys/shapes for audio head
+                try:
+                    if mt == "audio":
+                        ai = (clean_kwargs or {}).get("audio_inputs", None)
+                        if ai is None:
+                            print(f"[rank{dist.get_rank()}] _shape_inference(audio): audio_inputs=None")
+                        elif isinstance(ai, dict):
+                            feat = ai.get("input_features", None)
+                            fam = ai.get("feature_attention_mask", None)
+                            def _s(x):
+                                return (tuple(x.shape), str(x.dtype)) if isinstance(x, torch.Tensor) else type(x).__name__
+                            print(f"[rank{dist.get_rank()}] _shape_inference(audio): input_features={_s(feat)} feature_attention_mask={_s(fam)}")
+                        else:
+                            print(f"[rank{dist.get_rank()}] _shape_inference(audio): audio_inputs type={type(ai).__name__}")
+                except Exception:
+                    pass
+
                 with torch.no_grad():
                     outputs = self.submod(*args, **clean_kwargs)
                 if isinstance(outputs, torch.Tensor):

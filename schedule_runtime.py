@@ -1287,6 +1287,23 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                 cat_kwargs[k] = _cat_like(vals)
                         else:
                             cat_kwargs = {}
+
+                        # Debug: dump audio kwargs shapes for first stage (rank 0) to verify microbatch split
+                        try:
+                            if dist.get_rank() == 0:
+                                ai = cat_kwargs.get("audio_inputs", None)
+                                if ai is None:
+                                    print(f"[rank0] schedule-debug: cat_kwargs has no audio_inputs for mb={rep_id}")
+                                elif isinstance(ai, dict):
+                                    feat = ai.get("input_features", None)
+                                    fam = ai.get("feature_attention_mask", None)
+                                    feat_shape = (tuple(feat.shape), str(feat.dtype)) if torch.is_tensor(feat) else type(feat).__name__
+                                    fam_shape = (tuple(fam.shape), str(fam.dtype)) if torch.is_tensor(fam) else type(fam).__name__
+                                    print(f"[rank0] schedule-debug: mb={rep_id} audio_inputs.input_features={feat_shape} feature_attention_mask={fam_shape}")
+                                else:
+                                    print(f"[rank0] schedule-debug: audio_inputs is {type(ai).__name__} for mb={rep_id}")
+                        except Exception:
+                            pass
                             
                     else:
                         # 非首段：先等待上游 RECV_F
