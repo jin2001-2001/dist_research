@@ -23,7 +23,60 @@ class TraceEvent:
     # 新增：执行状态（completed / error:...）
     status:     str = "completed"
     # (ts_ns, up_mbps, down_mbps)
-    
+
+
+import os, sys, traceback, threading, time
+from datetime import datetime
+
+def _now_ns():
+    return time.time_ns()
+
+def _fmt_ts(ns: int):
+    # 人类可读 + ns
+    return f"{datetime.fromtimestamp(ns/1e9).strftime('%H:%M:%S.%f')[:-3]} ({ns})"
+
+def _dist_backend_info():
+    try:
+        if dist.is_available() and dist.is_initialized():
+            # PyTorch 2.x: str(dist.get_backend()) -> 'gloo' / 'nccl' / 'mpi'
+            be = str(dist.get_backend())
+            ws = dist.get_world_size()
+            rk = dist.get_rank()
+            return {"backend": be, "world_size": ws, "rank": rk}
+    except Exception as e:
+        return {"backend": f"<err: {e}>", "world_size": -1, "rank": -1}
+    return {"backend": "<uninit>", "world_size": -1, "rank": -1}
+
+def _gloo_env_info():
+    # 常见的 Gloo 相关环境变量（有就打印）
+    keys = [
+        "TORCH_DISTRIBUTED_DEBUG",   # DETAIL/INFO 有助于底层日志
+        "GLOO_SOCKET_IFNAME",        # 指定网卡
+        "GLOO_DEVICE_TRANSPORT",     # tcp / ib
+        "MASTER_ADDR", "MASTER_PORT",
+        "WORLD_SIZE", "RANK",
+    ]
+    kv = {k: os.environ.get(k) for k in keys if os.environ.get(k) is not None}
+    return kv
+
+def _summarize_works(works):
+    # Work 对象基本是黑盒；repr 通常包含 id。这里给出长度+repr 截断，避免过多 IO
+    try:
+        items = []
+        for i, w in enumerate(works):
+            s = repr(w)
+            if len(s) > 120:
+                s = s[:117] + "..."
+            items.append(f"[{i}] {s}")
+        return items
+    except Exception as e:
+        return [f"<summarize_works error: {e}>"]
+
+def _dbg_print(*args, **kwargs):
+    # 仅当打开 RECORDER_DEBUG=1 才打印，避免污染正常运行
+    if os.environ.get("RECORDER_DEBUG", "0") == "1":
+        print(*args, **kwargs, flush=True)
+
 
 
 class Recorder:
@@ -147,41 +200,91 @@ class Recorder:
                     prev_ts, prev_sent, prev_recv = curr_ts, io.bytes_sent, io.bytes_recv
             threading.Thread(target=sampler, daemon=True).start()
 
-        def waiter():
-            status = "completed"
-            try:
-                # print(f"[{dist.get_rank()}] Waiting for {len(works)} works (action={action_id}, chunk={chunk_idx})")
-                while not all(w.is_completed() for w in works):
-                    time.sleep(poll_interval)
-                # for w in works:
-                #     w.wait()
+        # def waiter():
+        #     status = "completed"
+        #     try:
+        #         # print(f"[{dist.get_rank()}] Waiting for {len(works)} works (action={action_id}, chunk={chunk_idx})")
+        #         while not all(w.is_completed() for w in works):
+        #             time.sleep(poll_interval)
+        #         # for w in works:
+        #         #     w.wait()
                     
-                end_ns = time.time_ns()
-                if need_net:
-                    stop_evt.set()
+        #         end_ns = time.time_ns()
+        #         if need_net:
+        #             stop_evt.set()
                 
-                # Mark done after waiting completes
-                if chunk_idx is None:
-                    _mark_done(batch_id=batch_id, action_id=action_id)
-                else:
-                    # print(f"[{dist.get_rank()}] Marking done chunk for batch={batch_id}, action={action_id}, chunk={chunk_idx}")
-                    _mark_done_chunk(batch_id=batch_id, action_id=action_id, chunk_idx=chunk_idx)
-                    # print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
-                    #     f"works={len(works)}")
+        #         # Mark done after waiting completes
+        #         if chunk_idx is None:
+        #             _mark_done(batch_id=batch_id, action_id=action_id)
+        #         else:
+        #             # print(f"[{dist.get_rank()}] Marking done chunk for batch={batch_id}, action={action_id}, chunk={chunk_idx}")
+        #             _mark_done_chunk(batch_id=batch_id, action_id=action_id, chunk_idx=chunk_idx)
+        #             # print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
+        #             #     f"works={len(works)}")
+        #     except Exception as e:
+        #         status = f"error:{type(e).__name__}"
+        #         end_ns = time.time_ns()
+        #     finally:
+        #         self.events.append(
+        #             TraceEvent(
+        #                 batch_id, self.rank, action, stage_idx, mb_idx,
+        #                 start_ns, end_ns,
+        #                 chunk=chunk_idx,
+        #                 status=status,
+        #                 net_series=samples,
+        #             )
+        #         )
+
+        def waiter():
+            # --- 基础上下文（无锁） ---
+            status = "completed"
+            be_info = _dist_backend_info()      # {'backend': 'gloo'|'nccl'|..., 'world_size':..., 'rank':...}
+            gloo_env = _gloo_env_info()         # MASTER_ADDR/PORT、GLOO_SOCKET_IFNAME 等
+            th_name = threading.current_thread().name
+            rk = be_info.get("rank", -1)
+            t_enter = _now_ns()
+
+            _dbg_print(
+                f"[recorder/waiter][rank={rk}][thr={th_name}] ENTER  "
+                f"action={action} stage={stage_idx} mb={mb_idx} chunk={chunk_idx} "
+                f"backend={be_info.get('backend')} world_size={be_info.get('world_size')} "
+                f"t0={_fmt_ts(t_enter)}"
+            )
+            _dbg_print(f"[recorder/waiter][rank={rk}] GLOO_ENV: {gloo_env}")
+            _dbg_print(f"[recorder/waiter][rank={rk}] works({len(works)}):")
+            for line in _summarize_works(works):
+                _dbg_print(f"    {line}")
+
+            try:
+                # ===== 只用 wait()，完全去掉轮询 =====
+                # while not all(w.is_completed() for w in works):
+                #     time.sleep(poll_interval)
+
+                for i, w in enumerate(works):
+                    t1 = _now_ns()
+                    _dbg_print(f"[recorder/waiter][rank={rk}] wait begin for work[{i}] at { _fmt_ts(t1) }")
+                    w.wait()  # PyTorch 这一步会释放 GIL，只阻塞当前线程
+                    t2 = _now_ns()
+                    _dbg_print(f"[recorder/waiter][rank={rk}] wait done  for work[{i}] at { _fmt_ts(t2) }, dt={(t2 - t1)/1e6:.3f} ms")
+
+                status = "completed"
+
             except Exception as e:
-                status = f"error:{type(e).__name__}"
-                end_ns = time.time_ns()
+                status = f"error: {type(e).__name__}: {e}"
+                _dbg_print(
+                    f"[recorder/waiter][rank={rk}] EXCEPTION during wait: {status}\n"
+                    + "".join(traceback.format_exc())
+                )
+                raise
             finally:
-                self.events.append(
-                    TraceEvent(
-                        batch_id, self.rank, action, stage_idx, mb_idx,
-                        start_ns, end_ns,
-                        chunk=chunk_idx,
-                        status=status,
-                        net_series=samples,
-                    )
+                t_exit = _now_ns()
+                _dbg_print(
+                    f"[recorder/waiter][rank={rk}][thr={th_name}] EXIT   "
+                    f"action={action} stage={stage_idx} mb={mb_idx} chunk={chunk_idx} "
+                    f"status={status} t1={_fmt_ts(t_exit)} dt={(t_exit - t_enter)/1e6:.3f} ms"
                 )
 
+        
         threading.Thread(target=waiter, daemon=True).start()
 
 
