@@ -24,61 +24,6 @@ class TraceEvent:
     status:     str = "completed"
     # (ts_ns, up_mbps, down_mbps)
 
-
-import os, sys, traceback, threading, time
-from datetime import datetime
-
-def _now_ns():
-    return time.time_ns()
-
-def _fmt_ts(ns: int):
-    # 人类可读 + ns
-    return f"{datetime.fromtimestamp(ns/1e9).strftime('%H:%M:%S.%f')[:-3]} ({ns})"
-
-def _dist_backend_info():
-    try:
-        if dist.is_available() and dist.is_initialized():
-            # PyTorch 2.x: str(dist.get_backend()) -> 'gloo' / 'nccl' / 'mpi'
-            be = str(dist.get_backend())
-            ws = dist.get_world_size()
-            rk = dist.get_rank()
-            return {"backend": be, "world_size": ws, "rank": rk}
-    except Exception as e:
-        return {"backend": f"<err: {e}>", "world_size": -1, "rank": -1}
-    return {"backend": "<uninit>", "world_size": -1, "rank": -1}
-
-def _gloo_env_info():
-    # 常见的 Gloo 相关环境变量（有就打印）
-    keys = [
-        "TORCH_DISTRIBUTED_DEBUG",   # DETAIL/INFO 有助于底层日志
-        "GLOO_SOCKET_IFNAME",        # 指定网卡
-        "GLOO_DEVICE_TRANSPORT",     # tcp / ib
-        "MASTER_ADDR", "MASTER_PORT",
-        "WORLD_SIZE", "RANK",
-    ]
-    kv = {k: os.environ.get(k) for k in keys if os.environ.get(k) is not None}
-    return kv
-
-def _summarize_works(works):
-    # Work 对象基本是黑盒；repr 通常包含 id。这里给出长度+repr 截断，避免过多 IO
-    try:
-        items = []
-        for i, w in enumerate(works):
-            s = repr(w)
-            if len(s) > 120:
-                s = s[:117] + "..."
-            items.append(f"[{i}] {s}")
-        return items
-    except Exception as e:
-        return [f"<summarize_works error: {e}>"]
-
-def _dbg_print(*args, **kwargs):
-    # 仅当打开 RECORDER_DEBUG=1 才打印，避免污染正常运行
-    if os.environ.get("RECORDER_DEBUG", "0") == "1":
-        print(*args, **kwargs, flush=True)
-
-
-
 class Recorder:
     _NET_ACTIONS = {"SEND_F", "RECV_F", "SEND_B", "RECV_B", "ALL_REDUCE"}
 
@@ -236,53 +181,67 @@ class Recorder:
         #         )
 
         def waiter():
-            # --- 基础上下文（无锁） ---
             status = "completed"
-            be_info = _dist_backend_info()      # {'backend': 'gloo'|'nccl'|..., 'world_size':..., 'rank':...}
-            gloo_env = _gloo_env_info()         # MASTER_ADDR/PORT、GLOO_SOCKET_IFNAME 等
-            th_name = threading.current_thread().name
-            rk = be_info.get("rank", -1)
-            t_enter = _now_ns()
-
-            _dbg_print(
-                f"[recorder/waiter][rank={rk}][thr={th_name}] ENTER  "
-                f"action={action} stage={stage_idx} mb={mb_idx} chunk={chunk_idx} "
-                f"backend={be_info.get('backend')} world_size={be_info.get('world_size')} "
-                f"t0={_fmt_ts(t_enter)}"
-            )
-            _dbg_print(f"[recorder/waiter][rank={rk}] GLOO_ENV: {gloo_env}")
-            _dbg_print(f"[recorder/waiter][rank={rk}] works({len(works)}):")
-            for line in _summarize_works(works):
-                _dbg_print(f"    {line}")
+            end_ns = None
 
             try:
-                # ===== 只用 wait()，完全去掉轮询 =====
-                # while not all(w.is_completed() for w in works):
-                #     time.sleep(poll_interval)
+                # 并发等待每个 Work：为每个 w 启一个监听线程，全部 join 后再继续
+                n = len(works)
+                done_flags = [False] * n
+                errors = [None] * n
+                threads = []
+
+                def _wait_one(i: int, w):
+                    try:
+                        w.wait()              # 只阻塞该监听线程，会释放 GIL
+                        done_flags[i] = True
+                    except Exception as e:
+                        errors[i] = e
 
                 for i, w in enumerate(works):
-                    t1 = _now_ns()
-                    _dbg_print(f"[recorder/waiter][rank={rk}] wait begin for work[{i}] at { _fmt_ts(t1) }")
-                    w.wait()  # PyTorch 这一步会释放 GIL，只阻塞当前线程
-                    t2 = _now_ns()
-                    _dbg_print(f"[recorder/waiter][rank={rk}] wait done  for work[{i}] at { _fmt_ts(t2) }, dt={(t2 - t1)/1e6:.3f} ms")
+                    t = threading.Thread(target=_wait_one, args=(i, w), daemon=True, name=f"waiter-work-{i}")
+                    t.start()
+                    threads.append(t)
 
-                status = "completed"
+                # 等所有监听线程结束
+                for t in threads:
+                    t.join()
+
+                # 记录结束时间（在 mark 前，便于统计）
+                end_ns = time.time_ns()
+
+                # 停止网速采样（如启用）
+                if need_net:
+                    stop_evt.set()
+
+                # 如果有任一监听线程出错，抛出第一个异常
+                first_err = next((e for e in errors if e is not None), None)
+                if first_err is not None:
+                    raise first_err
+
+                # 全部完成后再标记 done
+                if chunk_idx is None:
+                    _mark_done(batch_id=batch_id, action_id=action_id)
+                else:
+                    _mark_done_chunk(batch_id=batch_id, action_id=action_id, chunk_idx=chunk_idx)
 
             except Exception as e:
-                status = f"error: {type(e).__name__}: {e}"
-                _dbg_print(
-                    f"[recorder/waiter][rank={rk}] EXCEPTION during wait: {status}\n"
-                    + "".join(traceback.format_exc())
-                )
-                raise
+                status = f"error:{type(e).__name__}:{e}"
+                if end_ns is None:
+                    end_ns = time.time_ns()
+
             finally:
-                t_exit = _now_ns()
-                _dbg_print(
-                    f"[recorder/waiter][rank={rk}][thr={th_name}] EXIT   "
-                    f"action={action} stage={stage_idx} mb={mb_idx} chunk={chunk_idx} "
-                    f"status={status} t1={_fmt_ts(t_exit)} dt={(t_exit - t_enter)/1e6:.3f} ms"
+                # 落事件（保持你原有的 TraceEvent 字段顺序）
+                self.events.append(
+                    TraceEvent(
+                        batch_id, self.rank, action, stage_idx, mb_idx,
+                        start_ns, end_ns,
+                        chunk=chunk_idx,
+                        status=status,
+                        net_series=samples,
+                    )
                 )
+
 
         
         threading.Thread(target=waiter, daemon=True).start()
