@@ -84,7 +84,7 @@ def enter(id: int):
                 os.makedirs(WAITDIR, exist_ok=True)
 
             # 轮到我（我是当前最小 id），尝试拿全局互斥
-            if (min_id is None) or (id >= min_id):
+            if (min_id is None) or (id <= min_id):
                 try:
                     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     # 成功：进入临界区
