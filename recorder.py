@@ -153,7 +153,7 @@ class Recorder:
                 # while not all(w.is_completed() for w in works):
                 #     time.sleep(poll_interval)
                 
-                print(f"通信 {action_id} 进入等待")
+                print(f"通信 {action_id} 互斥锁前")
                 enter(id=action_id)
                 print(f"通信 {action_id} 开始等待")
                 for w in works:

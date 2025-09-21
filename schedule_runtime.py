@@ -1323,8 +1323,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                         with self._async_recv_lock:
                                             works = self._fwd_recv_works.pop(key_m, [])
                                         if works:
-                                            print("FORWARD 进入等待")
+                                            print("FORWARD 互斥锁前")
                                             enter(0)
+                                            print("FORWARD 开始等待")
                                             schedule._wait_batch_p2p(works)
                                             leave(0)
                                             print("FORWARD 离开等待")
@@ -1342,8 +1343,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                         works_count = len(self._fwd_recv_works.get(key, []))
                                         works = self._fwd_recv_works.pop(key, [])
                                     if works:
-                                        print("FORWARD 进入等待")
+                                        print("FORWARD 互斥锁前")
                                         enter(0)
+                                        print("FORWARD 开始等待")
                                         schedule._wait_batch_p2p(works)
                                         leave(0)
                                         print("FORWARD 离开等待")
