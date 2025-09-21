@@ -841,119 +841,119 @@ def create_pipeline_actions():
     ]
     
     rank3_actions = [
-        _Action(1, 3, 1, _ComputationType.RECV_F, (0,), 0, None, None, None, None, ["audio"]),
+        _Action(1, 3, 0, _ComputationType.RECV_F, (0,), 0, None, None, None, None, ["audio"]),
         _Action(1, 3, 1, _ComputationType.RECV_F, (0,), 1, None, None, None, None, ["vision"]),
-        _Action(1, 3, 1, _ComputationType.RECV_F, (0,), 2, None, None, None, None, ["text"]),
-        _Action(1, 3, 2, _ComputationType.FORWARD, (0), None, None, None, None, None, ["audio","vision","text"]),
-        _Action(1, 3, 3, _ComputationType.SEND_F, (0,), 4, None, None, None, None, None),
+        _Action(1, 3, 3, _ComputationType.RECV_F, (0,), 2, None, None, None, None, ["text"]),
+        _Action(1, 3, 4, _ComputationType.FORWARD, (0), None, None, None, None, None, ["audio","vision","text"]),
+        _Action(1, 3, 5, _ComputationType.SEND_F, (0,), 4, None, None, None, None, None),
 
-        _Action(1, 3, 1, _ComputationType.RECV_F, (1,), 0, None, None, None, None, ["audio"]),
-        _Action(1, 3, 1, _ComputationType.RECV_F, (1,), 1, None, None, None, None, ["vision"]),
-        _Action(1, 3, 1, _ComputationType.RECV_F, (1,), 2, None, None, None, None, ["text"]),
-        _Action(1, 3, 2, _ComputationType.FORWARD, (1), None, None, None, None, None, ["audio","vision","text"]),
-        _Action(1, 3, 3, _ComputationType.SEND_F, (1,), 4, None, None, None, None, None),
+        _Action(1, 3, 6, _ComputationType.RECV_F, (1,), 0, None, None, None, None, ["audio"]),
+        _Action(1, 3, 7, _ComputationType.RECV_F, (1,), 1, None, None, None, None, ["vision"]),
+        _Action(1, 3, 8, _ComputationType.RECV_F, (1,), 2, None, None, None, None, ["text"]),
+        _Action(1, 3, 9, _ComputationType.FORWARD, (1), None, None, None, None, None, ["audio","vision","text"]),
+        _Action(1, 3, 10, _ComputationType.SEND_F, (1,), 4, None, None, None, None, None),
 
-        _Action(1, 3, 1, _ComputationType.RECV_F, (2,), 0, None, None, None, None, ["audio"]),
-        _Action(1, 3, 1, _ComputationType.RECV_F, (2,), 1, None, None, None, None, ["vision"]),
-        _Action(1, 3, 1, _ComputationType.RECV_F, (2,), 2, None, None, None, None, ["text"]),
-        _Action(1, 3, 2, _ComputationType.FORWARD, (2), None, None, None, None, None, ["audio","vision","text"]),
-        _Action(1, 3, 3, _ComputationType.SEND_F, (2,), 4, None, None, None, None, None),
+        _Action(1, 3, 11, _ComputationType.RECV_F, (2,), 0, None, None, None, None, ["audio"]),
+        _Action(1, 3, 12, _ComputationType.RECV_F, (2,), 1, None, None, None, None, ["vision"]),
+        _Action(1, 3, 13, _ComputationType.RECV_F, (2,), 2, None, None, None, None, ["text"]),
+        _Action(1, 3, 14, _ComputationType.FORWARD, (2), None, None, None, None, None, ["audio","vision","text"]),
+        _Action(1, 3, 15, _ComputationType.SEND_F, (2,), 4, None, None, None, None, None),
 
-        _Action(1, 3, 1, _ComputationType.RECV_F, (3,), 0, None, None, None, None, ["audio"]),
-        _Action(1, 3, 1, _ComputationType.RECV_F, (3,), 1, None, None, None, None, ["vision"]),
-        _Action(1, 3, 1, _ComputationType.RECV_F, (3,), 2, None, None, None, None, ["text"]),
-        _Action(1, 3, 2, _ComputationType.FORWARD, (3), None, None, None, None, None, ["audio","vision","text"]),
-        _Action(1, 3, 3, _ComputationType.SEND_F, (3,), 4, None, None, None, None, None),
+        _Action(1, 3, 16, _ComputationType.RECV_F, (3,), 0, None, None, None, None, ["audio"]),
+        _Action(1, 3, 17, _ComputationType.RECV_F, (3,), 1, None, None, None, None, ["vision"]),
+        _Action(1, 3, 18, _ComputationType.RECV_F, (3,), 2, None, None, None, None, ["text"]),
+        _Action(1, 3, 19, _ComputationType.FORWARD, (3), None, None, None, None, None, ["audio","vision","text"]),
+        _Action(1, 3, 20, _ComputationType.SEND_F, (3,), 4, None, None, None, None, None),
         
         
         
         
-        _Action(1, 3, 8, _ComputationType.RECV_B, (0,), 4, None, None, None, None, None),
-        _Action(1, 3, 9, _ComputationType.FULL_BACKWARD, (0), None, None, None, None, None, ["audio","vision","text"]),
-        _Action(1, 3, 1, _ComputationType.SEND_B, (0,), 0, None, None, None, None, ["audio"]),
-        _Action(1, 3, 1, _ComputationType.SEND_B, (0,), 1, None, None, None, None, ["vision"]),
-        _Action(1, 3, 1, _ComputationType.SEND_B, (0,), 2, None, None, None, None, ["text"]),
+        _Action(1, 3, 21, _ComputationType.RECV_B, (0,), 4, None, None, None, None, None),
+        _Action(1, 3, 22, _ComputationType.FULL_BACKWARD, (0), None, None, None, None, None, ["audio","vision","text"]),
+        _Action(1, 3, 23, _ComputationType.SEND_B, (0,), 0, None, None, None, None, ["audio"]),
+        _Action(1, 3, 24, _ComputationType.SEND_B, (0,), 1, None, None, None, None, ["vision"]),
+        _Action(1, 3, 25, _ComputationType.SEND_B, (0,), 2, None, None, None, None, ["text"]),
         
-        _Action(1, 3, 8, _ComputationType.RECV_B, (1,), 4, None, None, None, None, None),
-        _Action(1, 3, 9, _ComputationType.FULL_BACKWARD, (1), None, None, None, None, None, ["audio","vision","text"]),
-        _Action(1, 3, 1, _ComputationType.SEND_B, (1,), 0, None, None, None, None, ["audio"]),
-        _Action(1, 3, 1, _ComputationType.SEND_B, (1,), 1, None, None, None, None, ["vision"]),
-        _Action(1, 3, 1, _ComputationType.SEND_B, (1,), 2, None, None, None, None, ["text"]),
+        _Action(1, 3, 26, _ComputationType.RECV_B, (1,), 4, None, None, None, None, None),
+        _Action(1, 3, 27, _ComputationType.FULL_BACKWARD, (1), None, None, None, None, None, ["audio","vision","text"]),
+        _Action(1, 3, 28, _ComputationType.SEND_B, (1,), 0, None, None, None, None, ["audio"]),
+        _Action(1, 3, 29, _ComputationType.SEND_B, (1,), 1, None, None, None, None, ["vision"]),
+        _Action(1, 3, 30, _ComputationType.SEND_B, (1,), 2, None, None, None, None, ["text"]),
         
-        _Action(1, 3, 8, _ComputationType.RECV_B, (2,), 4, None, None, None, None, None),
-        _Action(1, 3, 9, _ComputationType.FULL_BACKWARD, (2), None, None, None, None, None, ["audio","vision","text"]),
-        _Action(1, 3, 1, _ComputationType.SEND_B, (2,), 0, None, None, None, None, ["audio"]),
-        _Action(1, 3, 1, _ComputationType.SEND_B, (2,), 1, None, None, None, None, ["vision"]),
-        _Action(1, 3, 1, _ComputationType.SEND_B, (2,), 2, None, None, None, None, ["text"]),
+        _Action(1, 3, 31, _ComputationType.RECV_B, (2,), 4, None, None, None, None, None),
+        _Action(1, 3, 32, _ComputationType.FULL_BACKWARD, (2), None, None, None, None, None, ["audio","vision","text"]),
+        _Action(1, 3, 33, _ComputationType.SEND_B, (2,), 0, None, None, None, None, ["audio"]),
+        _Action(1, 3, 34, _ComputationType.SEND_B, (2,), 1, None, None, None, None, ["vision"]),
+        _Action(1, 3, 35, _ComputationType.SEND_B, (2,), 2, None, None, None, None, ["text"]),
         
-        _Action(1, 3, 8, _ComputationType.RECV_B, (3,), 4, None, None, None, None, None),
-        _Action(1, 3, 9, _ComputationType.FULL_BACKWARD, (3), None, None, None, None, None, ["audio","vision","text"]),
-        _Action(1, 3, 1, _ComputationType.SEND_B, (3,), 0, None, None, None, None, ["audio"]),
-        _Action(1, 3, 1, _ComputationType.SEND_B, (3,), 1, None, None, None, None, ["vision"]),
-        _Action(1, 3, 1, _ComputationType.SEND_B, (3,), 2, None, None, None, None, ["text"]),
+        _Action(1, 3, 36, _ComputationType.RECV_B, (3,), 4, None, None, None, None, None),
+        _Action(1, 3, 37, _ComputationType.FULL_BACKWARD, (3), None, None, None, None, None, ["audio","vision","text"]),
+        _Action(1, 3, 38, _ComputationType.SEND_B, (3,), 0, None, None, None, None, ["audio"]),
+        _Action(1, 3, 39, _ComputationType.SEND_B, (3,), 1, None, None, None, None, ["vision"]),
+        _Action(1, 3, 40, _ComputationType.SEND_B, (3,), 2, None, None, None, None, ["text"]),
     ]
     
     rank4_actions = [
-        _Action(2, 4, 1, _ComputationType.RECV_F, (0,), 3, None, None, None, None, None),
-        _Action(2, 4, 2, _ComputationType.FORWARD, (0), None, None, None, None, None, None),
-        _Action(2, 4, 3, _ComputationType.SEND_F, (0,), 5, None, None, None, None, None),
+        _Action(2, 4, 0, _ComputationType.RECV_F, (0,), 3, None, None, None, None, None),
+        _Action(2, 4, 1, _ComputationType.FORWARD, (0), None, None, None, None, None, None),
+        _Action(2, 4, 2, _ComputationType.SEND_F, (0,), 5, None, None, None, None, None),
 
-        _Action(2, 4, 1, _ComputationType.RECV_F, (1,), 3, None, None, None, None, None),
-        _Action(2, 4, 2, _ComputationType.FORWARD, (1), None, None, None, None, None, None),
-        _Action(2, 4, 3, _ComputationType.SEND_F, (1,), 5, None, None, None, None, None),
+        _Action(2, 4, 3, _ComputationType.RECV_F, (1,), 3, None, None, None, None, None),
+        _Action(2, 4, 4, _ComputationType.FORWARD, (1), None, None, None, None, None, None),
+        _Action(2, 4, 5, _ComputationType.SEND_F, (1,), 5, None, None, None, None, None),
 
-        _Action(2, 4, 1, _ComputationType.RECV_F, (2,), 3, None, None, None, None, None),
-        _Action(2, 4, 2, _ComputationType.FORWARD, (2), None, None, None, None, None, None),
-        _Action(2, 4, 3, _ComputationType.SEND_F, (2,), 5, None, None, None, None, None),
+        _Action(2, 4, 6, _ComputationType.RECV_F, (2,), 3, None, None, None, None, None),
+        _Action(2, 4, 7, _ComputationType.FORWARD, (2), None, None, None, None, None, None),
+        _Action(2, 4, 8, _ComputationType.SEND_F, (2,), 5, None, None, None, None, None),
 
-        _Action(2, 4, 1, _ComputationType.RECV_F, (3,), 3, None, None, None, None, None),
-        _Action(2, 4, 2, _ComputationType.FORWARD, (3), None, None, None, None, None, None),
-        _Action(2, 4, 3, _ComputationType.SEND_F, (3,), 5, None, None, None, None, None),
-
-
+        _Action(2, 4, 9, _ComputationType.RECV_F, (3,), 3, None, None, None, None, None),
+        _Action(2, 4, 10, _ComputationType.FORWARD, (3), None, None, None, None, None, None),
+        _Action(2, 4, 11, _ComputationType.SEND_F, (3,), 5, None, None, None, None, None),
 
 
-        _Action(2, 4, 8, _ComputationType.RECV_B, (0,), 5, None, None, None, None, None),
-        _Action(2, 4, 9, _ComputationType.FULL_BACKWARD, (0), None, None, None, None, None, None),
-        _Action(2, 4, 1, _ComputationType.SEND_B, (0,), 3, None, None, None, None, None),
 
-        _Action(2, 4, 8, _ComputationType.RECV_B, (1,), 5, None, None, None, None, None),
-        _Action(2, 4, 9, _ComputationType.FULL_BACKWARD, (1), None, None, None, None, None, None),
-        _Action(2, 4, 1, _ComputationType.SEND_B, (1,), 3, None, None, None, None, None),
 
-        _Action(2, 4, 8, _ComputationType.RECV_B, (2,), 5, None, None, None, None, None),
-        _Action(2, 4, 9, _ComputationType.FULL_BACKWARD, (2), None, None, None, None, None, None),
-        _Action(2, 4, 1, _ComputationType.SEND_B, (2,), 3, None, None, None, None, None),
+        _Action(2, 4, 12, _ComputationType.RECV_B, (0,), 5, None, None, None, None, None),
+        _Action(2, 4, 13, _ComputationType.FULL_BACKWARD, (0), None, None, None, None, None, None),
+        _Action(2, 4, 14, _ComputationType.SEND_B, (0,), 3, None, None, None, None, None),
 
-        _Action(2, 4, 8, _ComputationType.RECV_B, (3,), 5, None, None, None, None, None),
-        _Action(2, 4, 9, _ComputationType.FULL_BACKWARD, (3), None, None, None, None, None, None),
-        _Action(2, 4, 1, _ComputationType.SEND_B, (3,), 3, None, None, None, None, None),
+        _Action(2, 4, 15, _ComputationType.RECV_B, (1,), 5, None, None, None, None, None),
+        _Action(2, 4, 16, _ComputationType.FULL_BACKWARD, (1), None, None, None, None, None, None),
+        _Action(2, 4, 17, _ComputationType.SEND_B, (1,), 3, None, None, None, None, None),
+
+        _Action(2, 4, 18, _ComputationType.RECV_B, (2,), 5, None, None, None, None, None),
+        _Action(2, 4, 19, _ComputationType.FULL_BACKWARD, (2), None, None, None, None, None, None),
+        _Action(2, 4, 20, _ComputationType.SEND_B, (2,), 3, None, None, None, None, None),
+
+        _Action(2, 4, 21, _ComputationType.RECV_B, (3,), 5, None, None, None, None, None),
+        _Action(2, 4, 22, _ComputationType.FULL_BACKWARD, (3), None, None, None, None, None, None),
+        _Action(2, 4, 23, _ComputationType.SEND_B, (3,), 3, None, None, None, None, None),
     ]
     
     rank5_actions = [
-        _Action(3, 5, 1, _ComputationType.RECV_F, (0,), 4, None, None, None, None, None),
-        _Action(3, 5, 2, _ComputationType.FORWARD, (0), None, None, None, None, None, None),
+        _Action(3, 5, 0, _ComputationType.RECV_F, (0,), 4, None, None, None, None, None),
+        _Action(3, 5, 1, _ComputationType.FORWARD, (0), None, None, None, None, None, None),
 
-        _Action(3, 5, 1, _ComputationType.RECV_F, (1,), 4, None, None, None, None, None),
-        _Action(3, 5, 2, _ComputationType.FORWARD, (1), None, None, None, None, None, None),
+        _Action(3, 5, 2, _ComputationType.RECV_F, (1,), 4, None, None, None, None, None),
+        _Action(3, 5, 3, _ComputationType.FORWARD, (1), None, None, None, None, None, None),
 
-        _Action(3, 5, 1, _ComputationType.RECV_F, (2,), 4, None, None, None, None, None),
-        _Action(3, 5, 2, _ComputationType.FORWARD, (2), None, None, None, None, None, None),
+        _Action(3, 5, 4, _ComputationType.RECV_F, (2,), 4, None, None, None, None, None),
+        _Action(3, 5, 5, _ComputationType.FORWARD, (2), None, None, None, None, None, None),
 
-        _Action(3, 5, 1, _ComputationType.RECV_F, (3,), 4, None, None, None, None, None),
-        _Action(3, 5, 2, _ComputationType.FORWARD, (3), None, None, None, None, None, None),
+        _Action(3, 5, 6, _ComputationType.RECV_F, (3,), 4, None, None, None, None, None),
+        _Action(3, 5, 7, _ComputationType.FORWARD, (3), None, None, None, None, None, None),
 
-        _Action(3, 5, 9, _ComputationType.FULL_BACKWARD, (0), None, None, None, None, None, None),
-        _Action(3, 5, 1, _ComputationType.SEND_B, (0,), 4, None, None, None, None, None),
+        _Action(3, 5, 8, _ComputationType.FULL_BACKWARD, (0), None, None, None, None, None, None),
+        _Action(3, 5, 9, _ComputationType.SEND_B, (0,), 4, None, None, None, None, None),
         
-        _Action(3, 5, 9, _ComputationType.FULL_BACKWARD, (1), None, None, None, None, None, None),
-        _Action(3, 5, 1, _ComputationType.SEND_B, (1,), 4, None, None, None, None, None),
+        _Action(3, 5, 10, _ComputationType.FULL_BACKWARD, (1), None, None, None, None, None, None),
+        _Action(3, 5, 11, _ComputationType.SEND_B, (1,), 4, None, None, None, None, None),
 
-        _Action(3, 5, 9, _ComputationType.FULL_BACKWARD, (2), None, None, None, None, None, None),
-        _Action(3, 5, 1, _ComputationType.SEND_B, (2,), 4, None, None, None, None, None),
+        _Action(3, 5, 12, _ComputationType.FULL_BACKWARD, (2), None, None, None, None, None, None),
+        _Action(3, 5, 13, _ComputationType.SEND_B, (2,), 4, None, None, None, None, None),
 
-        _Action(3, 5, 9, _ComputationType.FULL_BACKWARD, (3), None, None, None, None, None, None),
-        _Action(3, 5, 1, _ComputationType.SEND_B, (3,), 4, None, None, None, None, None),
+        _Action(3, 5, 14, _ComputationType.FULL_BACKWARD, (3), None, None, None, None, None, None),
+        _Action(3, 5, 15, _ComputationType.SEND_B, (3,), 4, None, None, None, None, None),
     ]
 
 

@@ -64,8 +64,8 @@ def enter(id: int):
 
     try:
         while True:
-            # 清理僵尸等待者 & 找到当前最大 id
-            max_id = None
+            # 清理僵尸等待者 & 找到当前最小 id
+            min_id = None
             try:
                 for nm in os.listdir(WAITDIR):
                     p = _parse(nm)
@@ -73,8 +73,8 @@ def enter(id: int):
                         continue
                     wid, wpid, _wtid = p
                     if _alive(wpid):
-                        if (max_id is None) or (wid > max_id):
-                            max_id = wid
+                        if (min_id is None) or (wid < min_id):
+                            min_id = wid
                     else:
                         # 进程已死，清理残留
                         try: os.remove(os.path.join(WAITDIR, nm))
@@ -83,8 +83,8 @@ def enter(id: int):
             except FileNotFoundError:
                 os.makedirs(WAITDIR, exist_ok=True)
 
-            # 轮到我（我是当前最大 id），尝试拿全局互斥
-            if (max_id is None) or (id >= max_id):
+            # 轮到我（我是当前最小 id），尝试拿全局互斥
+            if (min_id is None) or (id >= min_id):
                 try:
                     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     # 成功：进入临界区
