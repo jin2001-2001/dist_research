@@ -5,6 +5,7 @@ from typing import List, Tuple, Iterable, Optional
 import psutil          
 import torch.distributed as dist
 from schedule_runtime import _mark_done, _mark_done_chunk
+from temp_lock import enter, leave
 
 @dataclass
 @dataclass
@@ -23,8 +24,6 @@ class TraceEvent:
     # 新增：执行状态（completed / error:...）
     status:     str = "completed"
     # (ts_ns, up_mbps, down_mbps)
-    
-
 
 class Recorder:
     _NET_ACTIONS = {"SEND_F", "RECV_F", "SEND_B", "RECV_B", "ALL_REDUCE"}
@@ -151,10 +150,19 @@ class Recorder:
             status = "completed"
             try:
                 # print(f"[{dist.get_rank()}] Waiting for {len(works)} works (action={action_id}, chunk={chunk_idx})")
-                while not all(w.is_completed() for w in works):
-                    time.sleep(poll_interval)
-                    
+                # while not all(w.is_completed() for w in works):
+                #     time.sleep(poll_interval)
+                
+                enter(id=action_id)
+                for w in works:
+                    if w.is_completed():
+                        continue
+                    w.wait()
                 end_ns = time.time_ns()
+                # if action == "RECV_F":
+                #     print(f"这里RECV_F [{mb_idx}] 停止计时{end_ns}")
+                leave(id=action_id)
+                
                 if need_net:
                     stop_evt.set()
                 
@@ -179,7 +187,7 @@ class Recorder:
                         net_series=samples,
                     )
                 )
-
+        
         threading.Thread(target=waiter, daemon=True).start()
 
 

@@ -1,3 +1,0 @@
-#!/bin/bash
-host_ip=$(cat /etc/resolv.conf |grep "nameserver" |cut -f 2 -d " ")
-export ALL_PROXY="http://192.168.0.101:7890"
