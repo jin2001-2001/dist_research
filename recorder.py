@@ -159,8 +159,8 @@ class Recorder:
                         continue
                     w.wait()
                 end_ns = time.time_ns()
-                if action == "RECV_F":
-                    print(f"这里RECV_F [{mb_idx}] 停止计时{end_ns}")
+                # if action == "RECV_F":
+                #     print(f"这里RECV_F [{mb_idx}] 停止计时{end_ns}")
                 leave(id=action_id)
                 
                 if need_net:
