@@ -5,6 +5,7 @@ from typing import List, Tuple, Iterable, Optional
 import psutil          
 import torch.distributed as dist
 from schedule_runtime import _mark_done, _mark_done_chunk
+from temp_lock import enter, leave
 
 @dataclass
 @dataclass
@@ -145,93 +146,34 @@ class Recorder:
                     prev_ts, prev_sent, prev_recv = curr_ts, io.bytes_sent, io.bytes_recv
             threading.Thread(target=sampler, daemon=True).start()
 
-        # def waiter():
-        #     status = "completed"
-        #     try:
-        #         # print(f"[{dist.get_rank()}] Waiting for {len(works)} works (action={action_id}, chunk={chunk_idx})")
-        #         while not all(w.is_completed() for w in works):
-        #             time.sleep(poll_interval)
-        #         # for w in works:
-        #         #     w.wait()
-                    
-        #         end_ns = time.time_ns()
-        #         if need_net:
-        #             stop_evt.set()
-                
-        #         # Mark done after waiting completes
-        #         if chunk_idx is None:
-        #             _mark_done(batch_id=batch_id, action_id=action_id)
-        #         else:
-        #             # print(f"[{dist.get_rank()}] Marking done chunk for batch={batch_id}, action={action_id}, chunk={chunk_idx}")
-        #             _mark_done_chunk(batch_id=batch_id, action_id=action_id, chunk_idx=chunk_idx)
-        #             # print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
-        #             #     f"works={len(works)}")
-        #     except Exception as e:
-        #         status = f"error:{type(e).__name__}"
-        #         end_ns = time.time_ns()
-        #     finally:
-        #         self.events.append(
-        #             TraceEvent(
-        #                 batch_id, self.rank, action, stage_idx, mb_idx,
-        #                 start_ns, end_ns,
-        #                 chunk=chunk_idx,
-        #                 status=status,
-        #                 net_series=samples,
-        #             )
-        #         )
-
         def waiter():
             status = "completed"
-            end_ns = None
-
             try:
-                # 并发等待每个 Work：为每个 w 启一个监听线程，全部 join 后再继续
-                n = len(works)
-                done_flags = [False] * n
-                errors = [None] * n
-                threads = []
-
-                def _wait_one(i: int, w):
-                    try:
-                        w.wait()              # 只阻塞该监听线程，会释放 GIL
-                        done_flags[i] = True
-                    except Exception as e:
-                        errors[i] = e
-
-                for i, w in enumerate(works):
-                    t = threading.Thread(target=_wait_one, args=(i, w), daemon=True, name=f"waiter-work-{i}")
-                    t.start()
-                    threads.append(t)
-
-                # 等所有监听线程结束
-                for t in threads:
-                    t.join()
-
-                # 记录结束时间（在 mark 前，便于统计）
+                # print(f"[{dist.get_rank()}] Waiting for {len(works)} works (action={action_id}, chunk={chunk_idx})")
+                # while not all(w.is_completed() for w in works):
+                #     time.sleep(poll_interval)
+                
+                enter(id=action_id)
+                for w in works:
+                    w.wait()
                 end_ns = time.time_ns()
-
-                # 停止网速采样（如启用）
+                leave(id=action_id)
+                
                 if need_net:
                     stop_evt.set()
-
-                # 如果有任一监听线程出错，抛出第一个异常
-                first_err = next((e for e in errors if e is not None), None)
-                if first_err is not None:
-                    raise first_err
-
-                # 全部完成后再标记 done
+                
+                # Mark done after waiting completes
                 if chunk_idx is None:
                     _mark_done(batch_id=batch_id, action_id=action_id)
                 else:
+                    # print(f"[{dist.get_rank()}] Marking done chunk for batch={batch_id}, action={action_id}, chunk={chunk_idx}")
                     _mark_done_chunk(batch_id=batch_id, action_id=action_id, chunk_idx=chunk_idx)
-
+                    # print(f"[{self.rank}] DONE {action} st={stage_idx} mb={mb_idx} chunk={chunk_idx} "
+                    #     f"works={len(works)}")
             except Exception as e:
-                status = f"error:{type(e).__name__}:{e}"
-                if end_ns is None:
-                    end_ns = time.time_ns()
-
+                status = f"error:{type(e).__name__}"
+                end_ns = time.time_ns()
             finally:
-                # 落事件（保持你原有的 TraceEvent 字段顺序）
                 self.events.append(
                     TraceEvent(
                         batch_id, self.rank, action, stage_idx, mb_idx,
@@ -241,8 +183,6 @@ class Recorder:
                         net_series=samples,
                     )
                 )
-
-
         
         threading.Thread(target=waiter, daemon=True).start()
 
