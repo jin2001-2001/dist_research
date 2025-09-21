@@ -10,7 +10,6 @@ from torch.autograd.graph import GradientEdge, Node
 from torch.nn import Parameter
 import torch.distributed as dist
 
-from ._debug import map_debug_info
 
 
 logger = logging.getLogger(__name__)
@@ -289,9 +288,8 @@ def stage_backward(
     in the autograd trace) as well as return a list of the gradients for the
     input values
     """
-    # if dist.get_rank() == 0:
-    #     print(f"❤️stage_output:{stage_output}\noutput_grads:{output_grads}\ninput_values:{input_values}")
-    
+
+
     if outputs_with_grads_idxs is not None:
         # Deprecated, not used in runtime calls, only exists in compiler
         stage_output = [stage_output[i] for i in outputs_with_grads_idxs]
@@ -355,11 +353,13 @@ def stage_backward(
             stage_output, output_grads, extract_tensors_with_grads
         )
 
+
         torch.autograd.backward(
             stage_output_tensors,
             grad_tensors=output_grad_tensors,  # type: ignore[arg-type]
             retain_graph= retain_graph_for_packed_mbs
         )
+
 
         # Extract gradients wrt the input values
         grad_inputs: list[Optional[torch.Tensor]] = []
@@ -386,15 +386,13 @@ def stage_backward(
     except Exception as e:
         exc_msg = f"""
         Failed to run stage backward:
-        Stage output: {map_debug_info(stage_output)}
-        Output gradient: {map_debug_info(output_grads)}
-        Input: {map_debug_info(input_values)}
+        Stage output: {stage_output}
+        Output gradient: {output_grads}
+        Input: {input_values}
         """
         raise RuntimeError(exc_msg) from e
 
-    # if dist.get_rank() == 2:
-    #     print(f"✅是否为空{grad_inputs}")
-     
+
     return tuple(grad_inputs)
 
 
