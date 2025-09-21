@@ -1323,15 +1323,11 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                         with self._async_recv_lock:
                                             works = self._fwd_recv_works.pop(key_m, [])
                                         if works:
-                                            print(f"哈哈哈 {works}")
-                                            print(f"FORWARD 互斥锁前{action_id} ")
-                                            enter(action_id)
-                                            print("FORWARD 开始等待")
+                                            enter(0)
                                             schedule._wait_batch_p2p(works)
-                                            leave(action_id)
-                                            print(f"FORWARD 离开等待{action_id} ")
+                                            leave(0)
                                         self._fwd_recv_posted.pop(key_m, None)
-                                        # 模态内粘合（若内部用到了临时 flat 缓冲）
+
                                         if hasattr(stage, "finish_fwd_recv_mm"):
                                             stage.finish_fwd_recv_mm(mid, m)
                             else:
@@ -1344,12 +1340,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                         works_count = len(self._fwd_recv_works.get(key, []))
                                         works = self._fwd_recv_works.pop(key, [])
                                     if works:
-                                        print("FORWARD 互斥锁前")
-                                        enter(action_id)
-                                        print("FORWARD 开始等待")
+                                        enter(0)
                                         schedule._wait_batch_p2p(works)
-                                        leave(action_id)
-                                        print("FORWARD 离开等待")
+                                        leave(0)
                                     self._fwd_recv_posted.pop(key, None)
 
                         # 取本段前向输入
