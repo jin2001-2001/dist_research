@@ -153,11 +153,13 @@ class Recorder:
                 # while not all(w.is_completed() for w in works):
                 #     time.sleep(poll_interval)
                 
+                print(f"通信 {action_id} 进入等待")
                 enter(id=action_id)
                 for w in works:
                     w.wait()
                 end_ns = time.time_ns()
                 leave(id=action_id)
+                print(f"通信 {action_id} 离开等待")
                 
                 if need_net:
                     stop_evt.set()

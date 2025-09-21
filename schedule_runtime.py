@@ -1496,9 +1496,11 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                     self._bwd_recv_posted[key_m].wait()
                                     with self._async_recv_lock:
                                         works = self._bwd_recv_works.pop(key_m, [])
+                                    print("FORWARD 进入等待")
                                     enter(0)
                                     schedule._wait_batch_p2p(works)
                                     leave(0)
+                                    print("FORWARD 离开等待")
                                     self._bwd_recv_posted.pop(key_m, None)
                                     # 模态内粘合（若内部用到了临时 flat 缓冲）
                                     if hasattr(stage, "finish_bwd_recv_mm"):
@@ -1510,9 +1512,11 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                     self._bwd_recv_posted[key].wait()
                                     with self._async_recv_lock:
                                         works = self._bwd_recv_works.pop(key, [])
+                                    print("FORWARD 进入等待")
                                     enter(0)
                                     schedule._wait_batch_p2p(works)
                                     leave(0)
+                                    print("FORWARD 离开等待")
                                     self._bwd_recv_posted.pop(key, None)
 
                     # 清理本地 fwd_cache 的单条目
