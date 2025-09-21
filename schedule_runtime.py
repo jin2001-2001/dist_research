@@ -1323,6 +1323,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                         with self._async_recv_lock:
                                             works = self._fwd_recv_works.pop(key_m, [])
                                         if works:
+                                            print(f"哈哈哈 {works}")
                                             print(f"FORWARD 互斥锁前{action_id} ")
                                             enter(action_id)
                                             print("FORWARD 开始等待")
