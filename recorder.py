@@ -155,6 +155,7 @@ class Recorder:
                 
                 print(f"通信 {action_id} 进入等待")
                 enter(id=action_id)
+                print(f"通信 {action_id} 开始等待")
                 for w in works:
                     w.wait()
                 end_ns = time.time_ns()
