@@ -1324,10 +1324,10 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                             works = self._fwd_recv_works.pop(key_m, [])
                                         if works:
                                             print("FORWARD 互斥锁前")
-                                            enter(0)
+                                            enter(action_id)
                                             print("FORWARD 开始等待")
                                             schedule._wait_batch_p2p(works)
-                                            leave(0)
+                                            leave(action_id)
                                             print("FORWARD 离开等待")
                                         self._fwd_recv_posted.pop(key_m, None)
                                         # 模态内粘合（若内部用到了临时 flat 缓冲）
@@ -1344,10 +1344,10 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                         works = self._fwd_recv_works.pop(key, [])
                                     if works:
                                         print("FORWARD 互斥锁前")
-                                        enter(0)
+                                        enter(action_id)
                                         print("FORWARD 开始等待")
                                         schedule._wait_batch_p2p(works)
-                                        leave(0)
+                                        leave(action_id)
                                         print("FORWARD 离开等待")
                                     self._fwd_recv_posted.pop(key, None)
 
