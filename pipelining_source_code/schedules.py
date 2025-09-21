@@ -543,6 +543,9 @@ def _wait_batch_p2p(work: list[dist.Work]):
     """
     for w in work:
         print(f"FORWARD细则 {w}")
+    
+    for w in work:
+        print(f"FORWARD等待细则 {w}")
         w.wait()
 
 
