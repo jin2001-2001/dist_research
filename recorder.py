@@ -153,13 +153,13 @@ class Recorder:
                 # while not all(w.is_completed() for w in works):
                 #     time.sleep(poll_interval)
                 
-                enter(id=action_id)
+                #enter(id=action_id)
                 for w in works:
                     if w.is_completed():
                         continue
                     w.wait()
                 end_ns = time.time_ns()
-                leave(id=action_id)
+                #leave(id=action_id)
                 
                 if need_net:
                     stop_evt.set()
