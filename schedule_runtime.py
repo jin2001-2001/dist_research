@@ -1323,12 +1323,12 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                         with self._async_recv_lock:
                                             works = self._fwd_recv_works.pop(key_m, [])
                                         if works:
-                                            print(f"FORWARD 互斥锁前 {action_id}")
+                                            print(f"FORWARD 互斥锁前{action_id} ")
                                             enter(action_id)
                                             print("FORWARD 开始等待")
                                             schedule._wait_batch_p2p(works)
                                             leave(action_id)
-                                            print(f"FORWARD 离开等待 {action_id}")
+                                            print(f"FORWARD 离开等待{action_id} ")
                                         self._fwd_recv_posted.pop(key_m, None)
                                         # 模态内粘合（若内部用到了临时 flat 缓冲）
                                         if hasattr(stage, "finish_fwd_recv_mm"):
