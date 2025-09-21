@@ -1323,9 +1323,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                         with self._async_recv_lock:
                                             works = self._fwd_recv_works.pop(key_m, [])
                                         if works:
-                                            #enter(0)
+                                            enter(0)
                                             schedule._wait_batch_p2p(works)
-                                            #leave(0)
+                                            leave(0)
                                         self._fwd_recv_posted.pop(key_m, None)
 
                                         if hasattr(stage, "finish_fwd_recv_mm"):
@@ -1340,9 +1340,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                         works_count = len(self._fwd_recv_works.get(key, []))
                                         works = self._fwd_recv_works.pop(key, [])
                                     if works:
-                                        #enter(0)
+                                        enter(0)
                                         schedule._wait_batch_p2p(works)
-                                        #leave(0)
+                                        leave(0)
                                     self._fwd_recv_posted.pop(key, None)
 
                         # 取本段前向输入
@@ -1497,9 +1497,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                     with self._async_recv_lock:
                                         works = self._bwd_recv_works.pop(key_m, [])
                                     
-                                    #enter(0)
+                                    enter(0)
                                     schedule._wait_batch_p2p(works)
-                                    #leave(0)
+                                    leave(0)
                                     
                                     self._bwd_recv_posted.pop(key_m, None)
                                     # 模态内粘合（若内部用到了临时 flat 缓冲）
@@ -1513,9 +1513,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                     with self._async_recv_lock:
                                         works = self._bwd_recv_works.pop(key, [])
                                     
-                                    #enter(0)
+                                    enter(0)
                                     schedule._wait_batch_p2p(works)
-                                    #leave(0)
+                                    leave(0)
                                     
                                     self._bwd_recv_posted.pop(key, None)
 
