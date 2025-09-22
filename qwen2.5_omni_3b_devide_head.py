@@ -1269,122 +1269,336 @@ def main():
 
     noise_path = os.path.join(os.getcwd(), "noise.mp3")
 
-    def collate_fn(batch):
-        conversations = []
-        for ex in batch:
-            img = ex["image"]
-            txt = ex.get("text", "") if isinstance(ex.get("text", ""), str) else ""
-            conversations.append([
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "audio", "audio": noise_path},
-                        {"type": "image", "image": img},
-                        {"type": "text",  "text": txt}
-                    ],
-                }
-            ])
+    # def collate_fn(batch):
+    #     conversations = []
+    #     for ex in batch:
+    #         img = ex["image"]
+    #         txt = ex.get("text", "") if isinstance(ex.get("text", ""), str) else ""
+    #         conversations.append([
+    #             {
+    #                 "role": "user",
+    #                 "content": [
+    #                     {"type": "audio", "audio": noise_path},
+    #                     {"type": "image", "image": img},
+    #                     {"type": "text",  "text": txt}
+    #                 ],
+    #             }
+    #         ])
 
-        pack = proc.apply_chat_template(
-            conversations,
-            add_generation_prompt=False,
-            tokenize=True,
-            return_tensors="pt",
-            return_dict=True,
-            padding="max_length",
-            max_length=512,
-            truncation=True
-        )
+    #     pack = proc.apply_chat_template(
+    #         conversations,
+    #         add_generation_prompt=False,
+    #         tokenize=True,
+    #         return_tensors="pt",
+    #         return_dict=True,
+    #         padding="max_length",
+    #         max_length=512,
+    #         truncation=True
+    #     )
 
-        # Debug once or twice: what keys does processor return, and are there audio keys?
-        try:
-            if not hasattr(collate_fn, "_dbg_count"):
-                collate_fn._dbg_count = 0
-            if collate_fn._dbg_count < 2:
-                def _shape(x):
-                    if isinstance(x, torch.Tensor):
-                        return (tuple(x.shape), str(x.dtype))
-                    return type(x).__name__
-                keys = list(pack.keys()) if hasattr(pack, 'keys') else []
-                print(f"[rank0] collate_fn: processor pack keys: {keys}")
-                for k in ("pixel_values", "image_grid_thw", "input_values", "input_features", "audio_values", "feature_attention_mask"):
-                    if hasattr(pack, 'get'):
-                        v = pack.get(k, None)
-                        if v is not None:
-                            print(f"[rank0] collate_fn: pack[{k}] -> {_shape(v)}")
-                        else:
-                            print(f"[rank0] collate_fn: pack[{k}] -> None")
-                collate_fn._dbg_count += 1
-        except Exception:
-            pass
+    #     # Debug once or twice: what keys does processor return, and are there audio keys?
+    #     try:
+    #         if not hasattr(collate_fn, "_dbg_count"):
+    #             collate_fn._dbg_count = 0
+    #         if collate_fn._dbg_count < 2:
+    #             def _shape(x):
+    #                 if isinstance(x, torch.Tensor):
+    #                     return (tuple(x.shape), str(x.dtype))
+    #                 return type(x).__name__
+    #             keys = list(pack.keys()) if hasattr(pack, 'keys') else []
+    #             print(f"[rank0] collate_fn: processor pack keys: {keys}")
+    #             for k in ("pixel_values", "image_grid_thw", "input_values", "input_features", "audio_values", "feature_attention_mask"):
+    #                 if hasattr(pack, 'get'):
+    #                     v = pack.get(k, None)
+    #                     if v is not None:
+    #                         print(f"[rank0] collate_fn: pack[{k}] -> {_shape(v)}")
+    #                     else:
+    #                         print(f"[rank0] collate_fn: pack[{k}] -> None")
+    #             collate_fn._dbg_count += 1
+    #     except Exception:
+    #         pass
 
-        input_ids = pack["input_ids"]
-        attention_mask = pack["attention_mask"]
-        labels = input_ids.clone()
+    #     input_ids = pack["input_ids"]
+    #     attention_mask = pack["attention_mask"]
+    #     labels = input_ids.clone()
 
-        special_ids = set([
-            tok.pad_token_id,
-            getattr(tok, "eos_token_id", None),
-            getattr(tok, "bos_token_id", None),
-            getattr(cfg, "image_token_id", None),
-            getattr(cfg, "video_token_id", None),
-            getattr(cfg, "audio_token_id", None),
-        ])
-        special_ids = {i for i in special_ids if i is not None}
-        for sid in special_ids:
-            labels[labels == sid] = -100
+    #     special_ids = set([
+    #         tok.pad_token_id,
+    #         getattr(tok, "eos_token_id", None),
+    #         getattr(tok, "bos_token_id", None),
+    #         getattr(cfg, "image_token_id", None),
+    #         getattr(cfg, "video_token_id", None),
+    #         getattr(cfg, "audio_token_id", None),
+    #     ])
+    #     special_ids = {i for i in special_ids if i is not None}
+    #     for sid in special_ids:
+    #         labels[labels == sid] = -100
 
-        # Vision packing
-        vision_inputs = None
-        pixel_values = pack.get("pixel_values", None)
-        image_grid_thw = pack.get("image_grid_thw", None)
-        if image_grid_thw is not None:
-            image_grid_thw = torch.as_tensor(image_grid_thw, dtype=torch.long)
-        if pixel_values is not None and image_grid_thw is not None and image_grid_thw.numel() > 0:
-            counts = (image_grid_thw[:, 0] * image_grid_thw[:, 1] * image_grid_thw[:, 2])
-            slices, off = [], 0
-            for n in counts.tolist():
-                slices.append(pixel_values[off: off + n])
-                off += n
-            assert off == pixel_values.size(0), f"visual tokens mismatch: {off} != {pixel_values.size(0)}"
-            vision_inputs = {
-                "pixel_values_list": slices,
-                "grid_thw": image_grid_thw,
-            }
+    #     # Vision packing
+    #     vision_inputs = None
+    #     pixel_values = pack.get("pixel_values", None)
+    #     image_grid_thw = pack.get("image_grid_thw", None)
+    #     if image_grid_thw is not None:
+    #         image_grid_thw = torch.as_tensor(image_grid_thw, dtype=torch.long)
+    #     if pixel_values is not None and image_grid_thw is not None and image_grid_thw.numel() > 0:
+    #         counts = (image_grid_thw[:, 0] * image_grid_thw[:, 1] * image_grid_thw[:, 2])
+    #         slices, off = [], 0
+    #         for n in counts.tolist():
+    #             slices.append(pixel_values[off: off + n])
+    #             off += n
+    #         assert off == pixel_values.size(0), f"visual tokens mismatch: {off} != {pixel_values.size(0)}"
+    #         vision_inputs = {
+    #             "pixel_values_list": slices,
+    #             "grid_thw": image_grid_thw,
+    #         }
 
-        # Audio packing: pass through whatever processor returned
-        audio_inputs = None
-        if hasattr(pack, 'keys'):
-            for k in ("input_values", "audio_values", "input_features"):
-                if k in pack:
-                    audio_inputs = {k: pack[k]}
-                    if "feature_attention_mask" in pack:
-                        audio_inputs["feature_attention_mask"] = pack["feature_attention_mask"]
+    #     # Audio packing: pass through whatever processor returned
+    #     audio_inputs = None
+    #     if hasattr(pack, 'keys'):
+    #         for k in ("input_values", "audio_values", "input_features"):
+    #             if k in pack:
+    #                 audio_inputs = {k: pack[k]}
+    #                 if "feature_attention_mask" in pack:
+    #                     audio_inputs["feature_attention_mask"] = pack["feature_attention_mask"]
+    #                 break
+
+    #     # Debug once or twice: what did we build for audio_inputs?
+    #     try:
+    #         if not hasattr(collate_fn, "_dbg_audio_count"):
+    #             collate_fn._dbg_audio_count = 0
+    #         if collate_fn._dbg_audio_count < 2:
+    #             if audio_inputs is None:
+    #                 print(f"[rank0] collate_fn: built audio_inputs=None")
+    #             else:
+    #                 kv = {k: (tuple(v.shape), str(v.dtype)) if isinstance(v, torch.Tensor) else type(v).__name__
+    #                       for k, v in audio_inputs.items()}
+    #                 print(f"[rank0] collate_fn: built audio_inputs keys/shapes: {kv}")
+    #             collate_fn._dbg_audio_count += 1
+    #     except Exception:
+    #         pass
+
+    #     return {
+    #         "input_ids": input_ids,
+    #         "attention_mask": attention_mask,
+    #         "labels": labels,
+    #         "vision_inputs": vision_inputs,
+    #         "audio_inputs": audio_inputs,
+    #     }
+
+    # ---------- helpers: padding to the same time length ----------
+    def _pad_audio_features_to(x: torch.Tensor, T_target: int) -> torch.Tensor:
+        """
+        Pad audio features on the right to the same time length.
+        Accepts [n_mels, T] or [B, n_mels, T]. Returns the same rank with T -> T_target.
+        """
+        if x.dim() == 2:
+            n_mels, T = x.shape
+            if T == T_target:
+                return x
+            pad_T = T_target - T
+            return F.pad(x, (0, pad_T), "constant", 0.0)  # [n_mels, T_target]
+        elif x.dim() == 3:
+            B, n_mels, T = x.shape
+            if T == T_target:
+                return x
+            pad_T = T_target - T
+            return F.pad(x, (0, pad_T), "constant", 0.0)  # [B, n_mels, T_target]
+        else:
+            raise ValueError(f"_pad_audio_features_to expects 2D/3D, got {x.dim()}D with shape {tuple(x.shape)}")
+
+    def _pad_mask_to(mask: torch.Tensor, T_target: int) -> torch.Tensor:
+        """
+        Pad attention mask on the right with zeros (False) to T_target.
+        Accepts [T] or [B, T], dtype can be bool/int.
+        """
+        if mask.dtype != torch.bool:
+            mask = mask.to(torch.bool)
+        if mask.dim() == 1:
+            T = mask.shape[0]
+            if T == T_target:
+                return mask
+            pad_T = T_target - T
+            # F.pad expects N,C or NCHW-like; we can add a fake batch dim for convenience
+            return F.pad(mask.unsqueeze(0).to(torch.uint8), (0, pad_T), "constant", 0).squeeze(0).to(torch.bool)
+        elif mask.dim() == 2:
+            B, T = mask.shape
+            if T == T_target:
+                return mask
+            pad_T = T_target - T
+            return F.pad(mask.to(torch.uint8), (0, pad_T), "constant", 0).to(torch.bool)
+        else:
+            raise ValueError(f"_pad_mask_to expects 1D/2D, got {mask.dim()}D with shape {tuple(mask.shape)}")
+
+    # ---------- main collate_fn with audio packed to T_max ----------
+    def collate_fn(samples: List[Dict[str, Any]], rank: int = 0) -> Dict[str, Any]:
+        """
+        Expected keys per sample (if present):
+        - 'input_ids': LongTensor [L_i]
+        - 'attention_mask': LongTensor/Bool [L_i]
+        - 'pixel_values': FloatTensor or ndarray-like (already preprocessed); we simply stack if shapes match
+        - 'image_grid_thw': LongTensor/Int [num_images, 3]
+        - 'input_features': FloatTensor [n_mels, T_i] or [1, n_mels, T_i]
+        - 'feature_attention_mask': Bool/Int [T_i] or [1, T_i]
+        Returns a dict with batched tensors. Audio is returned as a nested dict 'audio_inputs'.
+        """
+        batch: Dict[str, Any] = {}
+
+        # ---------------- text pack (stack if sizes match) ----------------
+        if all(("input_ids" in s and s["input_ids"] is not None) for s in samples):
+            # pad to max length for text if lengths differ (simple right-pad with 0)
+            lens = [s["input_ids"].shape[0] for s in samples]
+            L_max = max(lens)
+            ids = []
+            attn = []
+            for s in samples:
+                ids_i = s["input_ids"]
+                pad_len = L_max - ids_i.shape[0]
+                if pad_len > 0:
+                    ids_i = F.pad(ids_i, (0, pad_len), "constant", 0)
+                    am = s.get("attention_mask", torch.ones_like(s["input_ids"], dtype=torch.long))
+                    am = F.pad(am, (0, pad_len), "constant", 0)
+                else:
+                    am = s.get("attention_mask", torch.ones_like(ids_i, dtype=torch.long))
+                ids.append(ids_i)
+                attn.append(am if am.dtype == torch.long else am.to(torch.long))
+            batch["input_ids"] = torch.stack(ids, dim=0)               # [B, L_max]
+            batch["attention_mask"] = torch.stack(attn, dim=0)         # [B, L_max]
+            print(f"[rank{rank}] collate_fn: pack[input_ids] -> ({tuple(batch['input_ids'].shape)}, '{batch['input_ids'].dtype}')")
+            print(f"[rank{rank}] collate_fn: pack[attention_mask] -> ({tuple(batch['attention_mask'].shape)}, '{batch['attention_mask'].dtype}')")
+
+        # ---------------- image pack (best-effort) ----------------
+        if all(("pixel_values" in s and s["pixel_values"] is not None) for s in samples):
+            # 如果每个样本的 pixel_values 已是相同 shape 的 Tensor/np.array，则直接 stack
+            pv0 = samples[0]["pixel_values"]
+            try:
+                pv_list = [torch.as_tensor(s["pixel_values"]) for s in samples]
+                same = all(tuple(torch.as_tensor(s["pixel_values"]).shape) == tuple(pv_list[0].shape) for s in samples)
+                if same:
+                    batch["pixel_values"] = torch.stack(pv_list, dim=0)
+                    print(f"[rank{rank}] collate_fn: pack[pixel_values] -> ({tuple(batch['pixel_values'].shape)}, '{batch['pixel_values'].dtype}')")
+                else:
+                    # 形状不一致时，保守做法：不堆叠，交由上游 processor 再处理
+                    batch["pixel_values"] = None
+                    print(f"[rank{rank}] collate_fn: pack[pixel_values] -> None (shapes not aligned)")
+            except Exception:
+                batch["pixel_values"] = None
+                print(f"[rank{rank}] collate_fn: pack[pixel_values] -> None (cast failed)")
+
+        if all(("image_grid_thw" in s and s["image_grid_thw"] is not None) for s in samples):
+            try:
+                igt_list = [torch.as_tensor(s["image_grid_thw"]) for s in samples]
+                same = all(tuple(igt.shape) == tuple(igt_list[0].shape) for igt in igt_list)
+                if same:
+                    batch["image_grid_thw"] = torch.stack(igt_list, dim=0)
+                else:
+                    # 若每样本都有多图，且数量不同，可选择保留为 list
+                    batch["image_grid_thw"] = torch.stack(igt_list, dim=0)  # 简化处理
+                print(f"[rank{rank}] collate_fn: pack[image_grid_thw] -> ({tuple(batch['image_grid_thw'].shape)}, '{batch['image_grid_thw'].dtype}')")
+            except Exception:
+                batch["image_grid_thw"] = None
+                print(f"[rank{rank}] collate_fn: pack[image_grid_thw] -> None")
+
+        # ---------------- audio pack (this is the key change: pad to T_max) ----------------
+        have_any_audio = any(("input_features" in s and s["input_features"] is not None) or
+                            ("feature_attention_mask" in s and s["feature_attention_mask"] is not None)
+                            for s in samples)
+
+        if have_any_audio:
+            audio_feats_list: List[Optional[torch.Tensor]] = []
+            audio_mask_list:  List[Optional[torch.Tensor]] = []
+
+            for s in samples:
+                # input_features per sample -> expect [n_mels, T_i] (squeeze front dim if [1, n_mels, T_i])
+                feat = s.get("input_features", None)
+                if feat is not None:
+                    feat = torch.as_tensor(feat)
+                    if feat.dim() == 3 and feat.size(0) == 1:
+                        feat = feat.squeeze(0)  # [1, n_mels, T] -> [n_mels, T]
+                    assert feat.dim() == 2, f"input_features must be 2D [n_mels, T], got {tuple(feat.shape)}"
+                audio_feats_list.append(feat)
+
+                # feature_attention_mask per sample -> expect [T_i] (squeeze if [1, T_i])
+                m = s.get("feature_attention_mask", None)
+                if m is not None:
+                    m = torch.as_tensor(m)
+                    if m.dim() == 2 and m.size(0) == 1:
+                        m = m.squeeze(0)
+                    assert m.dim() == 1, f"feature_attention_mask must be 1D [T], got {tuple(m.shape)}"
+                    if m.dtype != torch.bool:
+                        m = m.to(torch.bool)
+                audio_mask_list.append(m)
+
+            # infer n_mels if some samples miss audio
+            n_mels = None
+            for f in audio_feats_list:
+                if f is not None:
+                    n_mels = f.size(0)
                     break
 
-        # Debug once or twice: what did we build for audio_inputs?
-        try:
-            if not hasattr(collate_fn, "_dbg_audio_count"):
-                collate_fn._dbg_audio_count = 0
-            if collate_fn._dbg_audio_count < 2:
-                if audio_inputs is None:
-                    print(f"[rank0] collate_fn: built audio_inputs=None")
-                else:
-                    kv = {k: (tuple(v.shape), str(v.dtype)) if isinstance(v, torch.Tensor) else type(v).__name__
-                          for k, v in audio_inputs.items()}
-                    print(f"[rank0] collate_fn: built audio_inputs keys/shapes: {kv}")
-                collate_fn._dbg_audio_count += 1
-        except Exception:
-            pass
+            # per-sample target T_i = max(T_feat, T_mask); then global T_max = max(T_i)
+            T_list: List[int] = []
+            for feat, m in zip(audio_feats_list, audio_mask_list):
+                T_feat = feat.shape[-1] if feat is not None else 0
+                T_mask = m.shape[0] if m is not None else 0
+                T_i = max(T_feat, T_mask)
+                T_list.append(T_i)
+            T_max = max(T_list) if len(T_list) > 0 else 0
 
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": labels,
-            "vision_inputs": vision_inputs,
-            "audio_inputs": audio_inputs,
-        }
+            padded_feats: List[torch.Tensor] = []
+            padded_masks: List[torch.Tensor] = []
 
+            for feat, m, T_i in zip(audio_feats_list, audio_mask_list, T_list):
+                # construct placeholders if a sample misses audio completely
+                if feat is None and m is None:
+                    if n_mels is None:
+                        # whole batch has no audio; break out
+                        break
+                    feat = torch.zeros(n_mels, 0, dtype=torch.float32)
+                    m = torch.zeros(0, dtype=torch.bool)
+
+                # upcast dtypes conservatively
+                if feat is not None and not torch.is_floating_point(feat):
+                    feat = feat.to(torch.float32)
+                if m is not None and m.dtype != torch.bool:
+                    m = m.to(torch.bool)
+
+                # first, pad each to its own T_i
+                feat = _pad_audio_features_to(feat, T_i)  # [n_mels, T_i]
+                m    = _pad_mask_to(m, T_i)               # [T_i], padded area = False
+
+                # then, pad to global T_max
+                feat = _pad_audio_features_to(feat, T_max)  # [n_mels, T_max]
+                m    = _pad_mask_to(m, T_max)               # [T_max]
+
+                padded_feats.append(feat)
+                padded_masks.append(m)
+
+            if len(padded_feats) > 0:
+                input_features = torch.stack(padded_feats, dim=0)          # [B, n_mels, T_max]
+                feature_attention_mask = torch.stack(padded_masks, dim=0)  # [B, T_max]
+                # sanity check
+                valid_counts = feature_attention_mask.sum(dim=1)           # [B]
+                assert (valid_counts <= input_features.size(-1)).all(), \
+                    f"mask valid counts exceed feature length: {valid_counts} vs {input_features.size(-1)}"
+
+                audio_inputs = {
+                    "input_features": input_features,
+                    "feature_attention_mask": feature_attention_mask,
+                }
+                batch["audio_inputs"] = audio_inputs
+                print(f"[rank{rank}] collate_fn: pack[input_features] -> ({tuple(input_features.shape)}, '{input_features.dtype}')")
+                print(f"[rank{rank}] collate_fn: pack[feature_attention_mask] -> ({tuple(feature_attention_mask.shape)}, '{feature_attention_mask.dtype}')")
+            else:
+                batch["audio_inputs"] = {"input_features": None, "feature_attention_mask": None}
+                print(f"[rank{rank}] collate_fn: no audio in this batch")
+
+        else:
+            batch["audio_inputs"] = {"input_features": None, "feature_attention_mask": None}
+            print(f"[rank{rank}] collate_fn: no audio keys detected in samples")
+
+        return batch
+
+    
     batch_size = args.batch_size
     microbatch_num = args.microbatch_num
     block = 512
