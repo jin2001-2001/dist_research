@@ -327,7 +327,7 @@ class AudioStage(nn.Module):
 
         feature_lens = feature_attention_mask.sum(dim=1).to(dtype=torch.long)
         # Align to encoder device
-        feature_lens = self._to_enc(feature_lens, ref_param)
+        feature_lens = feature_lens.to(device=ref_param.device, dtype=torch.long)
 
         # The official _get_feat_extract_output_lengths usually returns (aftercnn_lens, something_else)
         out = self.audio_enc._get_feat_extract_output_lengths(feature_lens)
@@ -337,7 +337,7 @@ class AudioStage(nn.Module):
             # Some impls may directly return the length tensor
             aftercnn_lens = out
         aftercnn_lens = aftercnn_lens.to(dtype=torch.long)
-        aftercnn_lens = self._to_enc(aftercnn_lens, ref_param)
+        aftercnn_lens = aftercnn_lens.to(device=ref_param.device, dtype=torch.long)
 
         # 4) reshape to [n_mels, sumT] exactly as official code does:
         #    [B, n_mels, T] -> [B, T, n_mels] -> mask-select -> [sumT, n_mels] -> [n_mels, sumT]
