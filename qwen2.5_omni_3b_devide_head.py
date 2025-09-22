@@ -1403,17 +1403,14 @@ def main():
                 })
 
                
-            
-            convo.append([
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "audio", "audio": noise_path},
-                        {"type": "image", "image": img},
-                        {"type": "text",  "text": txt}
-                    ],
-                }
-            ])
+            convo.append({
+                "role": "user",
+                "content": [
+                    {"type": "audio", "audio": noise_path},
+                    {"type": "image", "image": img},
+                    {"type": "text",  "text": txt}
+                ],
+            })
             conversations.append(convo)
             
             
