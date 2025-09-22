@@ -248,6 +248,7 @@ class AudioStage(nn.Module):
     def __init__(self, audio_enc: nn.Module):
         super().__init__()
         self.audio_enc = audio_enc  # e.g., Qwen2_5OmniAudioEncoder
+        self._last_path: str = "uninitialized"
         # Optional, sanity check if available in your impl
         conv1 = getattr(self.audio_enc, "conv1", None)
         num_mel_bins = getattr(self.audio_enc, "num_mel_bins", None)
@@ -271,7 +272,7 @@ class AudioStage(nn.Module):
         *,
         allow_fallback: bool = False,
         debug: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
             audio_inputs:
@@ -283,12 +284,10 @@ class AudioStage(nn.Module):
             debug: if True, print detailed shapes/dtypes/devices
 
         Returns:
-            {
-              "last_hidden_state": FloatTensor [sum_aftercnn, hidden_size],
-              "feature_lens": LongTensor [B],
-              "aftercnn_lens": LongTensor [B],
-              "path": str  # "ok" | "zeros_fallback"
-            }
+            Tuple of tensors `(audio_hidden, feature_lens, aftercnn_lens)` where:
+              - audio_hidden: FloatTensor [sum_aftercnn, hidden_size]
+              - feature_lens: LongTensor [B]
+              - aftercnn_lens: LongTensor [B]
         """
         path = "ok"
         conv1_w = getattr(self.audio_enc, "conv1", None)
@@ -394,19 +393,19 @@ class AudioStage(nn.Module):
                 raise
 
         if debug:
-            self._print_debug(f"[AudioStage] audio_hidden shape={tuple(audio_hidden.shape)} "
-                              f"dtype={audio_hidden.dtype} device={audio_hidden.device} path={path}")
+            self._print_debug(
+                f"[AudioStage] audio_hidden shape={tuple(audio_hidden.shape)} "
+                f"dtype={audio_hidden.dtype} device={audio_hidden.device} path={path}"
+            )
 
-        return {
-            "last_hidden_state": audio_hidden,
-            "feature_lens": feature_lens,
-            "aftercnn_lens": aftercnn_lens,
-            "path": path,
-        }
+        # Track the most recent execution path for optional external inspection.
+        self._last_path = path
+
+        return audio_hidden, feature_lens, aftercnn_lens
 
 
 # -------------------------- Optional smoke test --------------------------
-def _smoke_test_audio_stage(stage: AudioStage) -> Dict[str, Any]:
+def _smoke_test_audio_stage(stage: AudioStage) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Minimal sanity test. Adjust T and mask as needed.
     """
@@ -419,8 +418,7 @@ def _smoke_test_audio_stage(stage: AudioStage) -> Dict[str, Any]:
     mask = torch.ones(B, T, device=device, dtype=torch.bool)
 
     batch = {"input_features": x, "feature_attention_mask": mask}
-    out = stage.forward(batch, allow_fallback=False, debug=True)
-    return out
+    return stage.forward(batch, allow_fallback=False, debug=True)
 
 
 class VisionStage(nn.Module):
