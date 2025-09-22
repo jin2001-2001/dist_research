@@ -37,198 +37,390 @@ def pack_modalities(text_embeds, audio_seq=None, vision_seq=None):
 
 
 
-class AudioStage(nn.Module):
-    def __init__(self, audio_enc):
-        super().__init__()
-        self.audio_enc = audio_enc
+# class AudioStage(nn.Module):
+#     def __init__(self, audio_enc):
+#         super().__init__()
+#         self.audio_enc = audio_enc
 
-    def forward(self, audio_inputs):
-        """
-        返回: audio_embeds
-        要求: collate 后的 audio_inputs（dict 或 tensor）其拼接顺序要与 input_ids 中 audio_token 的扫描顺序一致。
-        """
-        import time
-        _t0 = time.perf_counter()
-        try:
+#     def forward(self, audio_inputs):
+#         """
+#         返回: audio_embeds
+#         要求: collate 后的 audio_inputs（dict 或 tensor）其拼接顺序要与 input_ids 中 audio_token 的扫描顺序一致。
+#         """
+#         import time
+#         _t0 = time.perf_counter()
+#         try:
             
-            rid = dist.get_rank() if dist.is_initialized() else -1
-        except Exception:
-            rid = -1
+#             rid = dist.get_rank() if dist.is_initialized() else -1
+#         except Exception:
+#             rid = -1
 
-        if audio_inputs is None:
-            device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
-            out = torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
-            try:
-                print(f"[rank{rid}] AudioStage.forward: audio_inputs=None -> return zeros {tuple(out.shape)}")
-            except Exception:
-                pass
-            return out
+#         if audio_inputs is None:
+#             device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
+#             out = torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
+#             try:
+#                 print(f"[rank{rid}] AudioStage.forward: audio_inputs=None -> return zeros {tuple(out.shape)}")
+#             except Exception:
+#                 pass
+#             return out
 
-        if isinstance(audio_inputs, dict):
-            # 避免对张量做布尔短路判断，逐键安全取值
-            audio_values = None
-            for k in ("input_features", "input_values", "audio_values"):
-                v = audio_inputs.get(k, None)
-                if v is not None:
-                    audio_values = v
-                    break
-            feature_attention_mask = audio_inputs.get("feature_attention_mask", None)
+#         if isinstance(audio_inputs, dict):
+#             # 避免对张量做布尔短路判断，逐键安全取值
+#             audio_values = None
+#             for k in ("input_features", "input_values", "audio_values"):
+#                 v = audio_inputs.get(k, None)
+#                 if v is not None:
+#                     audio_values = v
+#                     break
+#             feature_attention_mask = audio_inputs.get("feature_attention_mask", None)
+#         else:
+#             audio_values = audio_inputs
+#             feature_attention_mask = None
+
+#         if audio_values is None:
+#             device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
+#             out = torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
+#             try:
+#                 print(f"[rank{rid}] AudioStage.forward: audio_values=None -> return zeros {tuple(out.shape)}")
+#             except Exception:
+#                 pass
+#             return out
+
+#         # 确保audio_values是float类型
+#         if audio_values.dtype != torch.float32:
+#             audio_values = audio_values.float()
+
+#         if hasattr(self.audio_enc, "get_dtype"):
+#             audio_values = audio_values.type(self.audio_enc.get_dtype())
+#         audio_values = audio_values.to(next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else audio_values.device)
+
+#         B, D1, D2 = audio_values.shape[:3]
+#         _pre_shape = tuple(audio_values.shape)
+
+#         # 维度自适配：推断 [B, n_mels, n_frames] 或 [B, n_frames, n_mels]
+#         typical_mels = {64, 80, 96, 128}
+#         n_mels = None
+#         n_frames = None
+#         input_feats = None
+
+#         # 目标：让“时间轴”在 dim=1，便于与 feature_lens 对齐
+#         if D1 in typical_mels:
+#             # 当前是 [B, mels, frames] -> 转成 [B, frames, mels]
+#             n_mels, n_frames = D1, D2
+#             input_feats = audio_values.transpose(1, 2)
+#         elif D2 in typical_mels:
+#             # 已是 [B, frames, mels]
+#             n_mels, n_frames = D2, D1
+#             input_feats = audio_values
+#         else:
+#             # 启发式：把较大的维度当作帧数，较小的当作梅尔通道
+#             if D1 >= D2:
+#                 # [B, frames, mels]
+#                 n_mels, n_frames = D2, D1
+#                 input_feats = audio_values
+#             else:
+#                 # [B, mels, frames] -> 转到 [B, frames, mels]
+#                 n_mels, n_frames = D1, D2
+#                 input_feats = audio_values.transpose(1, 2)
+
+#         _post_shape = tuple(input_feats.shape)
+
+#         # 扁平 batch：拼到 [1, sumT, 128] 并构造 feature_lens=[T1..TB]（单位：帧）
+#         per_list = []
+#         T_list = []
+#         for i in range(B):
+#             t_i = input_feats[i:i+1]              # [1, T_i, 128]
+#             per_list.append(t_i)
+#             T_list.append(int(t_i.size(1)))
+#         feats_cat = torch.cat(per_list, dim=1)     # [1, sumT, 128]
+#         feature_lens = torch.tensor(T_list, dtype=torch.long, device=feats_cat.device)  # [B]
+
+#         # 由模型工具函数推导卷积后的长度
+#         try:
+#             aftercnn_lens, _ = self.audio_enc._get_feat_extract_output_lengths(feature_lens)
+#         except Exception:
+#             aftercnn_lens = feature_lens.clone()
+
+#         # dtype 对齐到卷积权重（避免 conv 类型不匹配）
+#         try:
+#             want_dtype = self.audio_enc.conv1.weight.dtype  # type: ignore[attr-defined]
+#         except Exception:
+#             want_dtype = feats_cat.dtype
+#         feats_cat = feats_cat.to(want_dtype)
+
+#         try:
+#             print(
+#                 f"[rank{rid}] AudioStage.forward: pre={_pre_shape} mid={_post_shape} post={tuple(feats_cat.shape)} "
+#                 f"feature_lens={feature_lens.tolist()} aftercnn_lens={aftercnn_lens.tolist()} dtype={feats_cat.dtype}"
+#             )
+#         except Exception:
+#             pass
+
+#         _path = "main"
+#         try:
+#             res = self.audio_enc(
+#                 input_features=feats_cat,      # [1, sumT, 128]，时间在 dim=1
+#                 feature_lens=feature_lens,     # [B]
+#                 aftercnn_lens=aftercnn_lens    # [B]
+#             )
+#         except Exception as e1:
+#             try:
+#                 _path = "fallback_no_aftercnn_lens"
+#                 res = self.audio_enc(
+#                     input_features=input_feats,
+#                     feature_lens=feature_lens
+#                 )
+#             except Exception as e2:
+#                 _path = "zeros_fallback"
+#                 device = input_feats.device
+#                 # 兜底：按启发式估算下采样后序列长度
+#                 out_len = max(1, n_frames // 4)
+#                 out = torch.zeros(B, out_len, 768, device=device, dtype=torch.float32)
+#                 try:
+#                     _ms = (time.perf_counter() - _t0) * 1000.0
+#                     print(
+#                         f"[rank{rid}] AudioStage.forward: path={_path} -> zeros {tuple(out.shape)} took={_ms:.2f}ms pre={_pre_shape} post={_post_shape}; "
+#                         f"feature_lens={feature_lens.tolist()} aftercnn_lens={aftercnn_lens.tolist()} "
+#                         f"errors=({type(e1).__name__}: {e1}; {type(e2).__name__}: {e2})"
+#                     )
+#                 except Exception:
+#                     pass
+#                 return out
+
+#         audio_embeds = None
+#         if isinstance(res, torch.Tensor):
+#             audio_embeds = res
+#         elif hasattr(res, "last_hidden_state") and isinstance(res.last_hidden_state, torch.Tensor):
+#             audio_embeds = res.last_hidden_state
+#         elif isinstance(res, (list, tuple)):
+#             audio_embeds = next((x for x in res if isinstance(x, torch.Tensor)), None)
+#         elif isinstance(res, dict):
+#             audio_embeds = res.get("last_hidden_state", None)
+#             if not isinstance(audio_embeds, torch.Tensor):
+#                 for v in res.values():
+#                     if isinstance(v, torch.Tensor):
+#                         audio_embeds = v
+#                         break
+
+#         if isinstance(audio_embeds, torch.Tensor):
+#             out = audio_embeds.contiguous()
+#             try:
+#                 _ms = (time.perf_counter() - _t0) * 1000.0
+#                 abs_mean = float(out.detach().abs().mean().item())
+#                 enc_norm = None
+#                 try:
+#                     # 简单统计编码器参数范数
+#                     ps = list(self.audio_enc.parameters())
+#                     if ps:
+#                         enc_norm = float(sum(p.detach().norm().item() for p in ps[:3]))  # 采样前3个层参数
+#                 except Exception:
+#                     pass
+#                 print(f"[rank{rid}] AudioStage.forward: path={_path} in={_pre_shape}->{_post_shape} out={tuple(out.shape)} took={_ms:.2f}ms abs_mean={abs_mean:.3e} enc_norm={enc_norm}")
+#             except Exception:
+#                 pass
+#             return out
+#         else:
+#             device = audio_values.device
+#             batch_size, seq_len = audio_values.shape[:2]
+#             out = torch.zeros(batch_size, seq_len // 4, 768, device=device, dtype=torch.float32)
+#             try:
+#                 _ms = (time.perf_counter() - _t0) * 1000.0
+#                 print(f"[rank{rid}] AudioStage.forward: no tensor in result -> zeros {tuple(out.shape)} took={_ms:.2f}ms pre={_pre_shape} post={_post_shape}")
+#             except Exception:
+#                 pass
+#             return out
+
+from typing import Dict, Any, Optional, Tuple, List
+import os
+import torch
+import torch.nn as nn
+
+class AudioStage(nn.Module):
+    """
+    A minimal AudioStage that prepares audio features for Qwen2.5-Omni audio encoder
+    exactly as the official forward expects:
+      - input_features: [B, n_mels, T]
+      - feature_attention_mask: [B, T]
+    It converts them into [n_mels, sumT], computes feature_lens / aftercnn_lens,
+    aligns dtype/device with audio_enc, and calls audio_enc(input_features, feature_lens, aftercnn_lens).
+    """
+
+    def __init__(self, audio_enc: nn.Module):
+        super().__init__()
+        self.audio_enc = audio_enc  # e.g., Qwen2_5OmniAudioEncoder
+        # Optional, sanity check if available in your impl
+        conv1 = getattr(self.audio_enc, "conv1", None)
+        num_mel_bins = getattr(self.audio_enc, "num_mel_bins", None)
+        if conv1 is not None and num_mel_bins is not None:
+            assert conv1.in_channels == num_mel_bins, (
+                f"Inconsistent audio encoder config: conv1.in_channels={conv1.in_channels}, "
+                f"num_mel_bins={num_mel_bins}"
+            )
+
+    @staticmethod
+    def _to_enc(t: torch.Tensor, ref_param: torch.nn.Parameter) -> torch.Tensor:
+        return t.to(dtype=ref_param.dtype, device=ref_param.device)
+
+    @torch.no_grad()
+    def _print_debug(self, msg: str):
+        print(msg, flush=True)
+
+    def forward(
+        self,
+        audio_inputs: Dict[str, torch.Tensor],
+        *,
+        allow_fallback: bool = False,
+        debug: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Args:
+            audio_inputs:
+                {
+                  "input_features": FloatTensor [B, n_mels, T],
+                  "feature_attention_mask": Bool/Long [B, T]
+                }
+            allow_fallback: if True, on exceptions return zeros of minimal shape instead of raising
+            debug: if True, print detailed shapes/dtypes/devices
+
+        Returns:
+            {
+              "last_hidden_state": FloatTensor [sum_aftercnn, hidden_size],
+              "feature_lens": LongTensor [B],
+              "aftercnn_lens": LongTensor [B],
+              "path": str  # "ok" | "zeros_fallback"
+            }
+        """
+        path = "ok"
+        conv1_w = getattr(self.audio_enc, "conv1", None)
+        if conv1_w is None:
+            raise RuntimeError("audio_enc must have attribute `conv1` with `weight` and `in_channels`.")
+        ref_param = conv1_w.weight  # dtype & device reference
+        target_device = ref_param.device
+        target_dtype = ref_param.dtype
+
+        # 1) fetch batch
+        if "input_features" not in audio_inputs or "feature_attention_mask" not in audio_inputs:
+            raise KeyError("audio_inputs must contain 'input_features' and 'feature_attention_mask' keys.")
+
+        audio_values = audio_inputs["input_features"]            # [B, n_mels, T]
+        feature_attention_mask = audio_inputs["feature_attention_mask"]  # [B, T]
+
+        # 2) basic asserts
+        if audio_values.dim() != 3:
+            raise AssertionError(f"input_features must be 3D [B, n_mels, T], got shape {tuple(audio_values.shape)}")
+        if feature_attention_mask.dim() != 2:
+            raise AssertionError(f"feature_attention_mask must be 2D [B, T], got shape {tuple(feature_attention_mask.shape)}")
+
+        B, n_mels, T = audio_values.shape
+        if debug:
+            self._print_debug(f"[AudioStage] input_features shape={tuple(audio_values.shape)} "
+                              f"dtype={audio_values.dtype} device={audio_values.device}")
+            self._print_debug(f"[AudioStage] feature_attention_mask shape={tuple(feature_attention_mask.shape)} "
+                              f"dtype={feature_attention_mask.dtype} device={feature_attention_mask.device} "
+                              f"sum={feature_attention_mask.sum().item()}")
+
+        # 3) compute feature_lens & aftercnn_lens (official path)
+        # feature_lens: number of valid frames per sample
+        # Ensure mask is boolean
+        if feature_attention_mask.dtype != torch.bool:
+            feature_attention_mask = feature_attention_mask.to(dtype=torch.bool)
+
+        feature_lens = feature_attention_mask.sum(dim=1).to(dtype=torch.long)
+        # Align to encoder device
+        feature_lens = self._to_enc(feature_lens, ref_param)
+
+        # The official _get_feat_extract_output_lengths usually returns (aftercnn_lens, something_else)
+        out = self.audio_enc._get_feat_extract_output_lengths(feature_lens)
+        if isinstance(out, (tuple, list)) and len(out) >= 1:
+            aftercnn_lens = out[0]
         else:
-            audio_values = audio_inputs
-            feature_attention_mask = None
+            # Some impls may directly return the length tensor
+            aftercnn_lens = out
+        aftercnn_lens = aftercnn_lens.to(dtype=torch.long)
+        aftercnn_lens = self._to_enc(aftercnn_lens, ref_param)
 
-        if audio_values is None:
-            device = next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else torch.device("cpu")
-            out = torch.zeros(1, 1, 768, device=device, dtype=torch.float32)
-            try:
-                print(f"[rank{rid}] AudioStage.forward: audio_values=None -> return zeros {tuple(out.shape)}")
-            except Exception:
-                pass
-            return out
+        # 4) reshape to [n_mels, sumT] exactly as official code does:
+        #    [B, n_mels, T] -> [B, T, n_mels] -> mask-select -> [sumT, n_mels] -> [n_mels, sumT]
+        val = audio_values.permute(0, 2, 1)  # [B, T, n_mels]
+        # Make sure same device/dtype (we'll finally cast feats_cat to encoder ref)
+        if val.device != feature_attention_mask.device:
+            val = val.to(device=feature_attention_mask.device)
+        flat = val[feature_attention_mask]   # [sumT, n_mels]
+        feats_cat = flat.permute(1, 0).contiguous()  # [n_mels, sumT]
 
-        # 确保audio_values是float类型
-        if audio_values.dtype != torch.float32:
-            audio_values = audio_values.float()
+        # 5) align dtype & device
+        feats_cat = feats_cat.to(dtype=target_dtype, device=target_device)
 
-        if hasattr(self.audio_enc, "get_dtype"):
-            audio_values = audio_values.type(self.audio_enc.get_dtype())
-        audio_values = audio_values.to(next(self.audio_enc.parameters()).device if hasattr(self.audio_enc, "parameters") else audio_values.device)
+        # 6) strong assertions
+        assert feats_cat.dim() == 2 and feats_cat.size(0) == n_mels, \
+            f"Audio features must be [n_mels, sumT], got {tuple(feats_cat.shape)}, expected n_mels={n_mels}"
+        assert conv1_w.in_channels == n_mels, \
+            f"In-channel mismatch: conv1 expects {conv1_w.in_channels}, but n_mels={n_mels}"
 
-        B, D1, D2 = audio_values.shape[:3]
-        _pre_shape = tuple(audio_values.shape)
+        if debug:
+            self._print_debug(f"[AudioStage] feats_cat shape={tuple(feats_cat.shape)} "
+                              f"dtype={feats_cat.dtype} device={feats_cat.device}")
+            self._print_debug(f"[AudioStage] feature_lens list={feature_lens.tolist()} dtype={feature_lens.dtype} device={feature_lens.device}")
+            self._print_debug(f"[AudioStage] aftercnn_lens list={aftercnn_lens.tolist()} dtype={aftercnn_lens.dtype} device={aftercnn_lens.device}")
+            self._print_debug(f"[AudioStage] conv1.in_channels={conv1_w.in_channels}")
 
-        # 维度自适配：推断 [B, n_mels, n_frames] 或 [B, n_frames, n_mels]
-        typical_mels = {64, 80, 96, 128}
-        n_mels = None
-        n_frames = None
-        input_feats = None
-
-        # 目标：让“时间轴”在 dim=1，便于与 feature_lens 对齐
-        if D1 in typical_mels:
-            # 当前是 [B, mels, frames] -> 转成 [B, frames, mels]
-            n_mels, n_frames = D1, D2
-            input_feats = audio_values.transpose(1, 2)
-        elif D2 in typical_mels:
-            # 已是 [B, frames, mels]
-            n_mels, n_frames = D2, D1
-            input_feats = audio_values
-        else:
-            # 启发式：把较大的维度当作帧数，较小的当作梅尔通道
-            if D1 >= D2:
-                # [B, frames, mels]
-                n_mels, n_frames = D2, D1
-                input_feats = audio_values
+        # 7) call encoder, with optional fallback
+        try:
+            enc_out = self.audio_enc(
+                input_features=feats_cat,    # [n_mels, sumT]
+                feature_lens=feature_lens,   # [B]
+                aftercnn_lens=aftercnn_lens  # [B]
+            )
+            audio_hidden = enc_out.last_hidden_state  # [sum_aftercnn, hidden_size]
+        except Exception as e:
+            if allow_fallback:
+                if debug:
+                    self._print_debug("[AudioStage] audio_enc failed; using zeros_fallback")
+                    self._print_debug(f"[AudioStage] exception: {repr(e)}")
+                # Fallback: minimal zeros (cannot know sum_aftercnn/hidden_size reliably; try to infer)
+                hidden_size = getattr(self.audio_enc, "hidden_size", None)
+                if hidden_size is None:
+                    # probe from a param if available
+                    for p in self.audio_enc.parameters():
+                        if p.dim() >= 2:
+                            hidden_size = p.size(-1)
+                            break
+                if hidden_size is None:
+                    hidden_size = 2048  # last resort
+                audio_hidden = torch.zeros((1, hidden_size), dtype=target_dtype, device=target_device)
+                path = "zeros_fallback"
             else:
-                # [B, mels, frames] -> 转到 [B, frames, mels]
-                n_mels, n_frames = D1, D2
-                input_feats = audio_values.transpose(1, 2)
+                # re-raise to expose real issue during dev
+                raise
 
-        _post_shape = tuple(input_feats.shape)
+        if debug:
+            self._print_debug(f"[AudioStage] audio_hidden shape={tuple(audio_hidden.shape)} "
+                              f"dtype={audio_hidden.dtype} device={audio_hidden.device} path={path}")
 
-        # 扁平 batch：拼到 [1, sumT, 128] 并构造 feature_lens=[T1..TB]（单位：帧）
-        per_list = []
-        T_list = []
-        for i in range(B):
-            t_i = input_feats[i:i+1]              # [1, T_i, 128]
-            per_list.append(t_i)
-            T_list.append(int(t_i.size(1)))
-        feats_cat = torch.cat(per_list, dim=1)     # [1, sumT, 128]
-        feature_lens = torch.tensor(T_list, dtype=torch.long, device=feats_cat.device)  # [B]
+        return {
+            "last_hidden_state": audio_hidden,
+            "feature_lens": feature_lens,
+            "aftercnn_lens": aftercnn_lens,
+            "path": path,
+        }
 
-        # 由模型工具函数推导卷积后的长度
-        try:
-            aftercnn_lens, _ = self.audio_enc._get_feat_extract_output_lengths(feature_lens)
-        except Exception:
-            aftercnn_lens = feature_lens.clone()
 
-        # dtype 对齐到卷积权重（避免 conv 类型不匹配）
-        try:
-            want_dtype = self.audio_enc.conv1.weight.dtype  # type: ignore[attr-defined]
-        except Exception:
-            want_dtype = feats_cat.dtype
-        feats_cat = feats_cat.to(want_dtype)
+# -------------------------- Optional smoke test --------------------------
+def _smoke_test_audio_stage(stage: AudioStage) -> Dict[str, Any]:
+    """
+    Minimal sanity test. Adjust T and mask as needed.
+    """
+    device = next(stage.audio_enc.parameters()).device
+    dtype = next(stage.audio_enc.parameters()).dtype
+    n_mels = stage.audio_enc.conv1.in_channels
+    B, T = 2, 320  # toy lengths
 
-        try:
-            print(
-                f"[rank{rid}] AudioStage.forward: pre={_pre_shape} mid={_post_shape} post={tuple(feats_cat.shape)} "
-                f"feature_lens={feature_lens.tolist()} aftercnn_lens={aftercnn_lens.tolist()} dtype={feats_cat.dtype}"
-            )
-        except Exception:
-            pass
+    x = torch.randn(B, n_mels, T, device=device, dtype=dtype)
+    mask = torch.ones(B, T, device=device, dtype=torch.bool)
 
-        _path = "main"
-        try:
-            res = self.audio_enc(
-                input_features=feats_cat,      # [1, sumT, 128]，时间在 dim=1
-                feature_lens=feature_lens,     # [B]
-                aftercnn_lens=aftercnn_lens    # [B]
-            )
-        except Exception as e1:
-            try:
-                _path = "fallback_no_aftercnn_lens"
-                res = self.audio_enc(
-                    input_features=input_feats,
-                    feature_lens=feature_lens
-                )
-            except Exception as e2:
-                _path = "zeros_fallback"
-                device = input_feats.device
-                # 兜底：按启发式估算下采样后序列长度
-                out_len = max(1, n_frames // 4)
-                out = torch.zeros(B, out_len, 768, device=device, dtype=torch.float32)
-                try:
-                    _ms = (time.perf_counter() - _t0) * 1000.0
-                    print(
-                        f"[rank{rid}] AudioStage.forward: path={_path} -> zeros {tuple(out.shape)} took={_ms:.2f}ms pre={_pre_shape} post={_post_shape}; "
-                        f"feature_lens={feature_lens.tolist()} aftercnn_lens={aftercnn_lens.tolist()} "
-                        f"errors=({type(e1).__name__}: {e1}; {type(e2).__name__}: {e2})"
-                    )
-                except Exception:
-                    pass
-                return out
-
-        audio_embeds = None
-        if isinstance(res, torch.Tensor):
-            audio_embeds = res
-        elif hasattr(res, "last_hidden_state") and isinstance(res.last_hidden_state, torch.Tensor):
-            audio_embeds = res.last_hidden_state
-        elif isinstance(res, (list, tuple)):
-            audio_embeds = next((x for x in res if isinstance(x, torch.Tensor)), None)
-        elif isinstance(res, dict):
-            audio_embeds = res.get("last_hidden_state", None)
-            if not isinstance(audio_embeds, torch.Tensor):
-                for v in res.values():
-                    if isinstance(v, torch.Tensor):
-                        audio_embeds = v
-                        break
-
-        if isinstance(audio_embeds, torch.Tensor):
-            out = audio_embeds.contiguous()
-            try:
-                _ms = (time.perf_counter() - _t0) * 1000.0
-                abs_mean = float(out.detach().abs().mean().item())
-                enc_norm = None
-                try:
-                    # 简单统计编码器参数范数
-                    ps = list(self.audio_enc.parameters())
-                    if ps:
-                        enc_norm = float(sum(p.detach().norm().item() for p in ps[:3]))  # 采样前3个层参数
-                except Exception:
-                    pass
-                print(f"[rank{rid}] AudioStage.forward: path={_path} in={_pre_shape}->{_post_shape} out={tuple(out.shape)} took={_ms:.2f}ms abs_mean={abs_mean:.3e} enc_norm={enc_norm}")
-            except Exception:
-                pass
-            return out
-        else:
-            device = audio_values.device
-            batch_size, seq_len = audio_values.shape[:2]
-            out = torch.zeros(batch_size, seq_len // 4, 768, device=device, dtype=torch.float32)
-            try:
-                _ms = (time.perf_counter() - _t0) * 1000.0
-                print(f"[rank{rid}] AudioStage.forward: no tensor in result -> zeros {tuple(out.shape)} took={_ms:.2f}ms pre={_pre_shape} post={_post_shape}")
-            except Exception:
-                pass
-            return out
+    batch = {"input_features": x, "feature_attention_mask": mask}
+    out = stage.forward(batch, allow_fallback=False, debug=True)
+    return out
 
 
 class VisionStage(nn.Module):
