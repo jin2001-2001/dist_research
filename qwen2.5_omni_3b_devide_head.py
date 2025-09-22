@@ -36,6 +36,12 @@ def pack_modalities(text_embeds, audio_seq=None, vision_seq=None):
     return torch.cat(seqs, dim=1) if len(seqs) > 1 else seqs[0]
 
 
+DEFAULT_QWEN_OMNI_SYS = (
+    "You are Qwen, a virtual human developed by the Qwen Team, Alibaba Group, "
+    "capable of perceiving auditory and visual inputs, as well as generating text and speech."
+)
+USE_TTS_SYS = True
+
 
 # class AudioStage(nn.Module):
 #     def __init__(self, audio_enc):
@@ -1388,7 +1394,17 @@ def main():
         for ex in batch:
             img = ex["image"]
             txt = ex.get("text", "") if isinstance(ex.get("text", ""), str) else ""
-            conversations.append([
+            
+            convo = []
+            if USE_TTS_SYS:
+                convo.append({
+                    "role": "system",
+                    "content": [{"type": "text", "text": DEFAULT_QWEN_OMNI_SYS}],
+                })
+
+               
+            
+            convo.append([
                 {
                     "role": "user",
                     "content": [
@@ -1398,10 +1414,12 @@ def main():
                     ],
                 }
             ])
-
+            conversations.append(convo)
+            
+            
         pack = proc.apply_chat_template(
             conversations,
-            add_generation_prompt=False,
+            add_generation_prompt=USE_TTS_SYS,
             tokenize=True,
             return_tensors="pt",
             return_dict=True,
