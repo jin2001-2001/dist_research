@@ -1089,6 +1089,10 @@ def main():
 
     def collate_fn(batch):
         conversations = []
+        max_audio_frames = getattr(collate_fn, "_max_audio_frames", 4096)
+        if not hasattr(collate_fn, "_audio_cache"):
+            collate_fn._audio_cache = {}
+        audio_cache = collate_fn._audio_cache
         audio_paths = []
         for ex in batch:
             img = ex["image"]
@@ -1188,31 +1192,49 @@ def main():
         reencode_success = True
         if audio_paths:
             for path in audio_paths:
+                cached = audio_cache.get(path)
+                current_mtime = None
                 try:
-                    waveform, sr = torchaudio.load(path)
-                except Exception as e:
-                    print(f"[collate_fn] failed to load audio {path}: {e}")
-                    reencode_success = False
-                    break
+                    current_mtime = os.path.getmtime(path)
+                except OSError:
+                    pass
 
-                waveform = waveform.to(torch.float32)
-                if sr != 16000:
-                    waveform = AF.resample(waveform, sr, 16000)
-                if waveform.dim() == 1:
-                    waveform = waveform.unsqueeze(0)
-                if waveform.size(0) > 1:
-                    waveform = waveform.mean(dim=0, keepdim=True)
+                if cached is None or cached.get("mtime") != current_mtime:
+                    try:
+                        waveform, sr = torchaudio.load(path)
+                    except Exception as e:
+                        print(f"[collate_fn] failed to load audio {path}: {e}")
+                        reencode_success = False
+                        break
 
-                wave = waveform.squeeze(0).contiguous().cpu()
-                audio_out = proc.feature_extractor(
-                    wave.numpy(),
-                    sampling_rate=16000,
-                    padding=False,
-                    return_attention_mask=True,
-                )
+                    waveform = waveform.to(torch.float32)
+                    if sr != 16000:
+                        waveform = AF.resample(waveform, sr, 16000)
+                    if waveform.dim() == 1:
+                        waveform = waveform.unsqueeze(0)
+                    if waveform.size(0) > 1:
+                        waveform = waveform.mean(dim=0, keepdim=True)
 
-                feats_np = audio_out.get("input_features")
-                mask_np = audio_out.get("attention_mask")
+                    wave = waveform.squeeze(0).contiguous().cpu()
+                    audio_out = proc.feature_extractor(
+                        wave.numpy(),
+                        sampling_rate=16000,
+                        padding=False,
+                        return_attention_mask=True,
+                    )
+
+                    feats_np = audio_out.get("input_features")
+                    mask_np = audio_out.get("attention_mask")
+                    cached = {
+                        "feats": feats_np,
+                        "mask": mask_np,
+                        "mtime": current_mtime,
+                    }
+                    audio_cache[path] = cached
+                else:
+                    feats_np = cached.get("feats")
+                    mask_np = cached.get("mask")
+
                 if feats_np is None:
                     reencode_success = False
                     break
@@ -1230,7 +1252,7 @@ def main():
 
                 T_feat = feats.shape[-1]
                 T_mask = mask.shape[-1]
-                T_target = min(T_feat, T_mask)
+                T_target = min(T_feat, T_mask, max_audio_frames)
                 if T_target <= 0:
                     reencode_success = False
                     break
@@ -1269,7 +1291,7 @@ def main():
             feats = pack.get("input_features", None)
             mask = pack.get("feature_attention_mask", None)
             if isinstance(feats, torch.Tensor) and isinstance(mask, torch.Tensor):
-                T_target = min(feats.shape[-1], mask.shape[-1])
+                T_target = min(feats.shape[-1], mask.shape[-1], max_audio_frames)
                 pack["input_features"] = feats[..., :T_target]
                 pack["feature_attention_mask"] = mask[..., :T_target]
                 audio_inputs = {
