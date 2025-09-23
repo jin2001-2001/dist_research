@@ -995,7 +995,7 @@ def main():
     thinker = Qwen2_5OmniThinkerForConditionalGeneration.from_pretrained(MODEL_ID, trust_remote_code=True)
     if hasattr(thinker, "audio_tower") and hasattr(thinker.audio_tower, "config"):
         try:
-            thinker.audio_tower.config.max_source_positions = 6000
+            thinker.audio_tower.config.max_source_positions = 500
         except Exception as e:
             print("[warn] cannot set max_source_positions:", e)
     proc = AutoProcessor.from_pretrained(MODEL_ID)
