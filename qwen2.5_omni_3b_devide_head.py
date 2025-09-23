@@ -1,4 +1,6 @@
 import argparse, os, torch, torch.nn as nn, torch.nn.functional as F, torch.optim as optim
+import torchaudio
+import torchaudio.functional as AF
 import torch.distributed as dist
 
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
@@ -991,6 +993,11 @@ def main():
     tok = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
     cfg = AutoConfig.from_pretrained(MODEL_ID, trust_remote_code=True)
     thinker = Qwen2_5OmniThinkerForConditionalGeneration.from_pretrained(MODEL_ID, trust_remote_code=True)
+    if hasattr(thinker, "audio_tower") and hasattr(thinker.audio_tower, "config"):
+        try:
+            thinker.audio_tower.config.max_source_positions = 6000
+        except Exception as e:
+            print("[warn] cannot set max_source_positions:", e)
     proc = AutoProcessor.from_pretrained(MODEL_ID)
     
     # 便捷访问
@@ -1082,6 +1089,7 @@ def main():
 
     def collate_fn(batch):
         conversations = []
+        audio_paths = []
         for ex in batch:
             img = ex["image"]
             txt = ex.get("text", "") if isinstance(ex.get("text", ""), str) else ""
@@ -1103,6 +1111,7 @@ def main():
                 ],
             })
             conversations.append(convo)
+            audio_paths.append(noise_path)
             
             
         pack = proc.apply_chat_template(
@@ -1172,40 +1181,103 @@ def main():
                 "grid_thw": image_grid_thw,
             }
 
-        # Audio packing: pass through whatever processor returned  (仅此处做“同长对齐”)
+        # Audio packing: re-extract features per sample, keep real lengths (仅此处做“只按最短截断”)
         audio_inputs = None
-        if hasattr(pack, 'keys'):
-            for k in ("input_values", "audio_values", "input_features"):
-                if k in pack:
-                    audio_inputs = {k: pack[k]}
-                    if "feature_attention_mask" in pack:
-                        audio_inputs["feature_attention_mask"] = pack["feature_attention_mask"]
-
-                        # ===== 最小改动：对齐 input_features 与 feature_attention_mask 的时间维 =====
-                        if k == "input_features" and isinstance(audio_inputs["input_features"], torch.Tensor) and isinstance(audio_inputs["feature_attention_mask"], torch.Tensor):
-                            feats = audio_inputs["input_features"]            # [B, n_mels, T_feat]
-                            mask  = audio_inputs["feature_attention_mask"]    # [B, T_mask]
-                            if feats.dim() == 3 and mask.dim() == 2 and feats.size(0) == mask.size(0):
-                                B, n_mels, T_feat = feats.shape
-                                T_mask = mask.shape[1]
-                                if T_feat != T_mask:
-                                    import torch.nn.functional as F
-                                    T_target = T_feat if T_feat >= T_mask else T_mask  # 对齐到最长
-                                    padf = T_target - T_feat
-                                    padm = T_target - T_mask
-                                    if padf > 0:
-                                        feats = F.pad(feats, (0, padf))  # 只补最后一维 T
-                                    if padm > 0:
-                                        # mask 右侧补 0（False/0）
-                                        mask = F.pad(mask, (0, padm), value=0)
-                                    # 回填
-                                    audio_inputs["input_features"] = feats
-                                    audio_inputs["feature_attention_mask"] = mask
-                                    print(f"[rank0] collate_fn[audio]: aligned input_features -> {tuple(feats.shape)} {feats.dtype}", flush=True)
-                                    print(f"[rank0] collate_fn[audio]: aligned feature_attention_mask -> {tuple(mask.shape)} {mask.dtype}", flush=True)
-                        # ===== 对齐结束 =====
-
+        reencoded_feats = []
+        reencoded_masks = []
+        reencode_success = True
+        if audio_paths:
+            for path in audio_paths:
+                try:
+                    waveform, sr = torchaudio.load(path)
+                except Exception as e:
+                    print(f"[collate_fn] failed to load audio {path}: {e}")
+                    reencode_success = False
                     break
+
+                waveform = waveform.to(torch.float32)
+                if sr != 16000:
+                    waveform = AF.resample(waveform, sr, 16000)
+                if waveform.dim() == 1:
+                    waveform = waveform.unsqueeze(0)
+                if waveform.size(0) > 1:
+                    waveform = waveform.mean(dim=0, keepdim=True)
+
+                wave = waveform.squeeze(0).contiguous().cpu()
+                audio_out = proc.feature_extractor(
+                    wave.numpy(),
+                    sampling_rate=16000,
+                    padding=False,
+                    return_attention_mask=True,
+                )
+
+                feats_np = audio_out.get("input_features")
+                mask_np = audio_out.get("attention_mask")
+                if feats_np is None:
+                    reencode_success = False
+                    break
+
+                feats = torch.tensor(feats_np, dtype=torch.float32)
+                if mask_np is None:
+                    mask = torch.ones((feats.shape[-1],), dtype=torch.int32)
+                else:
+                    mask = torch.tensor(mask_np, dtype=torch.int32)
+
+                if feats.dim() == 3:
+                    feats = feats.squeeze(0)
+                if mask.dim() == 2:
+                    mask = mask.squeeze(0)
+
+                T_feat = feats.shape[-1]
+                T_mask = mask.shape[-1]
+                T_target = min(T_feat, T_mask)
+                if T_target <= 0:
+                    reencode_success = False
+                    break
+
+                reencoded_feats.append(feats[:, :T_target])
+                reencoded_masks.append(mask[:T_target])
+
+        if reencode_success and reencoded_feats and len(reencoded_feats) == len(audio_paths):
+            max_len = max(feat.shape[-1] for feat in reencoded_feats)
+            n_mels = reencoded_feats[0].shape[0]
+            batch_count = len(reencoded_feats)
+
+            feat_batch = reencoded_feats[0].new_zeros((batch_count, n_mels, max_len))
+            mask_batch = reencoded_masks[0].new_zeros((batch_count, max_len))
+
+            for idx, (feat, mask) in enumerate(zip(reencoded_feats, reencoded_masks)):
+                t = feat.shape[-1]
+                feat_batch[idx, :, :t] = feat
+                mask_batch[idx, :t] = mask
+
+            pack["input_features"] = feat_batch
+            pack["feature_attention_mask"] = mask_batch
+
+            # 只按最短截断，避免再次扩张
+            T_feat = pack["input_features"].shape[-1]
+            T_mask = pack["feature_attention_mask"].shape[-1]
+            T_target = min(T_feat, T_mask)
+            pack["input_features"] = pack["input_features"][..., :T_target]
+            pack["feature_attention_mask"] = pack["feature_attention_mask"][..., :T_target]
+
+            audio_inputs = {
+                "input_features": pack["input_features"],
+                "feature_attention_mask": pack["feature_attention_mask"],
+            }
+        elif hasattr(pack, "get"):
+            feats = pack.get("input_features", None)
+            mask = pack.get("feature_attention_mask", None)
+            if isinstance(feats, torch.Tensor) and isinstance(mask, torch.Tensor):
+                T_target = min(feats.shape[-1], mask.shape[-1])
+                pack["input_features"] = feats[..., :T_target]
+                pack["feature_attention_mask"] = mask[..., :T_target]
+                audio_inputs = {
+                    "input_features": pack["input_features"],
+                    "feature_attention_mask": pack["feature_attention_mask"],
+                }
+            else:
+                audio_inputs = None
 
         # Debug once or twice: what did we build for audio_inputs?
         try:
@@ -1219,6 +1291,21 @@ def main():
                           for k, v in audio_inputs.items()}
                     print(f"[rank0] collate_fn: built audio_inputs keys/shapes: {kv}")
                 collate_fn._dbg_audio_count += 1
+        except Exception:
+            pass
+
+        try:
+            if audio_inputs is not None:
+                if not hasattr(collate_fn, "_dbg_audio_eff"):
+                    collate_fn._dbg_audio_eff = 0
+                rank_id = dist.get_rank() if dist.is_initialized() else 0
+                if collate_fn._dbg_audio_eff < 3 and rank_id == 0:
+                    eff = audio_inputs["feature_attention_mask"].sum(dim=1).tolist()
+                    print(
+                        f"[rank{rank_id}] collate_fn[audio]: input_features {tuple(audio_inputs['input_features'].shape)} "
+                        f"mask {tuple(audio_inputs['feature_attention_mask'].shape)} effective_frames={eff}"
+                    )
+                    collate_fn._dbg_audio_eff += 1
         except Exception:
             pass
 
