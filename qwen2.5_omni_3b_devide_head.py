@@ -1112,7 +1112,7 @@ def main():
             return_tensors="pt",
             return_dict=True,
             padding="max_length",
-            max_length=2048, #原先是512
+            max_length=512, #原先是512
             truncation=True
         )
 
