@@ -1089,7 +1089,7 @@ def main():
 
     def collate_fn(batch):
         conversations = []
-        max_audio_frames = getattr(collate_fn, "_max_audio_frames", 1024)
+        max_audio_frames = getattr(collate_fn, "_max_audio_frames", 2048)
         if not hasattr(collate_fn, "_audio_cache"):
             collate_fn._audio_cache = {}
         audio_cache = collate_fn._audio_cache
