@@ -77,7 +77,7 @@ def generate_1f1b_pipeline_actions_pro(num_stages: int,total_samples: int, num_m
 
             actions = []
             recv_actions = []
-            local_id_comp = 2*num_microbatches
+            local_id_comp = total_samples
             local_id_comm = 0
 
             warmup_chunks = min(num_microbatches, (num_stages - stage_idx)*2-1)  #the stride is 2 per...
