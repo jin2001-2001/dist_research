@@ -154,7 +154,7 @@ def generate_1f1b_pipeline_actions_pro(num_stages: int,total_samples: int, num_m
                 #if stage_idx < num_stages - 1:
                     #actions.append(make_action(stage_idx, rank, _ComputationType.RECV_B, bwd_mb, rank + 1))
                 #actions.append(make_action(stage_idx, rank, _ComputationType.FULL_BACKWARD, bwd_mb, None))
-                recv_actions.extend(make_comm_action(bwd_mb_index, _ComputationType.RECV_B, prev_group_info))
+                recv_actions.extend(make_comm_action(bwd_mb_index, _ComputationType.RECV_B, next_group_info))
                 actions.extend(make_comp_action(bwd_mb_index, _ComputationType.FULL_BACKWARD))
                 if stage_idx > 0:
                     #actions.append(make_action(stage_idx, rank, _ComputationType.SEND_B, bwd_mb, rank - 1))
@@ -176,7 +176,7 @@ def generate_1f1b_pipeline_actions_pro(num_stages: int,total_samples: int, num_m
                 #if stage_idx < num_stages - 1:
                     #actions.append(make_action(stage_idx, rank, _ComputationType.RECV_B, bwd_mb, rank + 1))
                 #actions.append(make_action(stage_idx, rank, _ComputationType.FULL_BACKWARD, bwd_mb, None))
-                recv_actions.extend(make_comm_action(bwd_mb_index, _ComputationType.RECV_B, prev_group_info))
+                recv_actions.extend(make_comm_action(bwd_mb_index, _ComputationType.RECV_B, next_group_info))
                 actions.extend(make_comp_action(bwd_mb_index, _ComputationType.FULL_BACKWARD))
                 if stage_idx > 0:
                     #actions.append(make_action(stage_idx, rank, _ComputationType.SEND_B, bwd_mb, rank - 1))
