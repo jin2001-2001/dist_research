@@ -185,7 +185,7 @@ def generate_1f1b_pipeline_actions_pro(num_stages: int,total_samples: int, num_m
 
             if len(batch_info[stage_idx])>1:
                 actions.append(_Action(stage_idx, cur_rank, local_id_comp, _ComputationType.ALL_REDUCE, None, upstream = upstream))
-            actions_per_rank[cur_rank] = actions
+            actions_per_rank[cur_rank] = recv_actions + actions
 
     return actions_per_rank
 
