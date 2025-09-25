@@ -260,7 +260,8 @@ def main():
         dist.barrier()
         dp_group = dist.new_group(ranks=this_g)
         stage_mod.to(device)
-        #Using DDP as the data parallelism component of our frame
+        dist.barrier(dp_group)
+        #Using DDP as the data parallelism component of our frame 
         stage_mod = DDP(
             stage_mod,
             device_ids=None,        # CPU don' use device_ids
