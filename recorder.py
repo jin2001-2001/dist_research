@@ -153,16 +153,16 @@ class Recorder:
                 # while not all(w.is_completed() for w in works):
                 #     time.sleep(poll_interval)
                 
-                enter(id=action_id)
-                print(f"{action} 进入wait {action_id} mb [{mb_idx}]")
+                # enter(id=action_id)
+                # print(f"{action} 进入wait {action_id} mb [{mb_idx}]")
                 for w in works:
                     if w.is_completed():
                         continue
                     w.wait()
                 end_ns = time.time_ns()
                 # if action == "RECV_F":
-                print(f"{action} 离开wait {action_id} mb [{mb_idx}]")
-                leave(id=action_id)
+                # print(f"{action} 离开wait {action_id} mb [{mb_idx}]")
+                # leave(id=action_id)
                 
                 if need_net:
                     stop_evt.set()
