@@ -257,9 +257,9 @@ def main():
         
     else:
         dp_group = dist.new_group(ranks=this_g)
-        
+        print("进程组创建")
         stage_mod.to(device)
-        
+        print("模型发到设备，准备进入ddp")
         #Using DDP as the data parallelism component of our frame
         stage_mod = DDP(
             stage_mod,
