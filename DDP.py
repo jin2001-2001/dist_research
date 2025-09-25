@@ -631,6 +631,299 @@ class DistributedDataParallel(Module, Joinable):
     # used to track whether the given thread is inside ddp forward for torchdynamo purposes
     _active_ddp_module: Optional["DistributedDataParallel"] = None
 
+    # def __init__(
+    #     self,
+    #     module,
+    #     device_ids=None,
+    #     output_device=None,
+    #     dim=0,
+    #     broadcast_buffers=True,
+    #     init_sync=True,
+    #     process_group=None,
+    #     bucket_cap_mb=None,
+    #     find_unused_parameters=False,
+    #     check_reduction=False,
+    #     gradient_as_bucket_view=False,
+    #     static_graph=False,
+    #     delay_all_reduce_named_params=None,
+    #     param_to_hook_all_reduce=None,
+    #     mixed_precision: Optional[_MixedPrecision] = None,
+    #     device_mesh=None,
+    # ):
+    #     super().__init__()
+    #     Joinable.__init__(self)
+    #     self.logger: Optional[dist.Logger] = None
+    #     if bool(delay_all_reduce_named_params is not None) != bool(
+    #         param_to_hook_all_reduce is not None
+    #     ):
+    #         self._log_and_throw(
+    #             ValueError,
+    #             "delay_all_reduce_named_params and param_to_hook_all_reduce "
+    #             "need to be set at the same time.",
+    #         )
+
+    #     if process_group and device_mesh is not None:
+    #         raise RuntimeError(
+    #             "Cannot specify both process_group and device_mesh arguments."
+    #         )
+    #     elif process_group is None and device_mesh is None:
+    #         self.process_group = _get_default_group()
+    #     elif device_mesh is None:
+    #         self.process_group = process_group
+    #     else:
+    #         if device_mesh.ndim != 1:
+    #             raise RuntimeError(
+    #                 f"Only 1D device mesh is supported, but got {device_mesh}."
+    #             )
+    #         self.device_mesh = device_mesh
+    #         self.process_group = device_mesh.get_group(mesh_dim=0)
+    #         from torch.distributed.device_mesh import _mesh_resources
+
+    #         root_mesh = _mesh_resources.get_root_mesh(device_mesh)
+    #         # if a root mesh is not the same as device_mesh,
+    #         # meaning the device_mesh is sliced out from the root mesh.
+    #         if root_mesh != device_mesh:
+    #             # TODO: This is a temporary work around to enable DDP + TP.
+    #             # We should do the logic in DDP so that the 2D implementation is
+    #             # sound and the state_dict works out of the box.
+    #             # This has to be done before check UninitializedParameter.
+    #             from torch.distributed.tensor.parallel.ddp import (
+    #                 _pre_dp_module_transform,
+    #             )
+
+    #             _pre_dp_module_transform(module)
+
+    #     self._delay_all_reduce_params = []
+    #     if hasattr(module, "_ddp_params_and_buffers_to_ignore"):
+    #         self.parameters_to_ignore = set(module._ddp_params_and_buffers_to_ignore)
+    #     else:
+    #         self.parameters_to_ignore = set()
+    #     if delay_all_reduce_named_params is not None:
+    #         for name, param in delay_all_reduce_named_params:
+    #             self.parameters_to_ignore.add(name)
+    #             self._delay_all_reduce_params.append(param)
+
+    #     self._module_parameters = [
+    #         p
+    #         for n, p in module.named_parameters()
+    #         if n not in self.parameters_to_ignore
+    #     ]
+    #     if not any(p.requires_grad for p in self._module_parameters):
+    #         if len(self._delay_all_reduce_params):
+    #             logger.info("Delay the AllReduce of all parameters.")
+    #         else:
+    #             self._log_and_throw(
+    #                 RuntimeError,
+    #                 "DistributedDataParallel is not needed when a module "
+    #                 "doesn't have any parameter that requires a gradient.",
+    #             )
+
+    #     if device_ids is not None and len(device_ids) > 1:
+    #         self._log_and_throw(
+    #             ValueError,
+    #             "device_ids can only be None or contain a single element.",
+    #         )
+
+    #     self.is_multi_device_module = (
+    #         len({p.device for p in self._module_parameters}) > 1
+    #     )
+    #     distinct_device_types = {
+    #         p.device.type for p in self._module_parameters if p.device is not None
+    #     }
+    #     if len(distinct_device_types) != 1:
+    #         self._log_and_throw(
+    #             ValueError,
+    #             "DistributedDataParallel's input module must be on "
+    #             f"the same type of devices, but input module parameters locate in {distinct_device_types}.",
+    #         )
+
+    #     self.device_type = next(iter(distinct_device_types))
+
+    #     if (
+    #         device_ids is None
+    #         or len(device_ids) == 0  # For backward compatibility.
+    #         or self.device_type == "cpu"
+    #         or self.is_multi_device_module
+    #     ):
+    #         if device_ids or output_device:
+    #             self._log_and_throw(
+    #                 ValueError,
+    #                 "DistributedDataParallel device_ids and output_device arguments "
+    #                 "only work with single-device/multiple-device GPU modules or CPU modules, "
+    #                 f"but got device_ids {device_ids}, output_device {output_device}, "
+    #                 f"and module parameters {({p.device for p in self._module_parameters})}.",
+    #             )
+
+    #         self.device_ids = None
+    #         self.output_device = None
+    #     else:
+    #         self.device_ids = [_get_device_index(x, True) for x in device_ids]
+
+    #         if output_device is None:
+    #             output_device = device_ids[0]
+
+    #         self.output_device = _get_device_index(output_device, True)
+
+    #     self.static_graph = False
+    #     self.dim = dim
+    #     self.module = module
+    #     self.device = next(iter(self._module_parameters)).device
+    #     self.broadcast_buffers = broadcast_buffers
+    #     self.find_unused_parameters = find_unused_parameters
+    #     self.require_backward_grad_sync = True
+    #     self.require_forward_param_sync = True
+    #     self.gradient_as_bucket_view = gradient_as_bucket_view
+    #     self.mixed_precision = mixed_precision
+    #     if self.mixed_precision is not None:
+    #         logger.warning("Received mixed precision config %s", self.mixed_precision)
+
+    #     if check_reduction:
+    #         # This argument is no longer used since the reducer
+    #         # will ensure reduction completes even if some parameters
+    #         # do not receive gradients.
+    #         warnings.warn(
+    #             "The `check_reduction` argument in `DistributedDataParallel` "
+    #             "module is deprecated. Please avoid using it.",
+    #             FutureWarning,
+    #             stacklevel=2,
+    #         )
+
+    #     # Check that a module does not have Uninitialized parameters
+    #     for param in self._module_parameters:
+    #         if isinstance(param, torch.nn.parameter.UninitializedParameter):
+    #             self._log_and_throw(
+    #                 RuntimeError,
+    #                 "Modules with uninitialized parameters can't be used with `DistributedDataParallel`. "
+    #                 "Run a dummy forward pass to correctly initialize the modules",
+    #             )
+    #     # used for intra-node param sync and inter-node sync as well
+    #     self.broadcast_bucket_size = int(250 * 1024 * 1024)
+
+    #     # reduction bucket size
+    #     if bucket_cap_mb is None:
+    #         # default case (bucket cap is 25 MiB)
+    #         bucket_cap_mb = 25
+    #         self.bucket_bytes_cap_default = True
+    #     else:
+    #         self.bucket_bytes_cap_default = False
+    #     self.bucket_bytes_cap = int(bucket_cap_mb * 1024 * 1024)
+
+    #     # Whether to perform input tensor CPU to GPU copies on a side-stream
+    #     self.use_side_stream_for_tensor_copies = (
+    #         os.environ.get("PYTORCH_DDP_USE_SIDE_STREAM", "1") == "1"
+    #     )
+
+    #     # Initialize gradient buffers and register all reduce hook
+    #     self._delay_grad_buffer: Optional[torch.Tensor] = None
+    #     self._delay_grad_views: list[torch.Tensor] = []
+    #     self._delay_all_reduce_all_params = False
+    #     if len(self._delay_all_reduce_params) != 0:
+    #         self._register_delay_all_reduce_hook(
+    #             bucket_cap_mb=bucket_cap_mb,
+    #             param_to_hook_all_reduce=param_to_hook_all_reduce,
+    #             device_ids=device_ids,
+    #         )
+    #         if self._delay_all_reduce_all_params:
+    #             return
+
+    #     # Build parameters for reducer.
+    #     parameters, expect_sparse_gradient = self._build_params_for_reducer()
+
+    #     # All collectives during initialization are gated by this flag.
+    #     if init_sync:
+    #         # Verify model equivalence.
+    #         _verify_param_shape_across_processes(self.process_group, parameters)
+    #         # Sync params and buffers. Ensures all DDP models start off at the same value.
+    #         _sync_module_states(
+    #             module=self.module,
+    #             process_group=self.process_group,
+    #             broadcast_bucket_size=self.broadcast_bucket_size,
+    #             src=0,
+    #             params_and_buffers_to_ignore=self.parameters_to_ignore,
+    #             broadcast_buffers=self.broadcast_buffers,
+    #         )
+
+    #     # In debug mode, build a mapping of parameter index -> parameter.
+    #     param_to_name_mapping = self._build_debug_param_to_name_mapping(parameters)
+
+    #     # Builds reducer.
+    #     self._ddp_init_helper(
+    #         parameters,
+    #         expect_sparse_gradient,
+    #         param_to_name_mapping,
+    #         static_graph,
+    #     )
+    #     self._comm_hooks: list[tuple[Callable, object]] = []
+
+    #     if self.mixed_precision is not None:
+    #         _setup_mixed_precision_params(self.mixed_precision, self.module)
+    #         _cast_buffers(self.mixed_precision, self.module)
+    #         # Stream used for async low precision copies.
+    #         self._mp_stream = torch.Stream()
+    #         self._submodule_to_event = defaultdict(deque)  # type: ignore[var-annotated]
+    #         # Add forward pre-hook to root module to kick off copies to lower
+    #         # precision.
+    #         self.module.register_forward_pre_hook(
+    #             self._root_copy_hook, prepend=False, with_kwargs=True
+    #         )
+    #         # Add forward pre hook to all submodules to wait for copy events
+    #         # before running computation.
+    #         for module in self.module.modules():
+    #             module.register_forward_pre_hook(
+    #                 self._module_wait_for_copy_hook,
+    #                 prepend=False,
+    #                 with_kwargs=True,
+    #             )
+    #         # Set up callbacks in backward to upcast and use full precision
+    #         # params. TODO (rohan-varma): Make this compose with general
+    #         # comm hooks and apply_optimizer_in_backward. Importing inline to
+    #         # avoid circular import issue.
+    #         from torch.distributed.algorithms.ddp_comm_hooks.mixed_precision_hooks import (
+    #             _AllreduceUpcastHookState,
+    #             _reducer_allreduce_and_upcast_hook,
+    #         )
+
+    #         upcast_hook_state = _AllreduceUpcastHookState(
+    #             ddp_weakref=weakref.ref(self),
+    #             upcast_stream=torch.Stream(),
+    #         )
+    #         self.register_comm_hook(
+    #             upcast_hook_state,
+    #             _reducer_allreduce_and_upcast_hook,
+    #         )
+    #         # Inform reducer of reduced precision param dtype for correctness
+    #         # of type checks between gradient and bucket.
+    #         self.reducer._set_mixed_precision_param_dtype(  # type: ignore[attr-defined]
+    #             self.mixed_precision.param_dtype
+    #         )
+
+    #     self._has_rebuilt_buckets = False
+
+    #     if static_graph:
+    #         self._set_static_graph()
+
+    #     self._lazy_init_ran = False
+
+    #     # Register the AccumulateGrad post hooks if optimize_ddp is
+    #     # True. The hooks will be deregistered if compiled_autograd is not
+    #     # enabled.
+    #     self._accum_grad_hooks: list[RemovableHandle] = []
+    #     optimize_ddp = torch._dynamo.utils.get_optimize_ddp_mode()
+    #     self._use_python_reducer = optimize_ddp == "python_reducer"
+    #     if self._use_python_reducer:
+    #         torch._inductor.config._fuse_ddp_communication = True
+    #         torch._inductor.config._fuse_ddp_bucket_size = bucket_cap_mb
+    #         # Directly adding this to the trace rule will disturb the users
+    #         # who are using DDPOptimizer.
+    #         torch._dynamo.trace_rules.LEGACY_MOD_INLINELIST.add(
+    #             "torch.nn.parallel.distributed"
+    #         )
+    #         torch._dynamo.trace_rules.get_legacy_mod_inlinelist.cache_clear()
+    #         # NOTE: we should init these lazily
+    #         self._register_accum_grad_hook()
+
+    #     # Whether or not DDPSink performs a clone.
+    #     self._ddp_sink_clone = True
     def __init__(
         self,
         module,
@@ -650,94 +943,129 @@ class DistributedDataParallel(Module, Joinable):
         mixed_precision: Optional[_MixedPrecision] = None,
         device_mesh=None,
     ):
+        print("[DDP.__init__ L1] enter __init__", flush=True)
         super().__init__()
+        print("[DDP.__init__ L2] after super().__init__", flush=True)
         Joinable.__init__(self)
+        print("[DDP.__init__ L3] after Joinable.__init__", flush=True)
         self.logger: Optional[dist.Logger] = None
+        print("[DDP.__init__ L4] set self.logger None", flush=True)
         if bool(delay_all_reduce_named_params is not None) != bool(
             param_to_hook_all_reduce is not None
         ):
+            print("[DDP.__init__ L5] delay_all_reduce args mismatch -> about to _log_and_throw", flush=True)
             self._log_and_throw(
                 ValueError,
                 "delay_all_reduce_named_params and param_to_hook_all_reduce "
                 "need to be set at the same time.",
             )
+        print("[DDP.__init__ L6] delay_all_reduce args check passed", flush=True)
 
         if process_group and device_mesh is not None:
+            print("[DDP.__init__ L7] both process_group and device_mesh set -> about to raise", flush=True)
             raise RuntimeError(
                 "Cannot specify both process_group and device_mesh arguments."
             )
         elif process_group is None and device_mesh is None:
+            print("[DDP.__init__ L8] neither process_group nor device_mesh -> _get_default_group", flush=True)
             self.process_group = _get_default_group()
+            print("[DDP.__init__ L9] set self.process_group to default", flush=True)
         elif device_mesh is None:
+            print("[DDP.__init__ L10] process_group provided, device_mesh is None", flush=True)
             self.process_group = process_group
+            print("[DDP.__init__ L11] set self.process_group to provided", flush=True)
         else:
+            print("[DDP.__init__ L12] device_mesh provided (process_group None)", flush=True)
             if device_mesh.ndim != 1:
+                print("[DDP.__init__ L13] device_mesh.ndim != 1 -> raise", flush=True)
                 raise RuntimeError(
                     f"Only 1D device mesh is supported, but got {device_mesh}."
                 )
             self.device_mesh = device_mesh
+            print("[DDP.__init__ L14] set self.device_mesh", flush=True)
             self.process_group = device_mesh.get_group(mesh_dim=0)
+            print("[DDP.__init__ L15] set self.process_group from device_mesh.get_group(0)", flush=True)
             from torch.distributed.device_mesh import _mesh_resources
+            print("[DDP.__init__ L16] imported _mesh_resources", flush=True)
 
             root_mesh = _mesh_resources.get_root_mesh(device_mesh)
-            # if a root mesh is not the same as device_mesh,
-            # meaning the device_mesh is sliced out from the root mesh.
+            print("[DDP.__init__ L17] got root_mesh", flush=True)
             if root_mesh != device_mesh:
-                # TODO: This is a temporary work around to enable DDP + TP.
-                # We should do the logic in DDP so that the 2D implementation is
-                # sound and the state_dict works out of the box.
-                # This has to be done before check UninitializedParameter.
+                print("[DDP.__init__ L18] root_mesh != device_mesh -> _pre_dp_module_transform", flush=True)
                 from torch.distributed.tensor.parallel.ddp import (
                     _pre_dp_module_transform,
                 )
-
+                print("[DDP.__init__ L19] imported _pre_dp_module_transform", flush=True)
                 _pre_dp_module_transform(module)
+                print("[DDP.__init__ L20] called _pre_dp_module_transform", flush=True)
 
         self._delay_all_reduce_params = []
+        print("[DDP.__init__ L21] init _delay_all_reduce_params", flush=True)
         if hasattr(module, "_ddp_params_and_buffers_to_ignore"):
+            print("[DDP.__init__ L22] module has _ddp_params_and_buffers_to_ignore", flush=True)
             self.parameters_to_ignore = set(module._ddp_params_and_buffers_to_ignore)
         else:
+            print("[DDP.__init__ L23] module has no _ddp_params_and_buffers_to_ignore", flush=True)
             self.parameters_to_ignore = set()
+        print("[DDP.__init__ L24] parameters_to_ignore prepared", flush=True)
+
         if delay_all_reduce_named_params is not None:
+            print("[DDP.__init__ L25] delay_all_reduce_named_params provided", flush=True)
             for name, param in delay_all_reduce_named_params:
+                print(f"[DDP.__init__ L26] delay_all_reduce add ignore: {name}", flush=True)
                 self.parameters_to_ignore.add(name)
                 self._delay_all_reduce_params.append(param)
+            print("[DDP.__init__ L27] filled _delay_all_reduce_params", flush=True)
 
         self._module_parameters = [
             p
             for n, p in module.named_parameters()
             if n not in self.parameters_to_ignore
         ]
+        print(f"[DDP.__init__ L28] collected _module_parameters, count={len(self._module_parameters)}", flush=True)
+
         if not any(p.requires_grad for p in self._module_parameters):
+            print("[DDP.__init__ L29] no parameter requires_grad", flush=True)
             if len(self._delay_all_reduce_params):
+                print("[DDP.__init__ L30] delaying AllReduce of all parameters (info only)", flush=True)
                 logger.info("Delay the AllReduce of all parameters.")
             else:
+                print("[DDP.__init__ L31] about to _log_and_throw: no grad params", flush=True)
                 self._log_and_throw(
                     RuntimeError,
                     "DistributedDataParallel is not needed when a module "
                     "doesn't have any parameter that requires a gradient.",
                 )
+        print("[DDP.__init__ L32] grad params check passed", flush=True)
 
         if device_ids is not None and len(device_ids) > 1:
+            print("[DDP.__init__ L33] device_ids invalid (>1) -> _log_and_throw", flush=True)
             self._log_and_throw(
                 ValueError,
                 "device_ids can only be None or contain a single element.",
             )
+        print("[DDP.__init__ L34] device_ids length check passed", flush=True)
 
         self.is_multi_device_module = (
             len({p.device for p in self._module_parameters}) > 1
         )
+        print(f"[DDP.__init__ L35] is_multi_device_module={self.is_multi_device_module}", flush=True)
+
         distinct_device_types = {
             p.device.type for p in self._module_parameters if p.device is not None
         }
+        print(f"[DDP.__init__ L36] distinct_device_types={distinct_device_types}", flush=True)
         if len(distinct_device_types) != 1:
+            print("[DDP.__init__ L37] distinct_device_types != 1 -> _log_and_throw", flush=True)
             self._log_and_throw(
                 ValueError,
                 "DistributedDataParallel's input module must be on "
                 f"the same type of devices, but input module parameters locate in {distinct_device_types}.",
             )
+        print("[DDP.__init__ L38] device types check passed", flush=True)
 
         self.device_type = next(iter(distinct_device_types))
+        print(f"[DDP.__init__ L39] device_type={self.device_type}", flush=True)
 
         if (
             device_ids is None
@@ -745,7 +1073,9 @@ class DistributedDataParallel(Module, Joinable):
             or self.device_type == "cpu"
             or self.is_multi_device_module
         ):
+            print("[DDP.__init__ L40] CPU or no device_ids or multi-device module", flush=True)
             if device_ids or output_device:
+                print("[DDP.__init__ L41] invalid device_ids/output_device combo -> _log_and_throw", flush=True)
                 self._log_and_throw(
                     ValueError,
                     "DistributedDataParallel device_ids and output_device arguments "
@@ -756,31 +1086,45 @@ class DistributedDataParallel(Module, Joinable):
 
             self.device_ids = None
             self.output_device = None
+            print("[DDP.__init__ L42] set device_ids/output_device to None", flush=True)
         else:
+            print("[DDP.__init__ L43] single-device GPU path", flush=True)
             self.device_ids = [_get_device_index(x, True) for x in device_ids]
+            print(f"[DDP.__init__ L44] normalized device_ids={self.device_ids}", flush=True)
 
             if output_device is None:
+                print("[DDP.__init__ L45] output_device None -> default to device_ids[0]", flush=True)
                 output_device = device_ids[0]
 
             self.output_device = _get_device_index(output_device, True)
+            print(f"[DDP.__init__ L46] normalized output_device={self.output_device}", flush=True)
 
         self.static_graph = False
+        print("[DDP.__init__ L47] set static_graph False (local flag)", flush=True)
         self.dim = dim
+        print(f"[DDP.__init__ L48] set dim={dim}", flush=True)
         self.module = module
+        print("[DDP.__init__ L49] set self.module", flush=True)
         self.device = next(iter(self._module_parameters)).device
+        print(f"[DDP.__init__ L50] set self.device={self.device}", flush=True)
         self.broadcast_buffers = broadcast_buffers
+        print(f"[DDP.__init__ L51] set broadcast_buffers={broadcast_buffers}", flush=True)
         self.find_unused_parameters = find_unused_parameters
+        print(f"[DDP.__init__ L52] set find_unused_parameters={find_unused_parameters}", flush=True)
         self.require_backward_grad_sync = True
+        print("[DDP.__init__ L53] set require_backward_grad_sync=True", flush=True)
         self.require_forward_param_sync = True
+        print("[DDP.__init__ L54] set require_forward_param_sync=True", flush=True)
         self.gradient_as_bucket_view = gradient_as_bucket_view
+        print(f"[DDP.__init__ L55] set gradient_as_bucket_view={gradient_as_bucket_view}", flush=True)
         self.mixed_precision = mixed_precision
+        print(f"[DDP.__init__ L56] set mixed_precision={mixed_precision}", flush=True)
         if self.mixed_precision is not None:
+            print("[DDP.__init__ L57] mixed_precision not None -> logger.warning", flush=True)
             logger.warning("Received mixed precision config %s", self.mixed_precision)
 
         if check_reduction:
-            # This argument is no longer used since the reducer
-            # will ensure reduction completes even if some parameters
-            # do not receive gradients.
+            print("[DDP.__init__ L58] check_reduction True -> warnings.warn", flush=True)
             warnings.warn(
                 "The `check_reduction` argument in `DistributedDataParallel` "
                 "module is deprecated. Please avoid using it.",
@@ -788,52 +1132,63 @@ class DistributedDataParallel(Module, Joinable):
                 stacklevel=2,
             )
 
-        # Check that a module does not have Uninitialized parameters
+        print("[DDP.__init__ L59] check for UninitializedParameter", flush=True)
         for param in self._module_parameters:
             if isinstance(param, torch.nn.parameter.UninitializedParameter):
+                print("[DDP.__init__ L60] found UninitializedParameter -> _log_and_throw", flush=True)
                 self._log_and_throw(
                     RuntimeError,
                     "Modules with uninitialized parameters can't be used with `DistributedDataParallel`. "
                     "Run a dummy forward pass to correctly initialize the modules",
                 )
-        # used for intra-node param sync and inter-node sync as well
-        self.broadcast_bucket_size = int(250 * 1024 * 1024)
+        print("[DDP.__init__ L61] UninitializedParameter check passed", flush=True)
 
-        # reduction bucket size
+        self.broadcast_bucket_size = int(250 * 1024 * 1024)
+        print(f"[DDP.__init__ L62] set broadcast_bucket_size={self.broadcast_bucket_size}", flush=True)
+
         if bucket_cap_mb is None:
-            # default case (bucket cap is 25 MiB)
+            print("[DDP.__init__ L63] bucket_cap_mb is None -> default 25MB", flush=True)
             bucket_cap_mb = 25
             self.bucket_bytes_cap_default = True
         else:
+            print(f"[DDP.__init__ L64] bucket_cap_mb provided={bucket_cap_mb}", flush=True)
             self.bucket_bytes_cap_default = False
         self.bucket_bytes_cap = int(bucket_cap_mb * 1024 * 1024)
+        print(f"[DDP.__init__ L65] set bucket_bytes_cap={self.bucket_bytes_cap}", flush=True)
 
-        # Whether to perform input tensor CPU to GPU copies on a side-stream
         self.use_side_stream_for_tensor_copies = (
             os.environ.get("PYTORCH_DDP_USE_SIDE_STREAM", "1") == "1"
         )
+        print(f"[DDP.__init__ L66] use_side_stream_for_tensor_copies={self.use_side_stream_for_tensor_copies}", flush=True)
 
-        # Initialize gradient buffers and register all reduce hook
         self._delay_grad_buffer: Optional[torch.Tensor] = None
+        print("[DDP.__init__ L67] init _delay_grad_buffer=None", flush=True)
         self._delay_grad_views: list[torch.Tensor] = []
+        print("[DDP.__init__ L68] init _delay_grad_views=[]", flush=True)
         self._delay_all_reduce_all_params = False
+        print("[DDP.__init__ L69] init _delay_all_reduce_all_params=False", flush=True)
+
         if len(self._delay_all_reduce_params) != 0:
+            print("[DDP.__init__ L70] have _delay_all_reduce_params -> _register_delay_all_reduce_hook", flush=True)
             self._register_delay_all_reduce_hook(
                 bucket_cap_mb=bucket_cap_mb,
                 param_to_hook_all_reduce=param_to_hook_all_reduce,
                 device_ids=device_ids,
             )
+            print(f"[DDP.__init__ L71] after _register_delay_all_reduce_hook, _delay_all_reduce_all_params={self._delay_all_reduce_all_params}", flush=True)
             if self._delay_all_reduce_all_params:
+                print("[DDP.__init__ L72] _delay_all_reduce_all_params=True -> early return", flush=True)
                 return
+        print("[DDP.__init__ L73] delay_all_reduce hook section done", flush=True)
 
-        # Build parameters for reducer.
+        print("[DDP.__init__ L74] _build_params_for_reducer()", flush=True)
         parameters, expect_sparse_gradient = self._build_params_for_reducer()
+        print("[DDP.__init__ L75] _build_params_for_reducer() done", flush=True)
 
-        # All collectives during initialization are gated by this flag.
         if init_sync:
-            # Verify model equivalence.
+            print("[DDP.__init__ L76] init_sync=True -> verify & sync", flush=True)
             _verify_param_shape_across_processes(self.process_group, parameters)
-            # Sync params and buffers. Ensures all DDP models start off at the same value.
+            print("[DDP.__init__ L77] _verify_param_shape_across_processes done", flush=True)
             _sync_module_states(
                 module=self.module,
                 process_group=self.process_group,
@@ -842,88 +1197,103 @@ class DistributedDataParallel(Module, Joinable):
                 params_and_buffers_to_ignore=self.parameters_to_ignore,
                 broadcast_buffers=self.broadcast_buffers,
             )
+            print("[DDP.__init__ L78] _sync_module_states done", flush=True)
+        else:
+            print("[DDP.__init__ L79] init_sync=False -> skip verify/sync", flush=True)
 
-        # In debug mode, build a mapping of parameter index -> parameter.
+        print("[DDP.__init__ L80] _build_debug_param_to_name_mapping()", flush=True)
         param_to_name_mapping = self._build_debug_param_to_name_mapping(parameters)
+        print("[DDP.__init__ L81] built param_to_name_mapping", flush=True)
 
-        # Builds reducer.
+        print("[DDP.__init__ L82] call _ddp_init_helper()", flush=True)
         self._ddp_init_helper(
             parameters,
             expect_sparse_gradient,
             param_to_name_mapping,
             static_graph,
         )
+        print("[DDP.__init__ L83] _ddp_init_helper() done", flush=True)
+
         self._comm_hooks: list[tuple[Callable, object]] = []
+        print("[DDP.__init__ L84] init _comm_hooks=[]", flush=True)
 
         if self.mixed_precision is not None:
+            print("[DDP.__init__ L85] mixed_precision path: _setup_mixed_precision_params", flush=True)
             _setup_mixed_precision_params(self.mixed_precision, self.module)
+            print("[DDP.__init__ L86] _setup_mixed_precision_params done -> _cast_buffers", flush=True)
             _cast_buffers(self.mixed_precision, self.module)
-            # Stream used for async low precision copies.
+            print("[DDP.__init__ L87] _cast_buffers done -> create torch.Stream()", flush=True)
             self._mp_stream = torch.Stream()
+            print("[DDP.__init__ L88] created _mp_stream", flush=True)
             self._submodule_to_event = defaultdict(deque)  # type: ignore[var-annotated]
-            # Add forward pre-hook to root module to kick off copies to lower
-            # precision.
+            print("[DDP.__init__ L89] init _submodule_to_event", flush=True)
             self.module.register_forward_pre_hook(
                 self._root_copy_hook, prepend=False, with_kwargs=True
             )
-            # Add forward pre hook to all submodules to wait for copy events
-            # before running computation.
+            print("[DDP.__init__ L90] registered _root_copy_hook", flush=True)
             for module in self.module.modules():
                 module.register_forward_pre_hook(
                     self._module_wait_for_copy_hook,
                     prepend=False,
                     with_kwargs=True,
                 )
-            # Set up callbacks in backward to upcast and use full precision
-            # params. TODO (rohan-varma): Make this compose with general
-            # comm hooks and apply_optimizer_in_backward. Importing inline to
-            # avoid circular import issue.
+            print("[DDP.__init__ L91] registered _module_wait_for_copy_hook for all submodules", flush=True)
             from torch.distributed.algorithms.ddp_comm_hooks.mixed_precision_hooks import (
                 _AllreduceUpcastHookState,
                 _reducer_allreduce_and_upcast_hook,
             )
+            print("[DDP.__init__ L92] imported mixed_precision_hooks", flush=True)
 
             upcast_hook_state = _AllreduceUpcastHookState(
                 ddp_weakref=weakref.ref(self),
                 upcast_stream=torch.Stream(),
             )
+            print("[DDP.__init__ L93] created _AllreduceUpcastHookState", flush=True)
             self.register_comm_hook(
                 upcast_hook_state,
                 _reducer_allreduce_and_upcast_hook,
             )
-            # Inform reducer of reduced precision param dtype for correctness
-            # of type checks between gradient and bucket.
+            print("[DDP.__init__ L94] registered mixed precision comm hook", flush=True)
             self.reducer._set_mixed_precision_param_dtype(  # type: ignore[attr-defined]
                 self.mixed_precision.param_dtype
             )
+            print("[DDP.__init__ L95] reducer._set_mixed_precision_param_dtype done", flush=True)
 
         self._has_rebuilt_buckets = False
+        print("[DDP.__init__ L96] set _has_rebuilt_buckets=False", flush=True)
 
         if static_graph:
+            print("[DDP.__init__ L97] static_graph=True -> _set_static_graph()", flush=True)
             self._set_static_graph()
+            print("[DDP.__init__ L98] _set_static_graph() done", flush=True)
 
         self._lazy_init_ran = False
+        print("[DDP.__init__ L99] set _lazy_init_ran=False", flush=True)
 
-        # Register the AccumulateGrad post hooks if optimize_ddp is
-        # True. The hooks will be deregistered if compiled_autograd is not
-        # enabled.
         self._accum_grad_hooks: list[RemovableHandle] = []
+        print("[DDP.__init__ L100] init _accum_grad_hooks=[]", flush=True)
         optimize_ddp = torch._dynamo.utils.get_optimize_ddp_mode()
+        print(f"[DDP.__init__ L101] optimize_ddp={optimize_ddp}", flush=True)
         self._use_python_reducer = optimize_ddp == "python_reducer"
+        print(f"[DDP.__init__ L102] _use_python_reducer={self._use_python_reducer}", flush=True)
         if self._use_python_reducer:
+            print("[DDP.__init__ L103] python_reducer path -> set inductor flags", flush=True)
             torch._inductor.config._fuse_ddp_communication = True
             torch._inductor.config._fuse_ddp_bucket_size = bucket_cap_mb
-            # Directly adding this to the trace rule will disturb the users
-            # who are using DDPOptimizer.
+            print("[DDP.__init__ L104] set inductor ddp flags", flush=True)
             torch._dynamo.trace_rules.LEGACY_MOD_INLINELIST.add(
                 "torch.nn.parallel.distributed"
             )
+            print("[DDP.__init__ L105] updated trace_rules.LEGACY_MOD_INLINELIST", flush=True)
             torch._dynamo.trace_rules.get_legacy_mod_inlinelist.cache_clear()
-            # NOTE: we should init these lazily
+            print("[DDP.__init__ L106] cleared get_legacy_mod_inlinelist cache", flush=True)
             self._register_accum_grad_hook()
+            print("[DDP.__init__ L107] _register_accum_grad_hook done", flush=True)
 
-        # Whether or not DDPSink performs a clone.
         self._ddp_sink_clone = True
+        print("[DDP.__init__ L108] set _ddp_sink_clone=True", flush=True)
+        print("[DDP.__init__ L109] leave __init__", flush=True)
+
 
     def _register_accum_grad_hook(self):
         import torch.distributed._functional_collectives as fcol
