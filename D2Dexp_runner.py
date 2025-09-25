@@ -249,7 +249,7 @@ def main():
 
 
     if is_group == 0:
-        #dist.barrier()
+        dist.barrier()
         stage_mod.to(device)
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=shard_stage,
                             num_stages=world, device=device,
@@ -257,7 +257,7 @@ def main():
                             prev_group=prev_g, this_group=this_g, next_group=next_g)
         
     else:
-        #dist.barrier()
+        dist.barrier()
         dp_group = dist.new_group(ranks=this_g, backend="gloo")
         stage_mod.to(device)
         dist.barrier(dp_group)
