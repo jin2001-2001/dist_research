@@ -345,7 +345,7 @@ def main():
     actions = generate_1f1b_pipeline_actions_pro(num_stages= total_stages, total_samples = args.batch_size, num_microbatches= args.microbatch_num,
                                                  group_info=group_info, batch_info=batch_info,
                                                   upstream = args.upstream)
-    print(f"对应action {actions[dist.get_rank]}")
+    print(f"对应action {actions[dist.get_rank()]}")
     
     sched._load_actions(actions, format="compute_comms")
     
