@@ -249,6 +249,7 @@ def main():
 
 
     if is_group == 0:
+        dist.barrier()
         stage_mod.to(device)
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=shard_stage,
                             num_stages=world, device=device,
@@ -256,6 +257,7 @@ def main():
                             prev_group=prev_g, this_group=this_g, next_group=next_g)
         
     else:
+        dist.barrier()
         print("准备创建进程组")
         dp_group = dist.new_group(ranks=this_g)
         print("进程组创建成功")
