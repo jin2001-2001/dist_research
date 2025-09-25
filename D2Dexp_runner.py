@@ -257,6 +257,7 @@ def main():
         
     else:
         dp_group = dist.new_group(ranks=this_g)
+        dist.barrier(dp_group)
         stage_mod.to(device)
         
         #Using DDP as the data parallelism component of our frame
