@@ -67,7 +67,7 @@ def test_DP_solver_onlytime(ks, ss):
     nmbatch = 20
     mbatchsize = 5
     layers = 28
-    test_list = ["cpu100"]*3+["cpu70"]*1
+    test_list = ["cpu60"]*0+["cpu30"]*4
     score_list = []
     plan_list = []
     allo_list = []
