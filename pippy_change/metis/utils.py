@@ -48,14 +48,14 @@ class DeviceType(Enum):
     V100 = "v100"
     P100 = "p100"
     T4 = "t4"
-    CPU100 = "cpu100"
-    CPU90 = "cpu90"
-    CPU80 = "cpu80"
-    CPU70 = "cpu70"
-    CPU60 = "cpu60"
-    CPU50 = "cpu50"
-    CPU40 = "cpu40"
-    CPU30 = "cpu30"
+    CPU100 = "CPU100"
+    CPU90 = "CPU90"
+    CPU80 = "CPU80"
+    CPU70 = "CPU70"
+    CPU60 = "CPU60"
+    CPU50 = "CPU50"
+    CPU40 = "CPU40"
+    CPU30 = "CPU30"
 
     @staticmethod
     def from_string(s: str) -> 'DeviceType':

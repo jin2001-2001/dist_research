@@ -64,9 +64,10 @@ class CostEstimator(ABC):
         fb_sync_costs = []
         for device_type in device_types:
             nested_keys = [f'DeviceType.{device_type}', f'tp{tp_deg}_bs{batch_size}', 'time', 'fb_sync']
+            #print(nested_keys)
             fb_sync_cost = _get_nested_value(self.profile_data, nested_keys)
-            if not fb_sync_cost:
-                raise KeyError(f"key(fb_sync) not found in profile_data")
+            if fb_sync_cost == None:
+                raise KeyError(f"key(fb_sync) not found in profile_data",self.profile_data, nested_keys)
             fb_sync_costs.append(fb_sync_cost)
 
         return max(fb_sync_costs)
