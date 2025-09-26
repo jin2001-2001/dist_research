@@ -12,11 +12,14 @@ class TopKContainer:
     def amount(self):
         return len(self.heap)
 
-    def update(self, score, plan, allocateplan):
+
+    def update(self, score, plan, allocateplan, device_order=None):
         """
         Add a (score, plan) pair.
         """
-        entry = (-score, self.id, plan, allocateplan)
+        entry = (-score, self.id, plan, allocateplan, device_order)
+
+
 
         if len(self.heap) < self.k:
             self.id+=1
@@ -29,36 +32,52 @@ class TopKContainer:
                 #print(self.heap)
                 #print(entry)
                 heapq.heapreplace(self.heap, entry)
+    
+    def merge(self, container):
+        for j in range(len(container.scores)):
+            self.update(container.scores[j], container.plans[j], container.allocateplans[j])
+
+    def merge_with_device_type(self, container, device_order): 
+        for j in range(len(container.scores)):
+            self.update(container.scores[j], container.plans[j], container.allocateplans[j], device_order)
+
 
     @property
     def pairs(self):
         """
         Returns list of (score, plan) pairs sorted by score ascending.
         """
-        entries = [(-s, i, p,pp) for (s, i, p,pp) in self.heap]
+        entries = [(-s, i, p,pp,ppp) for (s, i, p,pp,ppp) in self.heap]
         sorted_entries = sorted(entries, key=lambda x: (x[0], x[1]))
-        return [(score, plan, allocateplan) for (score, _, plan, allocateplan) in sorted_entries]
+        return [(score, plan, allocateplan, device_order) for (score, _, plan, allocateplan, device_order) in sorted_entries]
 
     @property
     def scores(self):
         """
         Returns list of scores sorted ascending.
         """
-        return [score for (score, _, _) in self.pairs]
+        return [score for (score, _, _,_) in self.pairs]
 
     @property
     def plans(self):
         """
         Returns list of plans sorted ascending by score.
         """
-        return [plan for (_, plan, _) in self.pairs]
+        return [plan for (_, plan, _,_) in self.pairs]
     
     @property
     def allocateplans(self):
         """
         Returns list of plans sorted ascending by score.
         """
-        return [allocateplan for (_, _, allocateplan) in self.pairs]
+        return [allocateplan for (_, _, allocateplan,_) in self.pairs]
+
+    @property
+    def device_orders(self):
+        """
+        Returns list of plans sorted ascending by score.
+        """
+        return [device_order for (_, _, _, device_order) in self.pairs]
 
 def plan_estimator(P, M, SLO, Profilelor, alpha):
     """
