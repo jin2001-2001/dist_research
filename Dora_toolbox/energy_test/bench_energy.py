@@ -10,7 +10,6 @@ import os
 import subprocess
 
 
-login(token="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")  # Replace with your actual token
 
 max_Erange = int(subprocess.check_output(["sudo", "./read_rapl_max.sh"]))
 

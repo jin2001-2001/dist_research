@@ -15,7 +15,6 @@ from transformers import TrainerCallback
 from torch.optim import SGD
 from pynvml import *
 
-login(token="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")
 
 
 def print_gpu_utilization():
