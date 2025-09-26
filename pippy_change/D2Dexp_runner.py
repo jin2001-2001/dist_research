@@ -131,7 +131,7 @@ def load_config(cfg:str) -> Dict[str, Any]:
             cfg = json.load(f)
     return cfg
 
-def plan_parser(rank: int, world: int, cfg: Union[str, Dict[str, Any]]):
+def plan_parser(rank: int, world: int, cfg: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
     """
     Given the pipeline config (dict or JSON path) and a rank id,
     return the stage that contains this rank, plus the immediate
