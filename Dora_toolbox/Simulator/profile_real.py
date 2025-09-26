@@ -46,6 +46,7 @@ class Device:
         self.activation_bytes_per_sample = 0
         self.activation_bytes_seq_len = 0
         self.layer_param_bytes = 0
+        #self.total_parameters_bytes = 0
 
         root = Path(tprofile_loc)
         batch = 1
@@ -60,6 +61,7 @@ class Device:
             self.activation_bytes_seq_len = data["seq_len"]
             self.activation_bytes_per_sample = data["layers"][0]["activation_bytes_per_sample"]
             self.layer_param_bytes = data["layers"][0]["param_bytes"]
+            #self.total_parameters_bytes = data["total_parameters_bytes"]
             total_profile_layers = len(data["layers"])
             for i in range(total_profile_layers):
                 forward+=data["layers"][i]["forward_time_s"]
@@ -80,9 +82,6 @@ class Device:
                 data = json.load(f)
                 forward = 0
                 backward = 0
-                self.activation_bytes_seq_len = data["seq_len"]
-                self.activation_bytes_per_sample = data["layers"][0]["activation_bytes_per_sample"]
-                self.layer_param_bytes = data["layers"][0]["param_bytes"]
                 total_profile_layers = len(data["layers"])
                 for i in range(total_profile_layers):
                     forward+=data["layers"][i]["forward_time_s"]
@@ -153,13 +152,15 @@ class Profilelor:
     def communication_solver(self, layer_slice=1): #simple version
         #T = bsize*self.hiddenSize*self.seq_len/(self.bandwidth)
         T = self.DList[0].activation_bytes_per_sample * self.MbatchSize/1024/1024/self.bandwidth
+
         return T
 
     def gathering_solver(self, device_slice, layer_slice): #simple version
         D_amount = device_slice[1]-device_slice[0]
         l_amount = layer_slice[1]-layer_slice[0]
-        total_parameter = l_amount*self.DList[0].layer_param_bytes*D_amount
+        total_parameter = l_amount*self.DList[0].layer_param_bytes*D_amount *1.76*2 #plus embedding estimiation
         T = total_parameter/1024/1024/(self.bandwidth)
+
         return T
 
 

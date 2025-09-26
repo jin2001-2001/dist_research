@@ -1,6 +1,33 @@
 from profile_real import Device, Profilelor
 from DPsolver import dynamic_programming_planning
 import utils
+from collections import Counter
+
+def unique_permutations(iterable):
+    """
+    Yields unique permutations even when iterable has duplicate elements.
+    Produces tuples; convert to list if you prefer.
+    """
+    counter = Counter(iterable)
+    keys = list(counter)
+    n = len(iterable)
+    perm = []
+
+    def backtrack():
+        if len(perm) == n:
+            yield tuple(perm)
+            return
+        for k in keys:
+            if counter[k] > 0:
+                counter[k] -= 1
+                perm.append(k)
+                yield from backtrack()
+                perm.pop()
+                counter[k] += 1
+
+    yield from backtrack()
+
+
 
 def test_heap_func():
     print("heap test:")
@@ -20,7 +47,7 @@ def generate_profiler_samples_nolimit(n=4,type_list = ["cpu100"]*5,MbatchSize=4,
     dList = []
     for i in range(len(type_list)):
         # type, tprofile_loc, eprofile_loc = 0, Mem = 0, Energy = 1000)
-        dList.append(Device(type_list[i], profilehome, Mem = 48*1024))#can hold 30 layers model, big enough
+        dList.append(Device(type_list[i], profilehome, Mem = 55*1024))#can hold 30 layers model, big enough
     simprofile = Profilelor(dList,hiddenSize=1024, seq=256, MbatchSize = MbatchSize, Bandwidth = band)
     return simprofile, band
 
@@ -37,26 +64,39 @@ def test_Profilelor_DPsolver():  #a self defined examples...
 
 def test_DP_solver_onlytime(ks, ss):
     ndevice = 4
-    nmbatch = 4
-    mbatchsize = 8
-    layers = 30
-    simprofile, band = generate_profiler_samples_nolimit(
-        n = ndevice, MbatchSize=mbatchsize)
+    nmbatch = 20
+    mbatchsize = 5
+    layers = 28
+    test_list = ["cpu100"]*3+["cpu70"]*1
     score_list = []
     plan_list = []
     allo_list = []
+    device_order_list = []
+    topK = utils.TopKContainer(ks)
 
-    for i in range(1, ss+1):
-        result = dynamic_programming_planning(L = layers, N= ndevice , M = nmbatch, k = ks, s = i,
+    for device_order in unique_permutations(test_list):
+        simprofile, band = generate_profiler_samples_nolimit(
+            n = ndevice,
+            type_list = device_order,  
+            MbatchSize=mbatchsize)
+
+        result = dynamic_programming_planning(L = layers, N= ndevice , M = nmbatch, k = ks, s = 1,
                                           Profilelor = simprofile, 
                                           alpha = 1, SLO = 0)
-        for j in range(len(result.scores)):
-            score_list.append(result.scores[j])
-            plan_list.append(result.plans[j])
-            allo_list.append(result.allocateplans[j])
-    return (layers,ndevice, nmbatch,mbatchsize, band), score_list, plan_list, allo_list, simprofile
+        topK.merge_with_device_type(result, device_order)
+        
+
+    for j in range(len(topK.scores)):
+        score_list.append(topK.scores[j])
+        plan_list.append(topK.plans[j])
+        allo_list.append(topK.allocateplans[j])
+        device_order_list.append(topK.device_orders[j])
+
+    return (layers,ndevice, nmbatch,mbatchsize, band), score_list, plan_list, allo_list,device_order_list, simprofile
 
 
 if __name__ == "__main__":
     #test_Profilelor_DPsolver()
-    test_DP_solver_onlytime(1,1)
+    meta, score_L, plan_L, allo_L,d_L, profile = test_DP_solver_onlytime(5,1)
+    print(score_L, plan_L, allo_L)
+    print(d_L)
