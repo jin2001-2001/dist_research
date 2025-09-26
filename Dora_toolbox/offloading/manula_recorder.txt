@@ -1,0 +1,95 @@
+0.6_offloading:
+GPU memory occupied: 9570 MB.
+TrainOutput(global_step=3, training_loss=10.701777140299479, metrics={'train_runtime': 5.0647, 'train_samples_per_second': 1.777, 'train_steps_per_second': 0.592, 'total_flos': 905969664.0, 'train_loss': 10.701777140299479, 'epoch': 1.0})
+
+0.6_offloading+acp:
+GPU memory occupied: 11841 MB.
+TrainOutput(global_step=3, training_loss=10.563038190205893, metrics={'train_runtime': 7.1303, 'train_samples_per_second': 1.262, 'train_steps_per_second': 0.421, 'total_flos': 905969664.0, 'train_loss': 10.563038190205893, 'epoch': 1.0})
+Training complete. Killing loggers...
+
+0.6_acp:
+GPU memory occupied: 10201 MB.
+TrainOutput(global_step=3, training_loss=10.634554862976074, metrics={'train_runtime': 0.9506, 'train_samples_per_second': 9.468, 'train_steps_per_second': 3.156, 'total_flos': 6089022111744.0, 'train_loss': 10.634554862976074, 'epoch': 1.0})
+
+0.6_dp:
+GPU memory occupied: 10108 MB.
+TrainOutput(global_step=3, training_loss=10.613911628723145, metrics={'train_runtime': 0.54, 'train_samples_per_second': 5.556, 'train_steps_per_second': 5.556, 'total_flos': 2029674037248.0, 'train_loss': 10.613911628723145, 'epoch': 1.0})
+
+
+
+H100:
+0.6:
+TrainOutput(global_step=8, training_loss=10.417993068695068, metrics={'train_runtime': 1.9498, 'train_samples_per_second': 12.309, 'train_steps_per_second': 4.103, 'total_flos': 16237392297984.0, 'train_loss': 10.417993068695068, 'epoch': 1.0})
+
+0.6_offloading:
+GPU memory occupied: 15141 MB.
+TrainOutput(global_step=8, training_loss=10.49172031879425, metrics={'train_runtime': 29.8527, 'train_samples_per_second': 0.804, 'train_steps_per_second': 0.268, 'total_flos': 2415919104.0, 'train_loss': 10.49172031879425, 'epoch': 1.0})
+
+0.6_offloading+acp:
+GPU memory occupied: 13165 MB.
+TrainOutput(global_step=8, training_loss=10.464478492736816, metrics={'train_runtime': 35.6436, 'train_samples_per_second': 0.673, 'train_steps_per_second': 0.224, 'total_flos': 2415919104.0, 'train_loss': 10.464478492736816, 'epoch': 1.0})
+
+0.6_acp:
+GPU memory occupied: 10023 MB.
+TrainOutput(global_step=8, training_loss=10.431617856025696, metrics={'train_runtime': 2.3789, 'train_samples_per_second': 10.089, 'train_steps_per_second': 3.363, 'total_flos': 16237392297984.0, 'train_loss': 10.431617856025696, 'epoch': 1.0})
+
+0.6_dp:
+GPU memory occupied: 10211 MB.
+TrainOutput(global_step=24, training_loss=10.17525049050649, metrics={'train_runtime': 3.0772, 'train_samples_per_second': 7.799, 'train_steps_per_second': 7.799, 'total_flos': 16237392297984.0, 'train_loss': 10.17525049050649, 'epoch': 1.0})
+
+
+
+
+1.7:
+GPU memory occupied: 23343 MB.
+TrainOutput(global_step=8, training_loss=10.442521333694458, metrics={'train_runtime': 4.5213, 'train_samples_per_second': 5.308, 'train_steps_per_second': 1.769, 'total_flos': 51956492009472.0, 'train_loss': 10.442521333694458, 'epoch': 1.0})
+
+1.7_offloading:
+GPU memory occupied: 28687 MB.
+TrainOutput(global_step=8, training_loss=10.448681235313416, metrics={'train_runtime': 47.9723, 'train_samples_per_second': 0.5, 'train_steps_per_second': 0.167, 'total_flos': 4567597056.0, 'train_loss': 10.448681235313416, 'epoch': 1.0})
+
+1.7_offloading+acp:
+GPU memory occupied: 23427 MB.
+TrainOutput(global_step=8, training_loss=10.452966451644897, metrics={'train_runtime': 50.6373, 'train_samples_per_second': 0.474, 'train_steps_per_second': 0.158, 'total_flos': 4567597056.0, 'train_loss': 10.452966451644897, 'epoch': 1.0})
+
+1.7_acp:
+GPU memory occupied: 22043 MB.
+TrainOutput(global_step=8, training_loss=10.395816683769226, metrics={'train_runtime': 5.7324, 'train_samples_per_second': 4.187, 'train_steps_per_second': 1.396, 'total_flos': 51956492009472.0, 'train_loss': 10.395816683769226, 'epoch': 1.0})
+
+1.7_dp:
+GPU memory occupied: 22101 MB.
+TrainOutput(global_step=24, training_loss=10.175554951032003, metrics={'train_runtime': 5.6503, 'train_samples_per_second': 4.248, 'train_steps_per_second': 4.248, 'total_flos': 51956492009472.0, 'train_loss': 10.175554951032003, 'epoch': 1.0})
+
+
+
+P100:
+0.6:
+GPU memory occupied: 12273 MB.
+TrainOutput(global_step=3, training_loss=10.63425095876058, metrics={'train_runtime': 1.0976, 'train_samples_per_second': 8.2, 'train_steps_per_second': 2.733, 'total_flos': 6089022111744.0, 'train_loss': 10.63425095876058, 'epoch': 1.0})
+
+0.6_offloading:
+GPU memory occupied: 14485 MB.
+TrainOutput(global_step=3, training_loss=10.681683858235678, metrics={'train_runtime': 16.2277, 'train_samples_per_second': 0.555, 'train_steps_per_second': 0.185, 'total_flos': 905969664.0, 'train_loss': 10.681683858235678, 'epoch': 1.0})
+
+0.6_offloading+acp:
+GPU memory occupied: 12509 MB.
+TrainOutput(global_step=3, training_loss=10.544646263122559, metrics={'train_runtime': 23.8, 'train_samples_per_second': 0.378, 'train_steps_per_second': 0.126, 'total_flos': 905969664.0, 'train_loss': 10.544646263122559, 'epoch': 1.0})
+
+0.6_acp:
+GPU memory occupied: 9367 MB.
+TrainOutput(global_step=3, training_loss=10.532057762145996, metrics={'train_runtime': 1.3616, 'train_samples_per_second': 6.61, 'train_steps_per_second': 2.203, 'total_flos': 6089022111744.0, 'train_loss': 10.532057762145996, 'epoch': 1.0})
+
+0.6_dp:
+GPU memory occupied: 9555 MB.
+TrainOutput(global_step=9, training_loss=10.406817118326822, metrics={'train_runtime': 1.9381, 'train_samples_per_second': 4.644, 'train_steps_per_second': 4.644, 'total_flos': 6089022111744.0, 'train_loss': 10.406817118326822, 'epoch': 1.0})
+
+
+
+1.7: failed...
+1.7_offloading: failed...
+1.7_offloading+acp:
+GPU memory occupied: 8431 MB.
+TrainOutput(global_step=3, training_loss=10.638570149739584, metrics={'train_runtime': 35.6824, 'train_samples_per_second': 0.252, 'train_steps_per_second': 0.084, 'total_flos': 1712848896.0, 'train_loss': 10.638570149739584, 'epoch': 1.0})
+
+1.7_acp: failed
+1.7_dp: failed...

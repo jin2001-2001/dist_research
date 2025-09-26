@@ -441,41 +441,41 @@ def main():
             
     
 
-    if rank == 0:
-        print("\nMerging and saving model...")
-        cfg = AutoConfig.from_pretrained(name, trust_remote_code=True)
-        merged = AutoModelForCausalLM.from_config(cfg, trust_remote_code=True)
-        merged_state = merged.state_dict()
-        
-        part1_state = stage_mod.state_dict()
-        for key in part1_state:
-            if key.startswith("embed_tokens"):
-                merged_state[f"model.{key}"] = part1_state[key]
-            elif key.startswith("layers"):
-                merged_state[f"model.{key}"] = part1_state[key]
-            elif key.startswith("rotary_emb"):
-                merged_state[f"model.{key}"] = part1_state[key]
-        
-        recv = [None]
-        dist.broadcast_object_list(recv, src=1)
-        part2_state = recv[0]
-        
-        for key in part2_state:
-            if key.startswith("layers"):
-                layer_idx = int(key.split(".")[1]) + 14
-                new_key = f"model.layers.{layer_idx}" + key[key.find(".", 7):]
-                merged_state[new_key] = part2_state[key]
-            elif key == "norm.weight":
-                merged_state["model.norm.weight"] = part2_state[key]
-            elif key == "lm_head.weight":
-                merged_state["lm_head.weight"] = part2_state[key]
-                
-        merged.load_state_dict(merged_state, strict=False)
-        merged.save_pretrained("trained_qwen_pp")
-        tok.save_pretrained("trained_qwen_pp")
-        print("Saved to ./trained_qwen_pp")
-    else:
-        dist.broadcast_object_list([stage_mod.state_dict()], src=1)
+    #if rank == 0:
+    #    print("\nMerging and saving model...")
+    #    cfg = AutoConfig.from_pretrained(name, trust_remote_code=True)
+    #    merged = AutoModelForCausalLM.from_config(cfg, trust_remote_code=True)
+    #    merged_state = merged.state_dict()
+    #    
+    #    part1_state = stage_mod.state_dict()
+    #    for key in part1_state:
+    #        if key.startswith("embed_tokens"):
+    #            merged_state[f"model.{key}"] = part1_state[key]
+    #        elif key.startswith("layers"):
+    #            merged_state[f"model.{key}"] = part1_state[key]
+    #        elif key.startswith("rotary_emb"):
+    #            merged_state[f"model.{key}"] = part1_state[key]
+    #    
+    #    recv = [None]
+    #    dist.broadcast_object_list(recv, src=1)
+    #    part2_state = recv[0]
+    #    
+    #    for key in part2_state:
+    #        if key.startswith("layers"):
+    #            layer_idx = int(key.split(".")[1]) + 14
+    #            new_key = f"model.layers.{layer_idx}" + key[key.find(".", 7):]
+    #            merged_state[new_key] = part2_state[key]
+    #        elif key == "norm.weight":
+    #            merged_state["model.norm.weight"] = part2_state[key]
+    #        elif key == "lm_head.weight":
+    #            merged_state["lm_head.weight"] = part2_state[key]
+    #            
+    #    merged.load_state_dict(merged_state, strict=False)
+    #    merged.save_pretrained("trained_qwen_pp")
+    #    tok.save_pretrained("trained_qwen_pp")
+    #    print("Saved to ./trained_qwen_pp")
+    #else:
+    #    dist.broadcast_object_list([stage_mod.state_dict()], src=1)
 
     
     dist.destroy_process_group()

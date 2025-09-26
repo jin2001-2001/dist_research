@@ -1,0 +1,7 @@
+As meet some previlige problem, we have to use the following command to use the user's conda env:
+sudo -E bash benchtest_freqadj.sh
+
+also comment out some scripts that can just generate the conda env, and download the necessrary packages..
+
+
+sudo cpupower frequency-set -d 2000000 -u 2000000

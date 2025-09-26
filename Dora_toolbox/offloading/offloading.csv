@@ -1,0 +1,16 @@
+device,model,mode,status,train_steps_per_second
+
+5070,Qwen/Qwen3-0.6B,offloading,False,0.592
+5070,Qwen/Qwen3-0.6B,offloading+acp,False,0.421
+5070,Qwen/Qwen3-0.6B,acp,False,3.156
+5070,Qwen/Qwen3-0.6B,dp,False,5.556
+5070,Qwen/Qwen3-0.6B,dp,False,0.268
+5070,Qwen/Qwen3-0.6B,dp,False,0.224
+5070,Qwen/Qwen3-0.6B,dp,False,3.363
+5070,Qwen/Qwen3-0.6B,dp,False,4.103
+5070,Qwen/Qwen3-0.6B,dp,False,7.799
+5070,Qwen/Qwen3-1.7B,dp,False,4.248
+5070,Qwen/Qwen3-1.7B,dp,False,1.769
+5070,Qwen/Qwen3-1.7B,dp,False,1.396
+5070,Qwen/Qwen3-1.7B,dp,False,0.158
+5070,Qwen/Qwen3-1.7B,dp,False,0.167
