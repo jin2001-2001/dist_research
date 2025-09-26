@@ -47,7 +47,7 @@ deepspeed manual:
 https://www.deepspeed.ai/docs/config-json/#parameter-offloading
 
 for clould lab:(personal tokens of github)
-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
+
 
 for 5070:
 pip uninstall torch torchvision torchaudio -y
