@@ -6,7 +6,7 @@ command -v systemd-run >/dev/null || { echo "systemd-run not found"; exit 1; }
 
 # -------- Config --------
 BATCH_SIZES=(1 2 3 4 5)
-UTILS=(100)   # target % of the whole machine
+UTILS=(100 70)   # target % of the whole machine
 # ------------------------
 
 CORES=$(nproc --all)
