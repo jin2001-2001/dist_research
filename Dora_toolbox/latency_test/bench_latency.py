@@ -7,7 +7,6 @@ import csv
 import argparse
 import os
 
-login(token="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")  # Replace with your actual token
 
 def idle_cooldown(duration=5):
     time.sleep(duration)
