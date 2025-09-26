@@ -174,8 +174,9 @@ class _Action():
     dependency: Optional[Dict[int, tuple[int, ...]]]
     split_parts: Optional[int] 
     chunk_deps: Optional[Dict[int, List[Tuple[int,int,int]]]]
+    multimodality: Optional[List[str]]
     
-    def __init__(self, stage_index, rank, id, computation_type, microbatch_index, dest_rank=None, upstream=None, dependency=None, split_parts=None, chunk_deps=None):
+    def __init__(self, stage_index, rank, id, computation_type, microbatch_index, dest_rank=None, upstream=None, dependency=None, split_parts=None, chunk_deps=None,multimodality= None):
         self.stage_index = stage_index
         self.rank = rank
         self.id = id
@@ -186,6 +187,11 @@ class _Action():
         self.dependency = dependency
         self.split_parts = split_parts
         self.chunk_deps  = chunk_deps
+        self.multimodality = multimodality
+        
+        if self.multimodality is not None:
+            assert all(m in ["text","vision","audio","packing"] for m in self.multimodality), "multimodality only allow text, vision, audio, packing"
+        
 
     # -----------------------------------------------------------------------
     # NOTE: The order here matches the from_str method parameter order:
@@ -456,6 +462,24 @@ class _PipelineSchedule(ABC):
                 self._args_chunk_spec,
                 self._kwargs_chunk_spec,
             )
+            # Debug once: verify how audio_inputs is split into microbatches
+            try:
+                import os
+                if (os.environ.get("RANK", "0") == "0") and isinstance(kwargs_split, list) and len(kwargs_split) > 0:
+                    kw0 = kwargs_split[0]
+                    if isinstance(kw0, dict) and "audio_inputs" in kw0:
+                        ai = kw0.get("audio_inputs")
+                        if isinstance(ai, dict):
+                            feat = ai.get("input_features")
+                            fam = ai.get("feature_attention_mask")
+                            def _s(x):
+                                import torch
+                                return (tuple(x.shape), str(x.dtype)) if torch.is_tensor(x) else type(x).__name__
+                            print(f"[rank0] split-debug: kwargs_split[0].audio_inputs.input_features={_s(feat)} feature_attention_mask={_s(fam)}")
+                        else:
+                            print(f"[rank0] split-debug: kwargs_split[0].audio_inputs type={type(ai).__name__}")
+            except Exception:
+                pass
             return args_split, kwargs_split
         else:
             # Empty inputs (e.g. when called on middle stages)
@@ -517,7 +541,13 @@ def _wait_batch_p2p(work: list[dist.Work]):
     """
     Waits for a list of dist.Work (typically from _batch_p2p / _sorted_batch_p2p).
     """
+    # for w in work:
+    #     print(f"FORWARD细则 {w}")
+    
     for w in work:
+        if w.is_completed():
+            continue
+        # print(f"FORWARD等待细则 {w}")
         w.wait()
 
 
