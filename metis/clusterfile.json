@@ -1,0 +1,50 @@
+{
+  "IP0": {
+    "instance_type": "CPU100",
+    "inter_bandwidth": 312500000.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 65
+  },
+  "IP1": {
+    "instance_type": "CPU100",
+    "inter_bandwidth": 100.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 65
+  },
+  "IP2": {
+    "instance_type": "CPU100",
+    "inter_bandwidth": 100.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 65
+  },
+  "IP3": {
+    "instance_type": "CPU100",
+    "inter_bandwidth": 100.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 65
+  },
+  "IP4": {
+    "instance_type": "CPU100",
+    "inter_bandwidth": 100.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 65
+  },
+  "IP5": {
+    "instance_type": "CPU100",
+    "inter_bandwidth": 100.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 65
+  },
+  "IP6": {
+    "instance_type": "CPU100",
+    "inter_bandwidth": 100.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 65
+  },
+  "IP7": {
+    "instance_type": "CPU100",
+    "inter_bandwidth": 100.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 65
+  }
+}
