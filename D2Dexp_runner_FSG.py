@@ -268,7 +268,6 @@ def main():
         dist.barrier()
         stage_mod.to(device)
         time.sleep(shard_stage*4)
-        dist.barrier(dp_group)
         dp_group = dist.new_group(ranks=this_g, backend="gloo")
         dist.barrier(dp_group)
         #Using DDP as the data parallelism component of our frame 
@@ -278,7 +277,8 @@ def main():
             process_group=dp_group, # Used for local dp
             find_unused_parameters=False,
             init_sync = False,
-        )        
+        )     
+        dist.barrier(dp_group)   
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=shard_stage,
                                 num_stages=world, device=device,
                                 group=dist.group.WORLD,  # Used for world pp 
