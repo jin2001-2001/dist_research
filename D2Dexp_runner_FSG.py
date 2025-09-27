@@ -354,7 +354,7 @@ def main():
     actions = generate_1f1b_pipeline_actions_pro(num_stages= total_stages, total_samples = args.batch_size, num_microbatches= args.microbatch_num,
                                                  group_info=group_info, batch_info=batch_info,
                                                   upstream = args.upstream)
-    print(f"对应action {actions[dist.get_rank()]}")
+    #print(f"对应action {actions[dist.get_rank()]}")
     
     sched._load_actions(actions, format="compute_comms")
     
@@ -400,7 +400,7 @@ def main():
                     batch = next(data_iter)
                     #tgt = torch.empty(batch_size, block, dtype=torch.long, device=device)
                     tgt = batch["labels"].to(device)
-                    dist.broadcast(tgt, src=0)
+                    #dist.broadcast(tgt, src=0)
                     sched.step(None, target=tgt)
 
               #  with monitor.section("opt.step"):
