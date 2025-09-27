@@ -586,25 +586,21 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         composite_args = None
 
-        if need_rt_bcast:
+        use_scheduler_inputs = bool(args) and pack_size > 1
+
+        if need_rt_bcast and not use_scheduler_inputs:
             if self.is_leader:
                 if not args or len(args) == 0:
                     raise RuntimeError(
                         f"[rank{dist.get_rank()}] First-stage leader got empty args at "
                         f"fwd_chunk_id={fwd_chunk_id}. Scheduler must pass root inputs to leader."
                     )
-                # Leader keeps broadcasting so non-scheduled peers can still populate inputs
                 dist.broadcast_object_list([args], src=self.leader, group=self.dp_group)
                 composite_args = args
             else:
-                if args:
-                    # Scheduler already supplied packed inputs; trust them instead of waiting for leader broadcast
-                    composite_args = args
-                else:
-                    buf = [None]
-                    dist.broadcast_object_list(buf, src=self.leader, group=self.dp_group)
-                    composite_args = buf[0]
-
+                buf = [None]
+                dist.broadcast_object_list(buf, src=self.leader, group=self.dp_group)
+                composite_args = buf[0]
         else:
             if args:
                 composite_args = args
