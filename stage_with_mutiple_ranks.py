@@ -5,6 +5,7 @@ import operator
 from abc import ABC, abstractmethod
 from typing import Any, Callable, cast, Optional, Union, List, Dict
 from collections import defaultdict
+import time
 
 import torch
 import torch.distributed as dist
@@ -565,6 +566,8 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         kwargs: Optional[dict[str, Any]] = None,
         pack_size: int = 1
     ):
+        total_start = time.perf_counter()
+
         """
         Perform forward pass on the stage with one microbatch.
         `args` and `kwargs` are the inputs from *external* to this stage.
@@ -645,6 +648,8 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         self._validate_fwd_input(args_for_val, kwargs_for_val)
 
+        prep_done = time.perf_counter()
+
         # Compute forward
         try:
             output = self.forward_maybe_with_nosync(*composite_args, **composite_kwargs)
@@ -656,6 +661,8 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             kwargs: {composite_kwargs}
             """
             raise RuntimeError(exc_msg) from e
+
+        fwd_done = time.perf_counter()
 
         # See [Note: pipeline model output type]
         output_tuple = _normalize_model_output_as_tuple(output)
@@ -685,6 +692,16 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             outputs_for_val = output_tuple
 
         self._validate_fwd_outputs(outputs_for_val)
+
+        total_done = time.perf_counter()
+
+        if self.stage_index == 0 and fwd_chunk_id < 40:
+            rank = dist.get_rank()
+            prep_ms = (prep_done - total_start) * 1e3
+            fwd_ms = (fwd_done - prep_done) * 1e3
+            post_ms = (total_done - fwd_done) * 1e3
+            total_ms = (total_done - total_start) * 1e3
+            print(f"[rank{rank}] stage{self.stage_index} chunk{fwd_chunk_id} pack{pack_size} prep={prep_ms:.2f}ms fwd={fwd_ms:.2f}ms post={post_ms:.2f}ms total={total_ms:.2f}ms")
 
         # We return the original user-provied output, not normalized to tuple.
         # See [Note: pipeline model output type]
