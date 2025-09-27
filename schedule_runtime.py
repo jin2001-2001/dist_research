@@ -1271,7 +1271,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if stage.is_first:
                         if len(mb_ids) > 1:
                             for mid in mb_ids:
-                                print(f"判断 {mid not in arg_mbs} and {rep_id in arg_mbs}")
+                                #print(f"判断 {mid not in arg_mbs} and {rep_id in arg_mbs}")
+                                print(f"arg_mbs {arg_mbs}")
                                 if mid not in arg_mbs and rep_id in arg_mbs:
                                     arg_mbs[mid] = arg_mbs[rep_id]
                                     print(f"arg_mbs[{mid}] = {arg_mbs[mid]}")
