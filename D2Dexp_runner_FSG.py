@@ -138,8 +138,8 @@ def plan_parser(rank: int, world: int, cfg: Union[str, Dict[str, Any]]) -> Dict[
     previous/next stages' rank groups.
     """
     cfg = load_config(cfg)
-    if world != cfg["total_devices"]:
-        raise ValueError(f"Number of devices mismatch...")
+    #if world != cfg["total_devices"]:
+        #raise ValueError(f"Number of devices mismatch...")
     stages: List[Dict[str, Any]] = sorted(cfg["stage_info"], key=lambda s: s["index"])
     total_stages = cfg["total_stages"]
     total_batchs = cfg["total_batchs"]
