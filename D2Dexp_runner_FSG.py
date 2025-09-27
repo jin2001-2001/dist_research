@@ -199,7 +199,14 @@ def plan_batch_parser(cfg: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
 
     return final_batch_info, final_group_info
 
-
+def find_batch_chunk_first_stage(rank, final_batch_info):
+    group_info = final_batch_info[0]
+    for pair in group_info:
+        if pair[0] == rank:
+            start = pair[1][0]
+            end = pair[1][-1]+1
+            return (start, end)
+    return None
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--train_steps", type=int, default=2,
@@ -356,13 +363,13 @@ def main():
     
     
     for epoch in range(1):
+        data_iter = iter(loader)
         if rank == 0:
             if args.train_steps is None:
                 steps_tensor = torch.tensor(len(loader), device=device)
             else:
                 steps_tensor = torch.tensor(args.train_steps, device=device)
             dist.broadcast(steps_tensor, 0)
-            data_iter = iter(loader)
             print(f"Total training steps: {steps_tensor.item()}")
         else:
             steps_tensor = torch.tensor(0, device=device)
@@ -383,14 +390,16 @@ def main():
                 opt.zero_grad(set_to_none=True)
 
                # with monitor.section("sched.step"):
-                if rank == 0:
+                if shard_stage == 0 and rank in this_g:
                     batch = next(data_iter)
                     inp = batch["input_ids"].to(device)
                     tgt = batch["labels"].to(device)
-                    dist.broadcast(tgt, src=0)
+                    #dist.broadcast(tgt, src=0)
                     sched.step(inp, target=tgt)
                 else:
-                    tgt = torch.empty(batch_size, block, dtype=torch.long, device=device)
+                    batch = next(data_iter)
+                    #tgt = torch.empty(batch_size, block, dtype=torch.long, device=device)
+                    tgt = batch["labels"].to(device)
                     dist.broadcast(tgt, src=0)
                     sched.step(None, target=tgt)
 
