@@ -262,7 +262,6 @@ def main():
         dp_group = dist.new_group(ranks=this_g, backend="gloo")
         print(f"dp组 {this_g} 初始化完成")
         stage_mod.to(device)
-        #dist.barrier(dp_group)
         print("进入DDP初始化")
         #Using DDP as the data parallelism component of our frame 
         time.sleep(shard_stage)

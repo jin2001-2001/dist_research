@@ -1264,94 +1264,32 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     if first_fwd == 1:
                         dist.barrier()
                         first_fwd = 0
-                    print(f"[{dist.get_rank()}]: batch {current_batch+1} FORWARD microbatch {mb_field}")
-                    
                     mb_ids: tuple[int, ...] = (mb_field,) if isinstance(mb_field, int) else tuple(mb_field)
                     rep_id = mb_ids[0]
 
                     if stage_uses_fsdp:
                         _assert_unsharded(stage_idx)
 
-                    def _describe_seq(val):
-                        if isinstance(val, dict):
-                            if len(val) == 0:
-                                return '{}'
-                            inner = ', '.join(f"{k}:{_describe_seq(v)}" for k, v in val.items())
-                            return '{' + inner + '}'
-                        if isinstance(val, (tuple, list)):
-                            if len(val) == 0:
-                                return '<empty>'
-                            parts = []
-                            for idx, item in enumerate(val):
-                                if isinstance(item, torch.Tensor):
-                                    parts.append(f"T{idx}{tuple(item.shape)}")
-                                else:
-                                    parts.append(f"{idx}:{_describe_seq(item)}")
-                            return '[' + '|'.join(parts) + ']'
-                        if isinstance(val, torch.Tensor):
-                            return f"T{tuple(val.shape)}"
-                        if val is None:
-                            return '<none>'
-                        return type(val).__name__
-
-                    def _describe_mb_entry(mid):
-                        if mid >= len(arg_mbs):
-                            return f"{mid}:<index_out_of_range len={len(arg_mbs)}>"
-                        entry = arg_mbs[mid]
-                        if entry is None:
-                            return f"{mid}:<none>"
-                        return f"{mid}:{_describe_seq(entry)}"
-
-                    debug_entries = ', '.join(_describe_mb_entry(mid) for mid in mb_ids)
-                    print(f"[{dist.get_rank()}] stage{stage_idx} gather rep={rep_id} pack={mb_ids} entries={debug_entries}")
-
                     if stage.is_first:
                         if len(mb_ids) > 1:
                             for mid in mb_ids:
-                                #print(f"判断 {mid not in arg_mbs} and {rep_id in arg_mbs}")
-                                # print(f"arg_mbs {arg_mbs}")
                                 if mid not in arg_mbs and rep_id in arg_mbs:
                                     arg_mbs[mid] = arg_mbs[rep_id]
-                                    print(f"arg_mbs[{mid}] = {arg_mbs[mid]}")
                                 if kwarg_mbs and mid not in kwarg_mbs and rep_id in kwarg_mbs:
                                     kwarg_mbs[mid] = kwarg_mbs[rep_id]
-                        
+
                         cat_args = tuple(
                             torch.cat([arg_mbs[mid][i] for mid in mb_ids], dim=0)
                             for i in range(len(arg_mbs[rep_id]))
                         )
-                        cat_shapes = [
-                            tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__
-                            for t in cat_args
-                        ]
-                        print(f"[{dist.get_rank()}] stage{stage_idx} rep={rep_id} cat_shapes={cat_shapes}")
-                        
+
                         if kwarg_mbs and kwarg_mbs[rep_id]:
-                            cat_kwargs: dict[str, Any] = {}
-                            for k in kwarg_mbs[rep_id]:
-                                vals = [kwarg_mbs[mid][k] for mid in mb_ids]
-                                cat_kwargs[k] = _cat_like(vals)
+                            cat_kwargs = {
+                                k: _cat_like([kwarg_mbs[mid][k] for mid in mb_ids])
+                                for k in kwarg_mbs[rep_id]
+                            }
                         else:
                             cat_kwargs = {}
-                        print(f"[{dist.get_rank()}] stage{stage_idx} rep={rep_id} cat_kwargs_keys={list(cat_kwargs.keys())}")
-
-                        # Debug: dump audio kwargs shapes for first stage (rank 0) to verify microbatch split
-                        try:
-                            if dist.get_rank() == 0:
-                                ai = cat_kwargs.get("audio_inputs", None)
-                                if ai is None:
-                                    print(f"[rank0] schedule-debug: cat_kwargs has no audio_inputs for mb={rep_id}")
-                                elif isinstance(ai, dict):
-                                    feat = ai.get("input_features", None)
-                                    fam = ai.get("feature_attention_mask", None)
-                                    feat_shape = (tuple(feat.shape), str(feat.dtype)) if torch.is_tensor(feat) else type(feat).__name__
-                                    fam_shape = (tuple(fam.shape), str(fam.dtype)) if torch.is_tensor(fam) else type(fam).__name__
-                                    print(f"[rank0] schedule-debug: mb={rep_id} audio_inputs.input_features={feat_shape} feature_attention_mask={fam_shape}")
-                                else:
-                                    print(f"[rank0] schedule-debug: audio_inputs is {type(ai).__name__} for mb={rep_id}")
-                        except Exception:
-                            pass
-                            
                     else:
                         # 非首段：先等待上游 RECV_F
                         if not is_prev_stage_on_this_rank:

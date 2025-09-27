@@ -631,30 +631,14 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             and isinstance(composite_args[0], torch.Tensor)
         ):
             mb_bs = composite_args[0].shape[0] // pack_size
-            comp_shapes = [
-                tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__
-                for t in composite_args
-            ]
-            print(f"[rank{dist.get_rank()}] stage{self.stage_index} pack_size={pack_size} mb_bs={mb_bs} comp_shapes={comp_shapes}")
             args_for_val = tuple(
                 (t[:mb_bs] if isinstance(t, torch.Tensor) else t)
                 for t in composite_args
             )
-            args_for_val_shapes = [
-                tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__
-                for t in args_for_val
-            ]
-            print(f"[rank{dist.get_rank()}] stage{self.stage_index} args_for_val_shapes={args_for_val_shapes}")
             kwargs_for_val = {
                 k: (v[:mb_bs] if isinstance(v, torch.Tensor) else v)
                 for k, v in composite_kwargs.items()
             }
-            if kwargs_for_val:
-                kw_shapes = {
-                    k: (tuple(v.shape) if isinstance(v, torch.Tensor) else type(v).__name__)
-                    for k, v in kwargs_for_val.items()
-                }
-                print(f"[rank{dist.get_rank()}] stage{self.stage_index} kwargs_for_val_shapes={kw_shapes}")
         else:
             args_for_val = composite_args
             kwargs_for_val = composite_kwargs
