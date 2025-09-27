@@ -266,6 +266,7 @@ def main():
     else:
         dist.barrier()
         #time.sleep(shard_stage*4)
+        print(this_g)
         dp_group = dist.new_group(ranks=this_g, backend="gloo")
         dist.barrier(dp_group)
         #Using DDP as the data parallelism component of our frame 
