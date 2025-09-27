@@ -1261,6 +1261,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         stage.submod.reshard()  # type: ignore[operator]
                 
                 elif comp_type == FORWARD:
+                    print(f"[{dist.get_rank()}]: batch {current_batch+1} FORWARD microbatch {mb_field}")
+                    
                     if first_fwd == 1:
                         dist.barrier()
                         first_fwd = 0
