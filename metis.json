@@ -2,7 +2,7 @@
     "total_layer": 28,
     "total_devices": 4,
     "total_stages": 2,
-    "total_batchs": 20,
+    "total_batchs": 5,
     "estimated":0.1,
     "device_order": ["cpu30", "cpu30", "cpu60", "cpu60"],
     
