@@ -387,7 +387,7 @@ def main():
                 opt.zero_grad(set_to_none=True)
 
                # with monitor.section("sched.step"):
-                if rank == 0:
+                if stage.is_first:
                     batch = next(data_iter)
                     inp = batch["input_ids"].to(device)
                     tgt = batch["labels"].to(device)
