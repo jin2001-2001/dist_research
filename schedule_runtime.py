@@ -1273,6 +1273,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             for mid in mb_ids:
                                 if mid not in arg_mbs and rep_id in arg_mbs:
                                     arg_mbs[mid] = arg_mbs[rep_id]
+                                    print(f"arg_mbs[{mid}] = {arg_mbs[mid]}")
                                 if kwarg_mbs and mid not in kwarg_mbs and rep_id in kwarg_mbs:
                                     kwarg_mbs[mid] = kwarg_mbs[rep_id]
                         
