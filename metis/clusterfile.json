@@ -18,7 +18,7 @@
     "memory": 55
   },
   "IP3": {
-    "instance_type": "CPU30",
+    "instance_type": "CPU60",
     "inter_bandwidth": 100.0,
     "intra_bandwidth": 5312500000.0,
     "memory": 55
