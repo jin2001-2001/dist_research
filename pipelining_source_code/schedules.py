@@ -799,7 +799,7 @@ class Schedule1F1B(PipelineScheduleSingle):
             microbatches: list of microbatch args.
         """
         from recorder import Recorder
-        self._rec = Recorder(rank=self.rank,net_sample_interval_ms=10)  
+        self._rec = Recorder(rank=dist.get_rank(),net_sample_interval_ms=10)  
         self._rec.set_enabled(True)
         
         
