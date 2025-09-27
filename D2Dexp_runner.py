@@ -265,6 +265,7 @@ def main():
         #dist.barrier(dp_group)
         print("进入DDP初始化")
         #Using DDP as the data parallelism component of our frame 
+        time.sleep(shard_stage)
         stage_mod = DDP(
             stage_mod,
             device_ids=None,        # CPU don' use device_ids
