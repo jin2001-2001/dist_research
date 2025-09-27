@@ -966,7 +966,7 @@ class Schedule1F1B(PipelineScheduleSingle):
                 self._rec.dump(f"{fname_prefix}_rank0.json")
             else:
                 gathered = [None] * dist.get_world_size()
-                dist.gather_object(self._rec.events, gathered if self.rank == 0 else None, dst=0)
+                dist.gather_object(self._rec.events, gathered if dist.get_rank() == 0 else None, dst=0)
                 if self.rank == 0:
                     all_ev = sum(gathered, [])
                     with open(f"{fname_prefix}_all.json", "w") as f:
