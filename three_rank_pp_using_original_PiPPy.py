@@ -30,7 +30,7 @@
 # - Requires `transformers`, `datasets`, and `tqdm` libraries
 ##############################################
 
-import os, torch, torch.nn as nn, torch.nn.functional as F, torch.optim as optim
+import argparse, os, torch, torch.nn as nn, torch.nn.functional as F, torch.optim as optim
 import torch.distributed as dist
 
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
