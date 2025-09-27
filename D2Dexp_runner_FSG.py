@@ -267,7 +267,7 @@ def main():
         dist.barrier()
         #time.sleep(shard_stage*4)
         dp_group = dist.new_group(ranks=this_g, backend="gloo")
-        #dist.barrier(dp_group)
+        dist.barrier(dp_group)
         #Using DDP as the data parallelism component of our frame 
         stage_mod = DDP(
             stage_mod,
