@@ -386,6 +386,7 @@ def main():
             start_time = time.time()
         
         try:
+            print("begin actual steps:")
             for step in range(total_steps):
                 step_start_time = time.time()
                 opt.zero_grad(set_to_none=True)
