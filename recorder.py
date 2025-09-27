@@ -185,7 +185,7 @@ class Recorder:
                         start_ns, end_ns,
                         chunk=chunk_idx,
                         status=status,
-                        net_series=samples,
+                        net_series=[],
                     )
                 )
         

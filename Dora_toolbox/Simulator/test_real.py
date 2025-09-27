@@ -67,7 +67,7 @@ def test_DP_solver_onlytime(ks, ss):
     nmbatch = 20
     mbatchsize = 5
     layers = 28
-    test_list = ["cpu60"]*0+["cpu30"]*4
+    test_list = ["cpu100"]*4 + ["cpu60"]*0+["cpu30"]*0
     score_list = []
     plan_list = []
     allo_list = []
@@ -79,6 +79,8 @@ def test_DP_solver_onlytime(ks, ss):
             n = ndevice,
             type_list = device_order,  
             MbatchSize=mbatchsize)
+        print("Communication" ,simprofile.communication_solver(10))
+        print("computation:", simprofile.DList[0].computeprofile.batchFuncforward(5), simprofile.DList[0].computeprofile.batchFuncbackward(5))
 
         result = dynamic_programming_planning(L = layers, N= ndevice , M = nmbatch, k = ks, s = 1,
                                           Profilelor = simprofile, 
