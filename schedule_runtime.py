@@ -1267,12 +1267,45 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
                     if stage_uses_fsdp:
                         _assert_unsharded(stage_idx)
-                    
+
+                    def _describe_seq(val):
+                        if isinstance(val, dict):
+                            if len(val) == 0:
+                                return '{}'
+                            inner = ', '.join(f"{k}:{_describe_seq(v)}" for k, v in val.items())
+                            return '{' + inner + '}'
+                        if isinstance(val, (tuple, list)):
+                            if len(val) == 0:
+                                return '<empty>'
+                            parts = []
+                            for idx, item in enumerate(val):
+                                if isinstance(item, torch.Tensor):
+                                    parts.append(f"T{idx}{tuple(item.shape)}")
+                                else:
+                                    parts.append(f"{idx}:{_describe_seq(item)}")
+                            return '[' + '|'.join(parts) + ']'
+                        if isinstance(val, torch.Tensor):
+                            return f"T{tuple(val.shape)}"
+                        if val is None:
+                            return '<none>'
+                        return type(val).__name__
+
+                    def _describe_mb_entry(mid):
+                        if mid >= len(arg_mbs):
+                            return f"{mid}:<index_out_of_range len={len(arg_mbs)}>"
+                        entry = arg_mbs[mid]
+                        if entry is None:
+                            return f"{mid}:<none>"
+                        return f"{mid}:{_describe_seq(entry)}"
+
+                    debug_entries = ', '.join(_describe_mb_entry(mid) for mid in mb_ids)
+                    print(f"[{dist.get_rank()}] stage{stage_idx} gather rep={rep_id} pack={mb_ids} entries={debug_entries}")
+
                     if stage.is_first:
                         if len(mb_ids) > 1:
                             for mid in mb_ids:
                                 #print(f"判断 {mid not in arg_mbs} and {rep_id in arg_mbs}")
-                                print(f"arg_mbs {arg_mbs}")
+                                # print(f"arg_mbs {arg_mbs}")
                                 if mid not in arg_mbs and rep_id in arg_mbs:
                                     arg_mbs[mid] = arg_mbs[rep_id]
                                     print(f"arg_mbs[{mid}] = {arg_mbs[mid]}")
@@ -1283,6 +1316,11 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             torch.cat([arg_mbs[mid][i] for mid in mb_ids], dim=0)
                             for i in range(len(arg_mbs[rep_id]))
                         )
+                        cat_shapes = [
+                            tuple(t.shape) if isinstance(t, torch.Tensor) else type(t).__name__
+                            for t in cat_args
+                        ]
+                        print(f"[{dist.get_rank()}] stage{stage_idx} rep={rep_id} cat_shapes={cat_shapes}")
                         
                         if kwarg_mbs and kwarg_mbs[rep_id]:
                             cat_kwargs: dict[str, Any] = {}
@@ -1291,6 +1329,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                                 cat_kwargs[k] = _cat_like(vals)
                         else:
                             cat_kwargs = {}
+                        print(f"[{dist.get_rank()}] stage{stage_idx} rep={rep_id} cat_kwargs_keys={list(cat_kwargs.keys())}")
 
                         # Debug: dump audio kwargs shapes for first stage (rank 0) to verify microbatch split
                         try:
