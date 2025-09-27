@@ -266,8 +266,10 @@ def main():
         
     else:
         dist.barrier()
-        dp_group = dist.new_group(ranks=this_g, backend="gloo")
         stage_mod.to(device)
+        time.sleep(shard_stage*4)
+        dist.barrier(dp_group)
+        dp_group = dist.new_group(ranks=this_g, backend="gloo")
         dist.barrier(dp_group)
         #Using DDP as the data parallelism component of our frame 
         stage_mod = DDP(
@@ -391,7 +393,7 @@ def main():
                 opt.zero_grad(set_to_none=True)
 
                # with monitor.section("sched.step"):
-                if shard_stage == 0 and rank in this_g:
+                if shard_stage == 0:
                     batch = next(data_iter)
                     inp = batch["input_ids"].to(device)
                     tgt = batch["labels"].to(device)
