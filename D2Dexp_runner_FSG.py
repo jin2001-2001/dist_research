@@ -243,6 +243,7 @@ def main():
 
     is_group,is_final_stage, shard_stage, shard_from, shard_to, prev_g, this_g, next_g, total_stages, total_batchs = plan_parser(rank, world, args.plan_loc)
 
+
     if shard_stage == 0:
         print(f"shard_to {shard_to}")
         stage_mod = PartStart(full,shard_to)
