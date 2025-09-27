@@ -255,10 +255,9 @@ def main():
         print(f"shard_to {shard_to}")
         stage_mod = PartMiddle(full, shard_from, shard_to)
 
-
+    stage_mod.to(device)
     if is_group == 0:
         dist.barrier()
-        stage_mod.to(device)
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=shard_stage,
                             num_stages=world, device=device,
                             group=dist.group.WORLD,
@@ -266,10 +265,9 @@ def main():
         
     else:
         dist.barrier()
-        stage_mod.to(device)
-        time.sleep(shard_stage*4)
+        #time.sleep(shard_stage*4)
         dp_group = dist.new_group(ranks=this_g, backend="gloo")
-        dist.barrier(dp_group)
+        #dist.barrier(dp_group)
         #Using DDP as the data parallelism component of our frame 
         stage_mod = DDP(
             stage_mod,
@@ -278,7 +276,7 @@ def main():
             find_unused_parameters=False,
             init_sync = False,
         )     
-        dist.barrier(dp_group)   
+        #dist.barrier(dp_group)   
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=shard_stage,
                                 num_stages=world, device=device,
                                 group=dist.group.WORLD,  # Used for world pp 
