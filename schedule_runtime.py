@@ -921,6 +921,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
         # count either full_backward or backward_weight together, to determine when to sync DP grads
         backward_counter: Counter[int] = Counter()
+        first_fwd = 1
         for time_step, action in enumerate(self.pipeline_order_with_comms[self.rank]):
             try:
                 deps = action.dependency
@@ -1260,6 +1261,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         stage.submod.reshard()  # type: ignore[operator]
                 
                 elif comp_type == FORWARD:
+                    if first_fwd == 1:
+                        dist.barrier()
+                        first_fwd = 0
                     print(f"[{dist.get_rank()}]: batch {current_batch+1} FORWARD microbatch {mb_field}")
                     
                     mb_ids: tuple[int, ...] = (mb_field,) if isinstance(mb_field, int) else tuple(mb_field)
