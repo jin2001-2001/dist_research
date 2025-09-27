@@ -362,7 +362,7 @@ def main():
     opt = optim.Adam(stage_mod.parameters(), lr=1e-4)            
     prev_loss = None
     
-    
+    print("ready for training")
     for epoch in range(1):
         data_iter = iter(loader)
         if rank == 0:
