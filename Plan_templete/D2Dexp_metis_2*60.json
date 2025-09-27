@@ -8,6 +8,7 @@
     
     "stage_info": [
         {"index":0, "ranks":[0,1], "shard_layer":[0,8], "batch_allocate":[2,3]},
-        {"index":1, "ranks":[2,3], "shard_layer":[8,28], "batch_allocate":[2,3]}
+        {"index":1, "ranks":[2], "shard_layer":[8,20], "batch_allocate":[5]},
+        {"index":1, "ranks":[3], "shard_layer":[20,28], "batch_allocate":[5]}
     ]
 }
