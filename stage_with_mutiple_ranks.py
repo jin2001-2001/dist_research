@@ -597,9 +597,13 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                 dist.broadcast_object_list([args], src=self.leader, group=self.dp_group)
                 composite_args = args
             else:
-                buf = [None]
-                dist.broadcast_object_list(buf, src=self.leader, group=self.dp_group)
-                composite_args = args if args else buf[0]
+                if args:
+                    # Scheduler already supplied packed inputs; trust them instead of waiting for leader broadcast
+                    composite_args = args
+                else:
+                    buf = [None]
+                    dist.broadcast_object_list(buf, src=self.leader, group=self.dp_group)
+                    composite_args = buf[0]
 
         else:
             if args:
