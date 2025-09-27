@@ -113,7 +113,7 @@ def first_peak_end_time_raw(
 
 
 
-with open("timeline_batch0_all.json", "r") as f:
+with open("./record/timeline_batch1_all.json", "r") as f:
     records = json.load(f)
 
 def smooth_series(values, window_size=5):
@@ -150,7 +150,7 @@ for record in records:
 
     if action in {"RECV_F", "RECV_B"}:
         #print(record["net_series"])
-        print(y_tag, mb_str)
+        #print(y_tag, mb_str)
         for start_record in records:
             cand_mb = start_record.get("mb_idx", -1)
             cand_action = start_record["action"]
@@ -161,7 +161,7 @@ for record in records:
                 if (t1 == 'F' and cand_stage_idx == stage_idx-1) or (t1 == 'B' and cand_stage_idx == stage_idx+1):
                     send_start = start_record["start_ns"]
                     break
-        real_end = first_peak_end_time_raw(series = record["net_series"],start_t = send_start)
+        #real_end = first_peak_end_time_raw(series = record["net_series"],start_t = send_start)
 
     if action not in {"SEND_F", "SEND_B"}:
         rows.append({
@@ -169,11 +169,13 @@ for record in records:
         "stage_idx": stage_idx,
         "rank": rank,
         "action": action,
-        "start": (send_start - base_ns) / 1e6,
-        "end": (real_end - base_ns) / 1e6,
+        "start": (send_start - base_ns) / 1e9,
+        "end": (real_end - base_ns) / 1e9,
         "mb_idx": mb_str,
         "net_series": [[s, u ,d] for s, u, d in record["net_series"] if s>send_start and s< real_end]
         })
+        if action in {"RECV_F","RECV_B"}:
+            print(stage_idx,rank,action, mb_str, (real_end-send_start)/1e9, real_end/1e9, send_start/1e9)
 
 df = pd.DataFrame(rows)
 
@@ -266,7 +268,7 @@ for record in rows:
     if record["action"].startswith("RECV") and record["net_series"]:
         y_tag = f"{record['rank']}-{record['action']}"
         y_base = highest-y_map[y_tag]
-        x_vals = [(ts - base_ns) / 1e6 for ts, _, _ in record["net_series"]]
+        x_vals = [(ts - base_ns) / 1e9 for ts, _, _ in record["net_series"]]
         #up_vals = [up for _, up, _ in record["net_series"]]
         down_vals = [down for _, _, down in record["net_series"]]
         #up_smooth = smooth_series(up_vals, window_size=5)
@@ -281,7 +283,7 @@ for record in rows:
 # Final touches
 ax.set_yticks(list(y_map.values()))
 ax.set_yticklabels(y_tags, fontsize=11)
-ax.set_xlabel("Time (ms)", fontsize=13)
+ax.set_xlabel("Time (s)", fontsize=13)
 ax.set_title("Hybrid PP Gantt Chart (Smoothed Bandwidth Overlay)", fontsize=15)
 
 # Build legend

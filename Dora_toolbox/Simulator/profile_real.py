@@ -53,6 +53,7 @@ class Device:
         total_profile_layers = 0
         path = root / f"{type}_bs{batch}.json"
         if not path.exists():
+            print(path)
             raise FileNotFoundError("Could not find the basic config file")
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)  # parses JSON -> Python objects
