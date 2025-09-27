@@ -258,6 +258,7 @@ def main():
         
     else:
         dist.barrier()
+        time.sleep(shard_stage)
         dp_group = dist.new_group(ranks=this_g, backend="gloo")
         print(f"dp组 {this_g} 初始化完成")
         stage_mod.to(device)
