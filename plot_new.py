@@ -295,4 +295,5 @@ handles += [
 ax.legend(handles=handles, bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=11)
 
 plt.tight_layout()
-plt.show()
+plt.savefig("figure/plot.png", dpi=300, bbox_inches="tight", pad_inches=0.02)
+#plt.show()
