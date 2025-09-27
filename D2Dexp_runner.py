@@ -360,7 +360,7 @@ def main():
     
     
     for epoch in range(1):
-        if rank == 0:
+        if stage.is_first:
             if args.train_steps is None:
                 steps_tensor = torch.tensor(len(loader), device=device)
             else:
