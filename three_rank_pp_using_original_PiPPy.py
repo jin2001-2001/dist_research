@@ -213,7 +213,7 @@ def main():
         return F.cross_entropy(output, target)
 
     # Number of microbatches should be <= batch_size
-    n_microbatches = min(10, batch_size)
+    n_microbatches = min(20, batch_size)
     sched = Schedule1F1B(stage, n_microbatches=n_microbatches, loss_fn=loss_fn)
     opt = optim.Adam(stage_mod.parameters(), lr=1e-4)
     prev_loss = None
