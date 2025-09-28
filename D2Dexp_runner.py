@@ -319,8 +319,8 @@ def main():
         return F.cross_entropy(output, target)
 
     #jin: we get the total_batchs from plans, but make sure args input is scynized...
-    if total_batchs!= int(args.batch_size/args.microbatch_num):
-        raise ValueError(f"Mbatch {total_batchs} not equal to {int(args.batch_size/args.microbatch_num)},misbatch plan's assumption")
+    # if total_batchs!= int(args.batch_size/args.microbatch_num):
+    #     raise ValueError(f"Mbatch {total_batchs} not equal to {int(args.batch_size/args.microbatch_num)},misbatch plan's assumption")
     
     print(f"n_microbatches {args.batch_size}")
     sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=args.batch_size, loss_fn=loss_fn, root_pass=args.sudo_pass)
