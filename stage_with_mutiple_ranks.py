@@ -633,6 +633,8 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             and composite_args
             and isinstance(composite_args[0], torch.Tensor)
         ):
+            if self.stage_index == 0 and fwd_chunk_id < 10:
+                print(f"[stage0] chunk{fwd_chunk_id} composite shape={tuple(composite_args[0].shape)}")
             mb_bs = composite_args[0].shape[0] // pack_size
             args_for_val = tuple(
                 (t[:mb_bs] if isinstance(t, torch.Tensor) else t)

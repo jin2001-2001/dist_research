@@ -977,10 +977,10 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
              
                 if comp_type == SEND_F:
                     _tc_set_rate(action.upstream)
-                    if action.upstream is not None:
-                        print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}, upstream bandwidth {action.upstream} mbps")
-                    else:
-                        print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}")
+                    # if action.upstream is not None:
+                    #     print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}, upstream bandwidth {action.upstream} mbps")
+                    # else:
+                    #     print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_F microbatch {mb_index}")
 
                     num_splits = action.split_parts or 1
                     modal_type = getattr(stage, "modal_type", None)  # 注意：是 modal_type 不是 model_type
@@ -1048,10 +1048,10 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
 
                 elif comp_type == SEND_B:
                     _tc_set_rate(action.upstream)
-                    if action.upstream is not None:
-                        print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_B microbatch {mb_index}, upstream bandwidth {action.upstream} mbps")
-                    else:
-                        print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_B microbatch {mb_index}")
+                    # if action.upstream is not None:
+                    #     print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_B microbatch {mb_index}, upstream bandwidth {action.upstream} mbps")
+                    # else:
+                    #     print(f"[{dist.get_rank()}]: batch {current_batch+1} SEND_B microbatch {mb_index}")
 
                     num_splits = action.split_parts or 1
                     modal_type = getattr(stage, "modal_type", None)  # "packing" / "text" / "audio" / "vision" / None
