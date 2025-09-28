@@ -832,6 +832,7 @@ class Schedule1F1B(PipelineScheduleSingle):
 
             # Compute
             with self._rec.record(0,0,"FORWARD", dist.get_rank(), fwd_count):
+                print(f"FORWARD arg_mbs[fwd_mb_index] {arg_mbs[fwd_mb_index]}, kwarg_mbs {kwarg_mbs[fwd_mb_index]}")
                 output = self._stage.forward_one_chunk(
                     fwd_mb_index, arg_mbs[fwd_mb_index], kwarg_mbs[fwd_mb_index]
                 )  # type: ignore[index]
@@ -890,6 +891,7 @@ class Schedule1F1B(PipelineScheduleSingle):
 
             # Now do the fwd
             with self._rec.record(0,0,"FORWARD", dist.get_rank(), fwd_count):
+                print(f"FORWARD arg_mbs[fwd_mb_index] {arg_mbs[fwd_mb_index]}, kwarg_mbs {kwarg_mbs[fwd_mb_index]}")
                 output = self._stage.forward_one_chunk(
                     fwd_mb_index, arg_mbs[fwd_mb_index], kwarg_mbs[fwd_mb_index]
                 )  # type: ignore[index]
