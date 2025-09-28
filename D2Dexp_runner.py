@@ -291,7 +291,7 @@ def main():
     import gc; gc.collect()
 
     raw = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
-    block = 256
+    block = 128
     def tok_fn(ex): 
         return tok(ex["text"], return_attention_mask=False)
     def grp_fn(ex):
