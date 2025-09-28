@@ -839,7 +839,7 @@ class Schedule1F1B(PipelineScheduleSingle):
                     ),
                     "; kwarg_shapes=",
                     {k: (v.shape if torch.is_tensor(v) else type(v))
-                    for k, v in (kwarg_mbs.get(fwd_mb_index, {}) or {}).items()}
+                    for k, v in kwarg_mbs[fwd_mb_index]}
                 )
                 output = self._stage.forward_one_chunk(
                     fwd_mb_index, arg_mbs[fwd_mb_index], kwarg_mbs[fwd_mb_index]
@@ -906,7 +906,7 @@ class Schedule1F1B(PipelineScheduleSingle):
                     ),
                     "; kwarg_shapes=",
                     {k: (v.shape if torch.is_tensor(v) else type(v))
-                    for k, v in (kwarg_mbs.get(fwd_mb_index, {}) or {}).items()}
+                    for k, v in kwarg_mbs[fwd_mb_index]}
                 )
                 output = self._stage.forward_one_chunk(
                     fwd_mb_index, arg_mbs[fwd_mb_index], kwarg_mbs[fwd_mb_index]
