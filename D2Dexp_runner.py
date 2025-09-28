@@ -323,7 +323,7 @@ def main():
     #     raise ValueError(f"Mbatch {total_batchs} not equal to {int(args.batch_size/args.microbatch_num)},misbatch plan's assumption")
     
     print(f"n_microbatches {args.batch_size}")
-    sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=args.batch_size, loss_fn=loss_fn, root_pass=args.sudo_pass)
+    sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=args.microbatch_num, loss_fn=loss_fn, root_pass=args.sudo_pass)
 
     # === Memory monitor: start & register containers (CPU/Gloo safe) ===
 
