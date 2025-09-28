@@ -200,7 +200,7 @@ def main():
     ds.set_format("torch", columns=["input_ids", "labels"])
     
     if rank == 0:
-        loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
+        loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=False, drop_last=True)
 
     def loss_fn(output, target):
         if output is None or target is None:

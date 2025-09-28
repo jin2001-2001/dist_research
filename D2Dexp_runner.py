@@ -308,7 +308,7 @@ def main():
     microbatch_num = args.microbatch_num
     
     if stage.is_first:
-        loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
+        loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=False, drop_last=True)
 
     def loss_fn(output, target):
         if output is None or target is None:
