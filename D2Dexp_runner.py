@@ -319,12 +319,12 @@ def main():
         return F.cross_entropy(output, target)
 
     # jin: we get the total_batchs from plans, but make sure args input is scynized...
-    # if total_batchs!= int(args.batch_size/args.microbatch_num):
-    #     raise ValueError(f"Mbatch {total_batchs} not equal to {int(args.batch_size/args.microbatch_num)},misbatch plan's assumption")
+    if total_batchs!= int(args.batch_size/args.microbatch_num):
+        raise ValueError(f"Mbatch {total_batchs} not equal to {int(args.batch_size/args.microbatch_num)},misbatch plan's assumption")
     
     print(f"n_microbatches {args.batch_size}")
-    #sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=args.batch_size, loss_fn=loss_fn, root_pass=args.sudo_pass)
-    sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=20, loss_fn=loss_fn, root_pass=args.sudo_pass)
+    sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=args.batch_size, loss_fn=loss_fn, root_pass=args.sudo_pass)
+    #sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=20, loss_fn=loss_fn, root_pass=args.sudo_pass)
 
     # === Memory monitor: start & register containers (CPU/Gloo safe) ===
 
@@ -357,11 +357,10 @@ def main():
     
     
     batch_info,group_info = plan_batch_parser(args.plan_loc)
-    # actions = generate_1f1b_pipeline_actions_pro(num_stages= total_stages, total_samples = args.batch_size, num_microbatches= args.microbatch_num,
-    #                                              group_info=group_info, batch_info=batch_info,
-    #                                               upstream = args.upstream)
-    #print(f"对应action {actions[dist.get_rank()]}")
-    actions = generate_1f1b_pipeline_actions(num_stages= total_stages, num_microbatches= 20, upstream= 1000)
+    actions = generate_1f1b_pipeline_actions_pro(num_stages= total_stages, total_samples = args.batch_size, num_microbatches= args.microbatch_num,
+                                                 group_info=group_info, batch_info=batch_info,
+                                                  upstream = args.upstream)
+    # actions = generate_1f1b_pipeline_actions(num_stages= total_stages, num_microbatches= 20, upstream= 1000)
     
     sched._load_actions(actions, format="compute_comms")
     
