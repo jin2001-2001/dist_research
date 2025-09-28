@@ -654,6 +654,15 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         # Compute forward
         try:
+            print(
+                    "FORWARD composite_args=", tuple(
+                        (t.shape if torch.is_tensor(t) else type(t))
+                        for t in composite_args
+                    ),
+                    "; composite_kwargs=",
+                    {k: (v.shape if torch.is_tensor(v) else type(v))
+                    for k, v in composite_kwargs}
+                )
             output = self.forward_maybe_with_nosync(*composite_args, **composite_kwargs)
 
         except Exception as e:
