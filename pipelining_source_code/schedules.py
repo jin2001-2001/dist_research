@@ -832,7 +832,15 @@ class Schedule1F1B(PipelineScheduleSingle):
 
             # Compute
             with self._rec.record(0,0,"FORWARD", dist.get_rank(), fwd_count):
-                print(f"FORWARD arg_mbs[fwd_mb_index] {arg_mbs[fwd_mb_index]}, kwarg_mbs {kwarg_mbs[fwd_mb_index]}")
+                print(
+                    "FORWARD arg_shapes=", tuple(
+                        (t.shape if torch.is_tensor(t) else type(t))
+                        for t in arg_mbs[fwd_mb_index]
+                    ),
+                    "; kwarg_shapes=",
+                    {k: (v.shape if torch.is_tensor(v) else type(v))
+                    for k, v in (kwarg_mbs.get(fwd_mb_index, {}) or {}).items()}
+                )
                 output = self._stage.forward_one_chunk(
                     fwd_mb_index, arg_mbs[fwd_mb_index], kwarg_mbs[fwd_mb_index]
                 )  # type: ignore[index]
@@ -891,7 +899,15 @@ class Schedule1F1B(PipelineScheduleSingle):
 
             # Now do the fwd
             with self._rec.record(0,0,"FORWARD", dist.get_rank(), fwd_count):
-                print(f"FORWARD arg_mbs[fwd_mb_index] {arg_mbs[fwd_mb_index]}, kwarg_mbs {kwarg_mbs[fwd_mb_index]}")
+                print(
+                    "FORWARD arg_shapes=", tuple(
+                        (t.shape if torch.is_tensor(t) else type(t))
+                        for t in arg_mbs[fwd_mb_index]
+                    ),
+                    "; kwarg_shapes=",
+                    {k: (v.shape if torch.is_tensor(v) else type(v))
+                    for k, v in (kwarg_mbs.get(fwd_mb_index, {}) or {}).items()}
+                )
                 output = self._stage.forward_one_chunk(
                     fwd_mb_index, arg_mbs[fwd_mb_index], kwarg_mbs[fwd_mb_index]
                 )  # type: ignore[index]
