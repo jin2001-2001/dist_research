@@ -623,7 +623,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                         save_root=os.path.abspath("./framework_forward"),
                         composite_args=composite_args,
                         composite_kwargs=composite_kwargs,
-                        outputs=output,
+                        outputs=None,
                         tag=f"rank{torch.distributed.get_rank() if torch.distributed.is_initialized() else 0}"
                     )
                     print(f"[forward-debug] saved to: {save_dir}")
