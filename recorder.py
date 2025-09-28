@@ -5,7 +5,6 @@ from typing import List, Tuple, Iterable, Optional
 import psutil          
 import torch.distributed as dist
 from schedule_runtime import _mark_done, _mark_done_chunk
-from temp_lock import enter, leave
 
 @dataclass
 @dataclass

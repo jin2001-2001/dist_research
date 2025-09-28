@@ -419,56 +419,6 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         self._last_comm_plan[("RECV_B", bwd_chunk_id)] = ops_per_chunk
         return ops
-
-    
-    
-    # def get_bwd_send_ops(self, bwd_chunk_id: int, rank: int, dest_rank: int) -> list[dist.P2POp]:
-    #     """
-    #     Get the gradient send ops for current stage's backward.
-    #     """
-    #     self._check_chunk_id(bwd_chunk_id)
-
-    #     if not self.has_backward or self.is_first:
-    #         return []
-
-    #     if self.grad_send_info is None:
-    #         self.grad_send_info = self._create_grad_send_info(self.args_recv_info[0])
-
-    #     ops: list[dist.P2POp] = []
-    #     grads_input = self.bwd_cache.pop(bwd_chunk_id)
-    #     self.fwd_cache.pop(bwd_chunk_id, None)
-        
-    #     for grad, grad_recv_stage in zip(grads_input, self.grad_send_info):
-    #         # 跳过 None 的梯度接收阶段（对应于整数类型的tensor）
-    #         if grad_recv_stage is None:
-    #             continue
-                
-    #         if isinstance(grad, torch.Tensor):
-    #             # 额外检查：只发送浮点类型的梯度
-    #             if not (grad.is_floating_point() or torch.is_complex(grad)):
-    #                 #print(f"[{dist.get_rank()}] Skipping non-floating grad send: dtype={grad.dtype}")
-    #                 continue
-                    
-    #             logger.debug(
-    #                 "%s Sending gradient to Stage %s: %s",
-    #                 self.log_prefix,
-    #                 grad_recv_stage,
-    #                 grad.size(),
-    #             )
-    #             peer_rank = dest_rank
-    #             peer_global_rank = (
-    #                 peer_rank
-    #                 if self.group is None
-    #                 else dist.get_global_rank(self.group, peer_rank)
-    #             )
-    #             ops.append(dist.P2POp(dist.isend, grad, peer_global_rank, self.group))
-    #         elif grad is not None:
-    #             raise RuntimeError(
-    #                 f"[{self.stage_index}] expecting a gradient tensor for an input "
-    #                 f"coming from stage {grad_recv_stage}, but got {type(grad)}"
-    #             )
-        
-    #     return ops
     
     def _execute_allreduce(self):
         """
@@ -663,6 +613,22 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                     {k: (v.shape if torch.is_tensor(v) else type(v))
                     for k, v in composite_kwargs}
                 )
+            
+            if self.is_print == 0:
+                self.is_print =1
+                from tensor_debug import dump_forward_debug
+                import os
+                try:
+                    save_dir = dump_forward_debug(
+                        save_root=os.path.abspath("./framework_forward"),
+                        composite_args=composite_args,
+                        composite_kwargs=composite_kwargs,
+                        outputs=output,
+                        tag=f"rank{torch.distributed.get_rank() if torch.distributed.is_initialized() else 0}"
+                    )
+                    print(f"[forward-debug] saved to: {save_dir}")
+                except Exception as e:
+                    print(f"[forward-debug] dump failed: {e}")
             output = self.forward_maybe_with_nosync(*composite_args, **composite_kwargs)
 
         except Exception as e:

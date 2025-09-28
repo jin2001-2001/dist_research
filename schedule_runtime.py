@@ -24,7 +24,6 @@ from pipelining_source_code.schedules import _Action, _ComputationType
 from pipelining_source_code.stage import _normalize_model_output_as_tuple
 from pipelining_source_code._utils import flatten_args
 from torch.distributed.distributed_c10d import _get_default_store
-from temp_lock import enter, leave
 import atexit, signal, threading, json
 from stage_with_mutiple_ranks import PipelineStage_with_mutiple_ranks, PipelineStage_Multimodality
 logger = logging.getLogger(__name__)
