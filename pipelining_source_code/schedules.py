@@ -832,30 +832,30 @@ class Schedule1F1B(PipelineScheduleSingle):
 
             # Compute
             with self._rec.record(0,0,"FORWARD", dist.get_rank(), fwd_count):
-                print(
-                    "FORWARD arg_shapes=", tuple(
-                        (t.shape if torch.is_tensor(t) else type(t))
-                        for t in arg_mbs[fwd_mb_index]
-                    ),
-                    "; kwarg_shapes=",
-                    {k: (v.shape if torch.is_tensor(v) else type(v))
-                    for k, v in kwarg_mbs[fwd_mb_index]}
-                )
-                if self.is_print == 0:
-                    self.is_print =1
-                    from tensor_debug import dump_forward_debug
-                    import os
-                    try:
-                        save_dir = dump_forward_debug(
-                            save_root=os.path.abspath("./framework_forward"),
-                            composite_args=arg_mbs[fwd_mb_index],
-                            composite_kwargs=kwarg_mbs[fwd_mb_index],
-                            outputs=None,
-                            tag=f"rank{torch.distributed.get_rank() if torch.distributed.is_initialized() else 0}"
-                        )
-                        print(f"[forward-debug] saved to: {save_dir}")
-                    except Exception as e:
-                        print(f"[forward-debug] dump failed: {e}")
+                # print(
+                #     "FORWARD arg_shapes=", tuple(
+                #         (t.shape if torch.is_tensor(t) else type(t))
+                #         for t in arg_mbs[fwd_mb_index]
+                #     ),
+                #     "; kwarg_shapes=",
+                #     {k: (v.shape if torch.is_tensor(v) else type(v))
+                #     for k, v in kwarg_mbs[fwd_mb_index]}
+                # )
+                # if self.is_print == 0:
+                #     self.is_print =1
+                #     from tensor_debug import dump_forward_debug
+                #     import os
+                #     try:
+                #         save_dir = dump_forward_debug(
+                #             save_root=os.path.abspath("./framework_forward"),
+                #             composite_args=arg_mbs[fwd_mb_index],
+                #             composite_kwargs=kwarg_mbs[fwd_mb_index],
+                #             outputs=None,
+                #             tag=f"rank{torch.distributed.get_rank() if torch.distributed.is_initialized() else 0}"
+                #         )
+                #         print(f"[forward-debug] saved to: {save_dir}")
+                #     except Exception as e:
+                #         print(f"[forward-debug] dump failed: {e}")
                 output = self._stage.forward_one_chunk(
                     fwd_mb_index, arg_mbs[fwd_mb_index], kwarg_mbs[fwd_mb_index]
                 )  # type: ignore[index]

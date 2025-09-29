@@ -39,11 +39,11 @@ class PartStart(nn.Module):                          # rank 0
     def forward(self, input_ids):
         bsz, seqlen = input_ids.shape
         device = input_ids.device
-        if not hasattr(self, '_debug_calls'):
-            self._debug_calls = 0
-        if self._debug_calls < 20:
-            print(f'[PartStart] call{self._debug_calls} batch={bsz} seqlen={seqlen}')
-        self._debug_calls += 1
+        # if not hasattr(self, '_debug_calls'):
+        #     self._debug_calls = 0
+        # if self._debug_calls < 20:
+        #     print(f'[PartStart] call{self._debug_calls} batch={bsz} seqlen={seqlen}')
+        # self._debug_calls += 1
         position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1).contiguous()
         hidden = self.embed_tokens(input_ids)
         position_embeddings = self.rotary_emb(hidden, position_ids)
@@ -63,9 +63,9 @@ class PartStart(nn.Module):                          # rank 0
                 use_cache=False,
             )
             hidden = layer_outputs[0]
-            if self._debug_calls <= 5:
-                elapsed = (time.perf_counter() - layer_start) * 1e3
-                print(f'[PartStart] call{self._debug_calls-1} layer{idx} {elapsed:.2f}ms')
+            # if self._debug_calls <= 5:
+            #     elapsed = (time.perf_counter() - layer_start) * 1e3
+            #     print(f'[PartStart] call{self._debug_calls-1} layer{idx} {elapsed:.2f}ms')
 
         return hidden.contiguous(), attention_mask.contiguous()
 

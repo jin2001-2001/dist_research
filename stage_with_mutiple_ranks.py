@@ -558,13 +558,11 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             if args:
                 composite_args = args
             else:
-                # 对于第一阶段，如果没有args但有kwargs，使用空args避免_retrieve_recv_activations
-                if getattr(self, 'prev_group', None) is None:  # 是第一阶段
+                if getattr(self, 'prev_group', None) is None:
                     composite_args = ()
                 else:
                     composite_args = self._retrieve_recv_activations(fwd_chunk_id)
 
-        # 对于第一阶段，如果有kwargs数据，空args是正常的
         is_first_stage = getattr(self, 'prev_group', None) is None
         has_kwargs_data = kwargs and any(v is not None for v in kwargs.values())
 
@@ -583,8 +581,8 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
             and composite_args
             and isinstance(composite_args[0], torch.Tensor)
         ):
-            if self.stage_index == 0 and fwd_chunk_id < 10:
-                print(f"[stage0] chunk{fwd_chunk_id} composite shape={tuple(composite_args[0].shape)}")
+            # if self.stage_index == 0 and fwd_chunk_id < 10:
+            #     print(f"[stage0] chunk{fwd_chunk_id} composite shape={tuple(composite_args[0].shape)}")
             mb_bs = composite_args[0].shape[0] // pack_size
             args_for_val = tuple(
                 (t[:mb_bs] if isinstance(t, torch.Tensor) else t)
@@ -604,31 +602,31 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         # Compute forward
         try:
-            print(
-                    "FORWARD composite_args=", tuple(
-                        (t.shape if torch.is_tensor(t) else type(t))
-                        for t in composite_args
-                    ),
-                    "; composite_kwargs=",
-                    {k: (v.shape if torch.is_tensor(v) else type(v))
-                    for k, v in composite_kwargs}
-                )
+            # print(
+            #         "FORWARD composite_args=", tuple(
+            #             (t.shape if torch.is_tensor(t) else type(t))
+            #             for t in composite_args
+            #         ),
+            #         "; composite_kwargs=",
+            #         {k: (v.shape if torch.is_tensor(v) else type(v))
+            #         for k, v in composite_kwargs}
+            #     )
             
-            if self.is_print == 0:
-                self.is_print =1
-                from tensor_debug import dump_forward_debug
-                import os
-                try:
-                    save_dir = dump_forward_debug(
-                        save_root=os.path.abspath("./framework_forward"),
-                        composite_args=composite_args,
-                        composite_kwargs=composite_kwargs,
-                        outputs=None,
-                        tag=f"rank{torch.distributed.get_rank() if torch.distributed.is_initialized() else 0}"
-                    )
-                    print(f"[forward-debug] saved to: {save_dir}")
-                except Exception as e:
-                    print(f"[forward-debug] dump failed: {e}")
+            # if self.is_print == 0:
+            #     self.is_print =1
+            #     from tensor_debug import dump_forward_debug
+            #     import os
+            #     try:
+            #         save_dir = dump_forward_debug(
+            #             save_root=os.path.abspath("./framework_forward"),
+            #             composite_args=composite_args,
+            #             composite_kwargs=composite_kwargs,
+            #             outputs=None,
+            #             tag=f"rank{torch.distributed.get_rank() if torch.distributed.is_initialized() else 0}"
+            #         )
+            #         print(f"[forward-debug] saved to: {save_dir}")
+            #     except Exception as e:
+            #         print(f"[forward-debug] dump failed: {e}")
             output = self.forward_maybe_with_nosync(*composite_args, **composite_kwargs)
 
         except Exception as e:
