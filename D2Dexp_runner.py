@@ -307,8 +307,13 @@ def main():
     batch_size = args.batch_size
     microbatch_num = args.microbatch_num
     
+<<<<<<< HEAD
     if stage.is_first:
         loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=False, drop_last=True)
+=======
+    #if rank == 0:
+    loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
+>>>>>>> d2d2ff77971b6422dae75c0fd21fca584eccc363
 
     def loss_fn(output, target):
         if output is None or target is None:
@@ -318,9 +323,15 @@ def main():
         target = target[:, 1:].reshape(-1)
         return F.cross_entropy(output, target)
 
+<<<<<<< HEAD
     # jin: we get the total_batchs from plans, but make sure args input is scynized...
     if total_batchs!= int(args.microbatch_num):
         raise ValueError(f"Mbatch {total_batchs} not equal to {int(args.microbatch_num)},misbatch plan's assumption")
+=======
+    #jin: we get the total_batchs from plans, but make sure args input is scynized...
+    if total_batchs!= int(args.microbatch_num):
+        raise ValueError(f"Mbatch misbatch plan's assumption")
+>>>>>>> d2d2ff77971b6422dae75c0fd21fca584eccc363
     
     print(f"n_microbatches {args.batch_size}")
     sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=args.batch_size, loss_fn=loss_fn, root_pass=args.sudo_pass)

@@ -113,7 +113,11 @@ def first_peak_end_time_raw(
 
 
 
+<<<<<<< HEAD
 with open("./record/timeline_batch0_all.json", "r") as f:
+=======
+with open("./record/timeline_batch1_all.json", "r") as f:
+>>>>>>> d2d2ff77971b6422dae75c0fd21fca584eccc363
     records = json.load(f)
 
 def smooth_series(values, window_size=5):
@@ -128,7 +132,10 @@ mbatch_size = 5
 rows = []
 stage_info = {}
 
+<<<<<<< HEAD
 max_end = 0
+=======
+>>>>>>> d2d2ff77971b6422dae75c0fd21fca584eccc363
 
 base_ns = records[0]["start_ns"]
 for record in records:
@@ -148,7 +155,10 @@ for record in records:
 
     send_start = record["start_ns"]
     real_end = record["end_ns"]
+<<<<<<< HEAD
     max_end = max(max_end, real_end)
+=======
+>>>>>>> d2d2ff77971b6422dae75c0fd21fca584eccc363
 
     if action in {"RECV_F", "RECV_B"}:
         #print(record["net_series"])
@@ -285,7 +295,11 @@ for record in rows:
 # Final touches
 ax.set_yticks(list(y_map.values()))
 ax.set_yticklabels(y_tags, fontsize=11)
+<<<<<<< HEAD
 ax.set_xlabel(f"Time (s), max:{(max_end-base_ns)/1e9 :.3f}", fontsize=13)
+=======
+ax.set_xlabel("Time (s)", fontsize=13)
+>>>>>>> d2d2ff77971b6422dae75c0fd21fca584eccc363
 ax.set_title("Hybrid PP Gantt Chart (Smoothed Bandwidth Overlay)", fontsize=15)
 
 # Build legend
