@@ -54,7 +54,8 @@ def generate_profiler_samples_nolimit(n=4,type_list = ["cpu100"]*5,MbatchSize=4,
 def test_Profilelor_DPsolver():  #a self defined examples...
     #for example, we have a 15 layer models:
     simprofile, band = generate_profiler_samples_nolimit()
-    plan1 = [{'layer':(0,14), 'device':(0,2)},{'layer':(14,28), 'device':(2,4)}]
+    #plan1 = [{'layer':(0,14), 'device':(0,2)},{'layer':(14,28), 'device':(2,4)}]
+    plan1 = [{'layer':(0,28), 'device':(0,1)}]
     #plan2 = [{'layer':(0,5), 'device':(0,1)}, {'layer':(5,15), 'device':(1,3)}]
 
     #sharded_batches = simprofile.DP_solver(plan1[0]['device'], plan1[0]['layer'], 0)
@@ -73,7 +74,7 @@ def test_DP_solver_onlytime(ks, ss):
     nmbatch = 20
     mbatchsize = 5
     layers = 28
-    test_list = ["cpu100"]*4 + ["cpu60"]*0+["cpu30"]*0
+    test_list = ["cpu100"]*0 + ["cpu60"]*0+["cpu30"]*4
     score_list = []
     plan_list = []
     allo_list = []
@@ -105,7 +106,9 @@ def test_DP_solver_onlytime(ks, ss):
 
 if __name__ == "__main__":
     #test_Profilelor_DPsolver()
-    print(test_Profilelor_DPsolver())
+    #print(test_Profilelor_DPsolver())
+
+
     meta, score_L, plan_L, allo_L,d_L, profile = test_DP_solver_onlytime(5,1)
     print(score_L, plan_L, allo_L)
     print(d_L)

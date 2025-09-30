@@ -24,7 +24,7 @@ def fit_cubic_from_series(y_series):
     if n < 2:
         raise ValueError("Need at least 2 points.")
     x = np.arange(1, n + 1, dtype=float)
-    deg = min(3, n - 1)  # degrade if not enough points
+    deg = min(5, n - 1)  # degrade if not enough points
     coefs = np.polyfit(x, y, deg=deg)  # highest power first
     return np.poly1d(coefs)
 
@@ -100,6 +100,8 @@ class Device:
         
         outforward = [onebforward]+outforward
         outbackward = [onebbackward]+outbackward
+        #print(outforward)
+        #print(outbackward)
 
         a = fit_cubic_from_series(outforward)
         b = fit_cubic_from_series(outbackward)
@@ -113,6 +115,7 @@ class Device:
     def Tlatency(self, layers, batch_size):
         Tf = self.computeprofile.batchFuncforward(batch_size)*layers/self.computeprofile.layer_base
         Tb = self.computeprofile.batchFuncbackward(batch_size)*layers/self.computeprofile.layer_base
+        #print(batch_size,Tf,Tb)
         return Tf,Tb
     
     def Econsump(self, layers, layers_size, batch_size,seq,hidden):

@@ -113,7 +113,7 @@ def first_peak_end_time_raw(
 
 
 
-with open("./record/timeline_batch0_all.json", "r") as f:
+with open("./record/r_dora_4*100_3.json", "r") as f:
     records = json.load(f)
 
 def smooth_series(values, window_size=5):
@@ -127,6 +127,8 @@ mbatch_size = 5
 # Regenerate DataFrame with separated SEND/RECV per rank
 rows = []
 stage_info = {}
+ave_time_recorder = {}
+
 
 max_end = 0
 
@@ -176,8 +178,21 @@ for record in records:
         "mb_idx": mb_str,
         "net_series": [[s, u ,d] for s, u, d in record["net_series"] if s>send_start and s< real_end]
         })
-        if action in {"RECV_F","RECV_B"}:
-            print(stage_idx,rank,action, mb_str, (real_end-send_start)/1e9, real_end/1e9, send_start/1e9)
+        #if action in {"RECV_F","RECV_B"}:
+        #    print(stage_idx,rank,action, mb_str, (real_end-send_start)/1e9, real_end/1e9, send_start/1e9)
+
+        if (stage_idx, rank, action) not in ave_time_recorder:
+            ave_time_recorder[(stage_idx, rank, action)] = []
+        ave_time_recorder[(stage_idx, rank, action)].append((real_end-send_start)/1e9)
+
+
+for k, v in ave_time_recorder.items():
+    ave_time_recorder[k] = sum(v)/len(v)
+
+
+print("(tage_idx, rank, action): average_time cost")
+for k in sorted(ave_time_recorder):
+    print(f"{k}: {ave_time_recorder[k]}")
 
 df = pd.DataFrame(rows)
 
@@ -286,6 +301,7 @@ for record in rows:
 ax.set_yticks(list(y_map.values()))
 ax.set_yticklabels(y_tags, fontsize=11)
 ax.set_xlabel(f"Time (s), max:{(max_end-base_ns)/1e9 :.3f}", fontsize=13)
+print(f"max:{(max_end-base_ns)/1e9 :.3f}")
 ax.set_title("Hybrid PP Gantt Chart (Smoothed Bandwidth Overlay)", fontsize=15)
 
 # Build legend
@@ -298,4 +314,4 @@ ax.legend(handles=handles, bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=
 
 plt.tight_layout()
 plt.savefig("figure/plot.png", dpi=300, bbox_inches="tight", pad_inches=0.02)
-plt.show()
+#plt.show()

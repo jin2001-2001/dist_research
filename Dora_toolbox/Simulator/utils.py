@@ -91,6 +91,7 @@ def plan_estimator(P, M, SLO, Profilelor, alpha):
     #SLO_latency = Profilelor.slo_T #XXXXXXX ERROR
     B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList = Profilelor.getall(P) 
     B_list = [B_ft, B_bt]
+    #print(B_list)
     #length of B list should be S.
 
     S = 2 * len(P) - 1 #including the 
