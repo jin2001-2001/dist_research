@@ -139,4 +139,4 @@ systemd-run --scope --quiet -p "CPUQuota=${CPU_QUOTA_EFFECTIVE}" -- \
     --node-rank="${NODE_RANK}" \
     --master-addr="${MASTER_ADDR}" \
     --master-port="${MASTER_PORT}" \
-    D2Dexp_runner_FSG.py "${FILTERED_ARGS[@]}"
+    D2Dexp_runner.py "${FILTERED_ARGS[@]}"
