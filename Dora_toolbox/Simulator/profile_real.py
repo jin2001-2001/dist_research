@@ -158,8 +158,8 @@ class Profilelor:
     
     def communication_solver(self, layer_slice=1): #simple version
         #T = bsize*self.hiddenSize*self.seq_len/(self.bandwidth)
-        T = self.DList[0].activation_bytes_per_sample * self.MbatchSize/1024/1024/self.bandwidth
-
+        T = self.DList[0].activation_bytes_per_sample * self.MbatchSize/1024/1024/self.bandwidth*8
+        print(T)
         return T
 
     def gathering_solver(self, device_slice, layer_slice): #simple version
@@ -173,9 +173,9 @@ class Profilelor:
         if layer_slice[1] == self.total_layers:
             accum += self.DList[0].tail_param_bytes
 
-        total_parameter_bytes = accum*D_amount *2 #plus embedding estimiation
+        total_parameter_bytes = accum*(D_amount-1)/D_amount *2 #plus embedding estimiation
 
-        T = total_parameter_bytes/1024/1024/(self.bandwidth)
+        T = total_parameter_bytes*8/1024/1024/(self.bandwidth/D_amount)
 
         return T
 
