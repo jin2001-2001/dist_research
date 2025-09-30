@@ -125,6 +125,46 @@ class PartEnd(nn.Module):                                # rank 4：25-27 + norm
         return self.lm_head(hidden)                     # logits
 
 
+class PartWhole(nn.Module):                                # rank 4：25-27 + norm + lm_head
+    def __init__(self, model):
+        super().__init__()
+        self.layers = nn.ModuleList(model.model.layers[:])
+        self.norm = model.model.norm
+        self.lm_head = model.lm_head
+        self.rotary_emb = model.model.rotary_emb
+        self.embed_tokens = model.model.embed_tokens
+
+    def forward(self, input_ids):
+
+        bsz, seqlen = input_ids.shape
+        device = input_ids.device
+        position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1).contiguous()
+        hidden = self.embed_tokens(input_ids)
+        position_embeddings = self.rotary_emb(hidden, position_ids)
+        attn_mask = torch.triu(
+            torch.full((seqlen, seqlen), float('-inf'), device=device),
+            diagonal=1
+        ).unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
+
+
+        if attn_mask.dim() == 2:
+            attn_mask = torch.triu(
+                torch.full((seqlen, seqlen), float('-inf'), device=device), 1
+            ).unsqueeze(0).unsqueeze(0).expand(bsz, 1, -1, -1).contiguous()
+        elif not attn_mask.is_contiguous():
+            attn_mask = attn_mask.contiguous()
+
+        for layer in self.layers:
+            hidden = layer(hidden_states=hidden,
+                           attention_mask=attn_mask,
+                           position_ids=position_ids,
+                           position_embeddings=position_embeddings,
+                           output_attentions=False,
+                           use_cache=False)[0]
+
+        hidden = self.norm(hidden)
+        return self.lm_head(hidden)                     # logits
+
 def load_config(cfg:str) -> Dict[str, Any]:
     """Accepts a dict or a JSON file path."""
     if isinstance(cfg, str):
@@ -239,7 +279,10 @@ def main():
 
     if shard_stage == 0:
         print(f"shard_to {shard_to}")
-        stage_mod = PartStart(full,shard_to)
+        if total_stages != 1:
+            stage_mod = PartStart(full,shard_to)
+        else:
+            stage_mod = PartWhole(full)
     elif is_final_stage == 1:
         print(f"shard_from {shard_from}")
         stage_mod = PartEnd(full,shard_from)
