@@ -54,13 +54,19 @@ def generate_profiler_samples_nolimit(n=4,type_list = ["cpu100"]*5,MbatchSize=4,
 def test_Profilelor_DPsolver():  #a self defined examples...
     #for example, we have a 15 layer models:
     simprofile, band = generate_profiler_samples_nolimit()
-    plan1 = [{'layer':(0,15), 'device':(0,3)}]
-    plan2 = [{'layer':(0,5), 'device':(0,1)}, {'layer':(5,15), 'device':(1,3)}]
+    plan1 = [{'layer':(0,14), 'device':(0,2)},{'layer':(14,28), 'device':(2,4)}]
+    #plan2 = [{'layer':(0,5), 'device':(0,1)}, {'layer':(5,15), 'device':(1,3)}]
 
-    sharded_batches = simprofile.DP_solver(plan1[0]['device'], plan1[0]['layer'], 0)
-    print(sharded_batches) ##pass!##
-    B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList = simprofile.getall(plan2)
-    print(B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList)
+    #sharded_batches = simprofile.DP_solver(plan1[0]['device'], plan1[0]['layer'], 0)
+    simprofile, band = generate_profiler_samples_nolimit(
+            n = 4,
+            type_list = ["cpu100"]*4,  
+            MbatchSize=5)
+    #print(sharded_batches) ##pass!##
+    #B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList = simprofile.getall(plan2)
+    #print(B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList)
+    T = utils.plan_estimator(plan1, 20, 0, simprofile, 1)
+    return T
 
 def test_DP_solver_onlytime(ks, ss):
     ndevice = 4
@@ -82,7 +88,7 @@ def test_DP_solver_onlytime(ks, ss):
         #print("Communication" ,simprofile.communication_solver(10))
         #print("computation:", simprofile.DList[0].computeprofile.batchFuncforward(5), simprofile.DList[0].computeprofile.batchFuncbackward(5))
 
-        result = dynamic_programming_planning(L = layers, N= ndevice , M = nmbatch, k = ks, s = 1,
+        result = dynamic_programming_planning(L = layers, N= ndevice , M = nmbatch, k = ks, s = ss,
                                           Profilelor = simprofile, 
                                           alpha = 1, SLO = 0)
         topK.merge_with_device_type(result, device_order)
@@ -99,6 +105,7 @@ def test_DP_solver_onlytime(ks, ss):
 
 if __name__ == "__main__":
     #test_Profilelor_DPsolver()
+    print(test_Profilelor_DPsolver())
     meta, score_L, plan_L, allo_L,d_L, profile = test_DP_solver_onlytime(5,1)
     print(score_L, plan_L, allo_L)
     print(d_L)

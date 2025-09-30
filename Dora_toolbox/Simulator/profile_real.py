@@ -159,7 +159,7 @@ class Profilelor:
     def communication_solver(self, layer_slice=1): #simple version
         #T = bsize*self.hiddenSize*self.seq_len/(self.bandwidth)
         T = self.DList[0].activation_bytes_per_sample * self.MbatchSize/1024/1024/self.bandwidth*8
-        print(T)
+        #print(T)
         return T
 
     def gathering_solver(self, device_slice, layer_slice): #simple version

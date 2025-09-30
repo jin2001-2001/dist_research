@@ -7,7 +7,7 @@
     "device_order": ["cpu100", "cpu100", "cpu100", "cpu100"],
     
     "stage_info": [
-        {"index":0, "ranks":[0], "shard_layer":[0,12], "batch_allocate":[5]},
-        {"index":1, "ranks":[1,2], "shard_layer":[12,28], "batch_allocate":[3,2]}
+        {"index":0, "ranks":[0], "shard_layer":[0,26], "batch_allocate":[5]},
+        {"index":1, "ranks":[1,2], "shard_layer":[26,28], "batch_allocate":[3,2]}
     ]
 }

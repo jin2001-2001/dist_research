@@ -1,13 +1,12 @@
 {
     "total_layer": 28,
     "total_devices": 4,
-    "total_stages": 2,
+    "total_stages": 1,
     "total_batchs": 20,
-    "estimated":115.7,
+    "estimated":158.2,
     "device_order": ["cpu100", "cpu100", "cpu100", "cpu100"],
     
     "stage_info": [
-        {"index":0, "ranks":[0,1], "shard_layer":[0,14], "batch_allocate":[3,2]},
-        {"index":1, "ranks":[2,3], "shard_layer":[14,28], "batch_allocate":[3,2]}
+        {"index":0, "ranks":[0], "shard_layer":[0,28], "batch_allocate":[5]}
     ]
 }
