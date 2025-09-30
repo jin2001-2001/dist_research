@@ -39,11 +39,6 @@ class PartStart(nn.Module):                          # rank 0
     def forward(self, input_ids):
         bsz, seqlen = input_ids.shape
         device = input_ids.device
-        # if not hasattr(self, '_debug_calls'):
-        #     self._debug_calls = 0
-        # if self._debug_calls < 20:
-        #     print(f'[PartStart] call{self._debug_calls} batch={bsz} seqlen={seqlen}')
-        # self._debug_calls += 1
         position_ids = torch.arange(seqlen, device=device).unsqueeze(0).expand(bsz, -1).contiguous()
         hidden = self.embed_tokens(input_ids)
         position_embeddings = self.rotary_emb(hidden, position_ids)
@@ -63,9 +58,6 @@ class PartStart(nn.Module):                          # rank 0
                 use_cache=False,
             )
             hidden = layer_outputs[0]
-            # if self._debug_calls <= 5:
-            #     elapsed = (time.perf_counter() - layer_start) * 1e3
-            #     print(f'[PartStart] call{self._debug_calls-1} layer{idx} {elapsed:.2f}ms')
 
         return hidden.contiguous(), attention_mask.contiguous()
 
@@ -307,13 +299,8 @@ def main():
     batch_size = args.batch_size
     microbatch_num = args.microbatch_num
     
-<<<<<<< HEAD
     if stage.is_first:
         loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=False, drop_last=True)
-=======
-    #if rank == 0:
-    loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=True)
->>>>>>> d2d2ff77971b6422dae75c0fd21fca584eccc363
 
     def loss_fn(output, target):
         if output is None or target is None:
@@ -323,19 +310,14 @@ def main():
         target = target[:, 1:].reshape(-1)
         return F.cross_entropy(output, target)
 
-<<<<<<< HEAD
+
     # jin: we get the total_batchs from plans, but make sure args input is scynized...
     if total_batchs!= int(args.microbatch_num):
         raise ValueError(f"Mbatch {total_batchs} not equal to {int(args.microbatch_num)},misbatch plan's assumption")
-=======
-    #jin: we get the total_batchs from plans, but make sure args input is scynized...
-    if total_batchs!= int(args.microbatch_num):
-        raise ValueError(f"Mbatch misbatch plan's assumption")
->>>>>>> d2d2ff77971b6422dae75c0fd21fca584eccc363
-    
+
+
     print(f"n_microbatches {args.batch_size}")
     sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=args.batch_size, loss_fn=loss_fn, root_pass=args.sudo_pass)
-    #sched = PipelineScheduleRuntimeWithDirection([stage], n_microbatches=20, loss_fn=loss_fn, root_pass=args.sudo_pass)
 
     # === Memory monitor: start & register containers (CPU/Gloo safe) ===
 
@@ -371,7 +353,7 @@ def main():
     actions = generate_1f1b_pipeline_actions_pro(num_stages= total_stages, total_samples = args.batch_size, num_microbatches= args.microbatch_num,
                                                  group_info=group_info, batch_info=batch_info,
                                                   upstream = args.upstream)
-    # actions = generate_1f1b_pipeline_actions(num_stages= total_stages, num_microbatches= 20, upstream= 1000)
+    print(f"对应action {actions[dist.get_rank()]}")
     
     sched._load_actions(actions, format="compute_comms")
     
