@@ -272,6 +272,11 @@ def main():
             process_group=dp_group, # Used for local dp
             find_unused_parameters=False,
             init_sync = False,
+
+            bucket_cap_mb=64,
+            broadcast_buffers=False,
+            gradient_as_bucket_view=True,
+            static_graph=True
         )        
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=shard_stage,
                                 num_stages=world, device=device,
