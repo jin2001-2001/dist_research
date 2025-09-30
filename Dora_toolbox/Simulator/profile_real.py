@@ -46,6 +46,9 @@ class Device:
         self.activation_bytes_per_sample = 0
         self.activation_bytes_seq_len = 0
         self.layer_param_bytes = 0
+        self.embedding_param_bytes = 0
+        self.tail_param_bytes = 0
+        #self.total_layers = 0
         #self.total_parameters_bytes = 0
 
         root = Path(tprofile_loc)
@@ -62,6 +65,8 @@ class Device:
             self.activation_bytes_seq_len = data["seq_len"]
             self.activation_bytes_per_sample = data["layers"][0]["activation_bytes_per_sample"]
             self.layer_param_bytes = data["layers"][0]["param_bytes"]
+            self.embedding_param_bytes = data["embed_param_bytes"]
+            self.tail_param_bytes = data["tail_param_bytes"]
             #self.total_parameters_bytes = data["total_parameters_bytes"]
             total_profile_layers = len(data["layers"])
             for i in range(total_profile_layers):
@@ -83,7 +88,7 @@ class Device:
                 data = json.load(f)
                 forward = 0
                 backward = 0
-                total_profile_layers = len(data["layers"])
+                self.total_layers = total_profile_layers
                 for i in range(total_profile_layers):
                     forward+=data["layers"][i]["forward_time_s"]
                     backward+=data["layers"][i]["backward_time_s"]
@@ -130,13 +135,14 @@ class Profilelor:
     """
     Maintains the k smallest (score, plan) pairs.
     """
-    def __init__(self,DList,hiddenSize, seq, MbatchSize, Bandwidth):
+    def __init__(self,DList,hiddenSize, seq, total_layer, MbatchSize, Bandwidth):
         #self.deviceN = damount
         self.DList = DList
         self.hiddenSize = hiddenSize
         self.seq_len = seq
         self.MbatchSize = MbatchSize
         self.bandwidth = Bandwidth
+        self.total_layers = total_layer
 
 
     def batch_checker(self, device_slice, layer_slice, inverseStage):
@@ -159,8 +165,17 @@ class Profilelor:
     def gathering_solver(self, device_slice, layer_slice): #simple version
         D_amount = device_slice[1]-device_slice[0]
         l_amount = layer_slice[1]-layer_slice[0]
-        total_parameter = l_amount*self.DList[0].layer_param_bytes*D_amount *1.76*2 #plus embedding estimiation
-        T = total_parameter/1024/1024/(self.bandwidth)
+
+        accum= l_amount*self.DList[0].layer_param_bytes
+
+        if layer_slice[0] == 0:
+            accum += self.DList[0].embedding_param_bytes
+        if layer_slice[1] == self.total_layers:
+            accum += self.DList[0].tail_param_bytes
+
+        total_parameter_bytes = accum*D_amount *2 #plus embedding estimiation
+
+        T = total_parameter_bytes/1024/1024/(self.bandwidth)
 
         return T
 

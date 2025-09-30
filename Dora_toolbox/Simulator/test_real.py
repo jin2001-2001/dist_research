@@ -47,8 +47,8 @@ def generate_profiler_samples_nolimit(n=4,type_list = ["cpu100"]*5,MbatchSize=4,
     dList = []
     for i in range(len(type_list)):
         # type, tprofile_loc, eprofile_loc = 0, Mem = 0, Energy = 1000)
-        dList.append(Device(type_list[i], profilehome, Mem = 55*1024))#can hold 30 layers model, big enough
-    simprofile = Profilelor(dList,hiddenSize=1024, seq=256, MbatchSize = MbatchSize, Bandwidth = band)
+        dList.append(Device(type_list[i], profilehome, Mem = 55*1024))
+    simprofile = Profilelor(dList,hiddenSize=1024, seq=256, total_layer= 28 ,MbatchSize = MbatchSize, Bandwidth = band)
     return simprofile, band
 
 def test_Profilelor_DPsolver():  #a self defined examples...
@@ -67,7 +67,7 @@ def test_DP_solver_onlytime(ks, ss):
     nmbatch = 20
     mbatchsize = 5
     layers = 28
-    test_list = ["cpu100"]*1 + ["cpu60"]*2+["cpu30"]*1
+    test_list = ["cpu100"]*4 + ["cpu60"]*0+["cpu30"]*0
     score_list = []
     plan_list = []
     allo_list = []
