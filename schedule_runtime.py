@@ -1373,7 +1373,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     print("到这里")
                     with self._rec.record(current_batch+1,action_id,"FORWARD", stage_idx, mb_ids):
                         output = stage.forward_one_chunk(rep_id, cat_args, cat_kwargs, len(mb_ids))
-
+                    print("结算")
                     big_key = (stage_idx, rep_id)
                     big_entry = stage.fwd_cache.get(rep_id)
                     assert big_entry is not None, f"missing big forward entry for stage {stage_idx}, mb {rep_id}"
