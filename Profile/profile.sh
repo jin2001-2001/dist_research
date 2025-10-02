@@ -5,8 +5,8 @@ set -euo pipefail
 command -v systemd-run >/dev/null || { echo "systemd-run not found"; exit 1; }
 
 # -------- Config --------
-BATCH_SIZES=(1 2 3 4 5)
-UTILS=(60 30)   # target % of the whole machine
+BATCH_SIZES=(1 2 3 4 5 6 7 8)
+UTILS=(100 70 60 50 40 30)   # target % of the whole machine
 # ------------------------
 
 CORES=$(nproc --all)
