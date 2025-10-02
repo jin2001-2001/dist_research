@@ -1237,27 +1237,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                             current_batch=current_batch, stage_idx=stage_idx, mb_index=mb_index,
                             action_id=action_id, modality=None
                         )
-
-
-
-
-
-                elif comp_type == UNSHARD:
-                    if stage_uses_fsdp:
-                        assert (
-                            stage_idx not in unsharded_stages
-                            and stage_idx not in unshard_ops
-                        ), f"Unsharding the same {stage_idx=} twice"
-                        unshard_ops[stage_idx] = stage.submod.unshard(async_op=True)  # type: ignore[operator]
-                elif comp_type == RESHARD:
-                    if stage_uses_fsdp:
-                        assert stage_idx in unsharded_stages, (
-                            f"Resharding {stage_idx=} without unsharding"
-                        )
-                        assert stage_idx not in unshard_ops, (
-                            f"Resharding {stage_idx=} before finishing unshard"
-                        )
-                        stage.submod.reshard()  # type: ignore[operator]
                 
                 elif comp_type == FORWARD:
                     print(f"[{dist.get_rank()}]: batch {current_batch+1} FORWARD microbatch {mb_field}")
@@ -1272,7 +1251,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         _assert_unsharded(stage_idx)
 
                     if stage.is_first:
-                        print("这是第一个")
                         if len(mb_ids) > 1:
                             for mid in mb_ids:
                                 if mid not in arg_mbs and rep_id in arg_mbs:
@@ -1370,10 +1348,9 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         for mid in mb_ids:
                             self._mb_to_group[(stage_idx, mid)] = g_id
 
-                    print("到这里")
                     with self._rec.record(current_batch+1,action_id,"FORWARD", stage_idx, mb_ids):
                         output = stage.forward_one_chunk(rep_id, cat_args, cat_kwargs, len(mb_ids))
-                    print("结算")
+
                     big_key = (stage_idx, rep_id)
                     big_entry = stage.fwd_cache.get(rep_id)
                     assert big_entry is not None, f"missing big forward entry for stage {stage_idx}, mb {rep_id}"
@@ -1397,7 +1374,6 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     flat_args = flatten_args(cat_args)
                     flat_kwargs = flatten_args(cat_kwargs)
                     
-                    print("哈哈")
                     for idx, mid in enumerate(mb_ids):
                         if len(mb_ids) > 1:
                             mb_inputs = []
@@ -1471,7 +1447,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     for mid in mb_ids:
                         if mid in stage.fwd_cache:
                             outputs, inputs = stage.fwd_cache[mid]
-                    print("结束")
+                    
 
 
                 elif comp_type == FULL_BACKWARD:

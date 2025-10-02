@@ -575,7 +575,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
 
         composite_kwargs = kwargs or {}
-
+        print("到这里")
         if (
             pack_size > 1
             and composite_args
@@ -599,6 +599,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         self._validate_fwd_input(args_for_val, kwargs_for_val)
 
         prep_done = time.perf_counter()
+        print("到这里1")
 
         # Compute forward
         try:
