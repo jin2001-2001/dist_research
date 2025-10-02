@@ -1,0 +1,12 @@
+{
+    "total_layer": 28,
+    "total_devices": 4,
+    "total_stages": 1,
+    "total_batchs": 20,
+    "estimated":25,
+    "device_order": ["cpu60", "cpu60", "cpu60", "cpu60"],
+    
+    "stage_info": [
+        {"index":0, "ranks":[0,1,2,3], "shard_layer":[0,28], "batch_allocate":[2,1,1,1]}
+    ]
+}

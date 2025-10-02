@@ -39,6 +39,7 @@ class TaskStatus_graph(TaskStatus_prime):
 
 def suballocator_shift(T, R, a ,UnitR):
     totalR = T*R # T should be integer
+    #print(T,R,a,UnitR)
     totalunit = math.ceil(totalR /UnitR) # get necessary time unit
     pertaskunit = math.ceil(totalunit/a) # get necessart per sub task
     totalunit = pertaskunit*a

@@ -38,7 +38,7 @@ class ComputProfile:
     batchFuncbackward: object
 
 class Device:
-    def __init__(self, type, tprofile_loc, eprofile_loc = 0, Mem = 0, Energy = 1000):
+    def __init__(self, type, tprofile_loc, actual_layers, eprofile_loc = 0, Mem = 0, Energy = 1000):
         self.type = type
         self.Eability = 0
         self.Mconstraint = Mem  # unit: MB
@@ -48,7 +48,7 @@ class Device:
         self.layer_param_bytes = 0
         self.embedding_param_bytes = 0
         self.tail_param_bytes = 0
-        #self.total_layers = 0
+        self.total_layers = actual_layers
         #self.total_parameters_bytes = 0
 
         root = Path(tprofile_loc)
@@ -62,6 +62,10 @@ class Device:
             data = json.load(f)  # parses JSON -> Python objects
             forward = 0
             backward = 0
+            tailforward = data["head&tail"][1]["forward_time_s"]
+            tailbackward = data["head&tail"][1]["backward_time_s"]
+            headforward = data["head&tail"][0]["forward_time_s"]
+            headbackward = data["head&tail"][0]["backward_time_s"]
             self.activation_bytes_seq_len = data["seq_len"]
             self.activation_bytes_per_sample = data["layers"][0]["activation_bytes_per_sample"]
             self.layer_param_bytes = data["layers"][0]["param_bytes"]
@@ -80,6 +84,10 @@ class Device:
         batch = 2
         outforward = []
         outbackward = []
+        headoutforward = []
+        headoutbackward = []
+        tailoutforward = []
+        tailoutbackward = []
         while True:
             path = root / f"{type}_bs{batch}.json"
             if not path.exists():
@@ -96,25 +104,56 @@ class Device:
                 backward=backward/total_profile_layers
                 outforward.append(forward)
                 outbackward.append(backward)
+
+                tf = data["head&tail"][1]["forward_time_s"]
+                tb = data["head&tail"][1]["backward_time_s"]
+                hf = data["head&tail"][0]["forward_time_s"]
+                hb = data["head&tail"][0]["backward_time_s"]
+                headoutforward.append(hf)
+                headoutbackward.append(hb)
+                tailoutforward.append(tf)
+                tailoutbackward.append(tb)
             batch += 1
         
         outforward = [onebforward]+outforward
         outbackward = [onebbackward]+outbackward
+        headoutforward = [headforward]+headoutforward
+        headoutbackward = [headbackward]+headoutbackward
+        tailoutforward = [tailforward]+tailoutforward
+        tailoutbackward = [tailbackward]+tailoutbackward
         #print(outforward)
         #print(outbackward)
 
         a = fit_cubic_from_series(outforward)
         b = fit_cubic_from_series(outbackward)
-        self.computeprofile = ComputProfile(forward,backward,1,1,a,b)
+        self.computeprofile = ComputProfile(forward,backward,
+                                            1,1,a,b)
+
+        a = fit_cubic_from_series(headoutforward)
+        b = fit_cubic_from_series(headoutbackward)
+        self.computeprofile_h = ComputProfile(headforward,headbackward,
+                                            1,0,a,b)
+        a = fit_cubic_from_series(tailoutforward)
+        b = fit_cubic_from_series(tailoutbackward)
+        self.computeprofile_t = ComputProfile(tailforward,tailbackward,
+                                            1,0,a,b)
 
 
 
 
 
-
-    def Tlatency(self, layers, batch_size):
+    def Tlatency(self, layer_slice, batch_size):
+        layers = layer_slice[1]-layer_slice[0]
         Tf = self.computeprofile.batchFuncforward(batch_size)*layers/self.computeprofile.layer_base
         Tb = self.computeprofile.batchFuncbackward(batch_size)*layers/self.computeprofile.layer_base
+        if layer_slice[0] == 0:
+            Tf+=self.computeprofile_h.batchFuncforward(batch_size)
+            Tb+=self.computeprofile_h.batchFuncbackward(batch_size)
+        if layer_slice[1] == self.total_layers:
+            Tf+=self.computeprofile_t.batchFuncforward(batch_size)
+            Tb+=self.computeprofile_t.batchFuncbackward(batch_size)
+
+
         #print(batch_size,Tf,Tb)
         return Tf,Tb
     
@@ -126,7 +165,7 @@ class Device:
         batch_act_storage = 7*seq*hidden*4 *layers *(inversestage*2+1)   #no batch, we need calculate batches...#4 is float32 needs 4 bytes
         parameter_storage = self.layer_param_bytes * layers *4 #(2 for opt, 1 for gradient)
         
-        max1 = self.Mconstraint*1e6/(batch_act_storage+parameter_storage)
+        max1 = self.Mconstraint*1024*1024/(batch_act_storage+parameter_storage)
         max2 = 1024*512
         #max2 = self.Econstraint * self.Tability/(self.Eability*(layers**2)*(layers_size**2))/(seq*hidden)
         #print(max1, max2)
@@ -162,7 +201,7 @@ class Profilelor:
     def communication_solver(self, layer_slice=1): #simple version
         #T = bsize*self.hiddenSize*self.seq_len/(self.bandwidth)
         T = self.DList[0].activation_bytes_per_sample * self.MbatchSize/1e6/self.bandwidth*8
-        print(T)
+        #print(T)
         return T
 
     def gathering_solver(self, device_slice, layer_slice): #simple version
@@ -252,7 +291,7 @@ class Profilelor:
                 for i in range(device_slice[0],device_slice[1]):
                     d = self.DList[i]
                     b = batch_shard[index]
-                    lf,lb = d.Tlatency(layers, b)
+                    lf,lb = d.Tlatency(layer_slice, b)
                     total_energy+=d.Econsump(layers, self.DList[0].layer_param_bytes, b,self.seq_len,self.hiddenSize)
                     if lf>latencyf:
                         latencyf = lf

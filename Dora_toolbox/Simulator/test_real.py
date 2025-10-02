@@ -43,27 +43,27 @@ def test_heap_func():
     assert 1 == 1
 
 #For Qwen3:
-def generate_profiler_samples_nolimit(n=4,type_list = ["cpu100"]*5,MbatchSize=4, profilehome="../../Profile", band = 100):
+def generate_profiler_samples_nolimit(n=4,layers = 28, type_list = ["cpu100"]*5,MbatchSize=4, profilehome="../../Profile", band = 100):
     dList = []
     for i in range(len(type_list)):
         # type, tprofile_loc, eprofile_loc = 0, Mem = 0, Energy = 1000)
-        dList.append(Device(type_list[i], profilehome, Mem = 55*1024))
+        dList.append(Device(type_list[i], profilehome, layers, Mem = 55*1024))
     simprofile = Profilelor(dList,hiddenSize=1024, seq=256, total_layer= 28 ,MbatchSize = MbatchSize, Bandwidth = band)
     return simprofile, band
 
 def test_Profilelor_DPsolver():  #a self defined examples...
     #for example, we have a 15 layer models:
     simprofile, band = generate_profiler_samples_nolimit()
-    plan1 = [{'layer':(0,26), 'device':(0,1)},{'layer':(26,28), 'device':(1,3)}]
+    #plan1 = [{'layer':(0,26), 'device':(0,1)},{'layer':(26,28), 'device':(1,3)}]
     #plan1 = [{'layer':(0,28), 'device':(0,1)}]
     plan1 = [{'layer':(0,10), 'device':(0,1)},{'layer':(10,19), 'device':(1,2)},{'layer':(19,28), 'device':(2,3)}]
-
+    #plan1 = [{'layer':(0,14), 'device':(0,1)},{'layer':(14,15), 'device':(1,3)},{'layer':(15,28), 'device':(3,4)}]
     #plan2 = [{'layer':(0,5), 'device':(0,1)}, {'layer':(5,15), 'device':(1,3)}]
 
     #sharded_batches = simprofile.DP_solver(plan1[0]['device'], plan1[0]['layer'], 0)
     simprofile, band = generate_profiler_samples_nolimit(
             n = 4,
-            type_list = ["cpu60"]*4 +["cpu30"]*0 + ["cpu100"]*0,  
+            type_list = ["cpu60"]*0 +["cpu30"]*3 + ["cpu100"]*0,  
             MbatchSize=5)
     #print(sharded_batches) ##pass!##
     B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList = simprofile.getall(plan1)
@@ -77,7 +77,7 @@ def test_DP_solver_onlytime(ks, ss):
     nmbatch = 20
     mbatchsize = 5
     layers = 28
-    test_list = ["cpu100"]*0 + ["cpu60"]*2+["cpu30"]*2
+    test_list = ["CPU100"]*4 + ["CPU100"]*0+["CPU100"]*0
     score_list = []
     plan_list = []
     allo_list = []
@@ -86,7 +86,7 @@ def test_DP_solver_onlytime(ks, ss):
 
     for device_order in unique_permutations(test_list):
         simprofile, band = generate_profiler_samples_nolimit(
-            n = ndevice,
+            n = ndevice, layers = layers,
             type_list = device_order,  
             MbatchSize=mbatchsize)
         #print("Communication" ,simprofile.communication_solver(10))
@@ -112,6 +112,6 @@ if __name__ == "__main__":
     print(test_Profilelor_DPsolver())
 
 
-    #meta, score_L, plan_L, allo_L,d_L, profile = test_DP_solver_onlytime(5,1)
-    #print(score_L, plan_L, allo_L)
-    #print(d_L)
+    meta, score_L, plan_L, allo_L,d_L, profile = test_DP_solver_onlytime(5,1)
+    print(score_L, plan_L, allo_L)
+    print(d_L)
