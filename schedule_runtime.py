@@ -1397,6 +1397,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     flat_args = flatten_args(cat_args)
                     flat_kwargs = flatten_args(cat_kwargs)
                     
+                    print("哈哈")
                     for idx, mid in enumerate(mb_ids):
                         if len(mb_ids) > 1:
                             mb_inputs = []
@@ -1470,6 +1471,7 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                     for mid in mb_ids:
                         if mid in stage.fwd_cache:
                             outputs, inputs = stage.fwd_cache[mid]
+                    print("结束")
 
 
                 elif comp_type == FULL_BACKWARD:
