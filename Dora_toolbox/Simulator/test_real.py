@@ -54,27 +54,30 @@ def generate_profiler_samples_nolimit(n=4,type_list = ["cpu100"]*5,MbatchSize=4,
 def test_Profilelor_DPsolver():  #a self defined examples...
     #for example, we have a 15 layer models:
     simprofile, band = generate_profiler_samples_nolimit()
-    #plan1 = [{'layer':(0,14), 'device':(0,2)},{'layer':(14,28), 'device':(2,4)}]
-    plan1 = [{'layer':(0,28), 'device':(0,1)}]
+    plan1 = [{'layer':(0,26), 'device':(0,1)},{'layer':(26,28), 'device':(1,3)}]
+    #plan1 = [{'layer':(0,28), 'device':(0,1)}]
+    #plan1 = [{'layer':(0,14), 'device':(0,1)},{'layer':(14,15), 'device':(1,3)},{'layer':(15,28), 'device':(3,4)}]
+
     #plan2 = [{'layer':(0,5), 'device':(0,1)}, {'layer':(5,15), 'device':(1,3)}]
 
     #sharded_batches = simprofile.DP_solver(plan1[0]['device'], plan1[0]['layer'], 0)
     simprofile, band = generate_profiler_samples_nolimit(
             n = 4,
-            type_list = ["cpu100"]*4,  
+            type_list = ["cpu60"]*0 +["cpu30"]*0 + ["cpu100"]*4,  
             MbatchSize=5)
     #print(sharded_batches) ##pass!##
-    #B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList = simprofile.getall(plan2)
+    B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList = simprofile.getall(plan1)
     #print(B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList)
+
     T = utils.plan_estimator(plan1, 20, 0, simprofile, 1)
-    return T
+    return T, B_ft, B_bt, T_gathering
 
 def test_DP_solver_onlytime(ks, ss):
     ndevice = 4
     nmbatch = 20
     mbatchsize = 5
     layers = 28
-    test_list = ["cpu100"]*0 + ["cpu60"]*0+["cpu30"]*4
+    test_list = ["cpu100"]*0 + ["cpu60"]*2+["cpu30"]*2
     score_list = []
     plan_list = []
     allo_list = []
@@ -106,9 +109,9 @@ def test_DP_solver_onlytime(ks, ss):
 
 if __name__ == "__main__":
     #test_Profilelor_DPsolver()
-    #print(test_Profilelor_DPsolver())
+    print(test_Profilelor_DPsolver())
 
 
-    meta, score_L, plan_L, allo_L,d_L, profile = test_DP_solver_onlytime(5,1)
-    print(score_L, plan_L, allo_L)
-    print(d_L)
+    #meta, score_L, plan_L, allo_L,d_L, profile = test_DP_solver_onlytime(5,1)
+    #print(score_L, plan_L, allo_L)
+    #print(d_L)

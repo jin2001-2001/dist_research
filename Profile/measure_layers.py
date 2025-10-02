@@ -32,6 +32,13 @@ import torch
 import torch.nn as nn
 import psutil
 
+def _get_attr(obj, path: str):
+    cur = obj
+    for p in path.split("."):
+        if not hasattr(cur, p): return None
+        cur = getattr(cur, p)
+    return cur
+
 def find_blocks(model: nn.Module) -> List[nn.Module]:
     # Try common layouts
     for attr in ["model", "transformer", "gpt_neox", "backbone"]:
@@ -46,6 +53,30 @@ def find_blocks(model: nn.Module) -> List[nn.Module]:
         if name.endswith("layers") and isinstance(mod, (list, nn.ModuleList)):
             return list(mod)
     raise RuntimeError("Cannot find transformer blocks list on this model. Inspect model structure.")
+
+def find_special_modules(model: nn.Module) -> Dict[str, nn.Module]:
+    """
+    Return dict with keys: 'embed', 'final_norm', 'lm_head' when found.
+    Covers common HF naming across LLaMA/Qwen/GPT-2/BERT-style models.
+    """
+    candidates = {
+        "embed": [
+            "model.embed_tokens", "transformer.wte", "embed_tokens",
+            "tok_embeddings", "embeddings.word_embeddings"  # BERT
+        ],
+        "lm_head": [
+            "lm_head", "cls", "language_model_head", "lm_head.linear"
+        ],
+    }
+    found = {}
+    for name, paths in candidates.items():
+        for p in paths:
+            m = _get_attr(model, p)
+            if isinstance(m, nn.Module):
+                found[name] = m
+                break
+    return found
+
 
 def param_bytes(module: nn.Module) -> int:
     return sum(p.numel() * p.element_size() for p in module.parameters(recurse=True))
@@ -155,11 +186,18 @@ def main():
 
     # Locate blocks
     blocks = find_blocks(model)
-    L = len(blocks)
+    HeadAndTail = find_special_modules(model)
 
+
+    L = len(blocks)
+    LL = len(HeadAndTail)
+    assert LL == 2
     # Prepare containers
     fwd_times = [0.0 for _ in range(L)]
     bwd_times = [0.0 for _ in range(L)]
+    fwd_times_ht = [0.0 for _ in range(LL)]
+    bwd_times_ht = [0.0 for _ in range(LL)]
+
     act_bytes_per_sample = [0 for _ in range(L)]
     pbytes = [0 for _ in range(L)]
 
@@ -185,7 +223,11 @@ def main():
     # Forward/backward hooks to time per block and record output bytes
     fwd_start = [0.0 for _ in range(L)]
     bwd_start = [0.0 for _ in range(L)]
+    fwd_start_ht = [0.0 for _ in range(LL)]
+    bwd_start_ht = [0.0 for _ in range(LL)]
 
+#########
+######### layers:
     def pre_hook(i):
         def _pre(module, inputs):
             fwd_start[i] = time.perf_counter()
@@ -216,14 +258,54 @@ def main():
             #bwd_start[i] = 0.0
         return _bwd
 
-    handles = []
+    handles_ = []
     for i, blk in enumerate(blocks):
-        handles.append(blk.register_forward_pre_hook(pre_hook(i)))
-        handles.append(blk.register_forward_hook(fwd_hook(i)))
+        handles_.append(blk.register_forward_pre_hook(pre_hook(i)))
+        handles_.append(blk.register_forward_hook(fwd_hook(i)))
         # full backward hook (PyTorch 1.10+). If not available, comment out.
         if hasattr(blk, "register_full_backward_hook"):
-            handles.append(blk.register_full_backward_pre_hook(pre_bwd_hook(i)))
-            handles.append(blk.register_full_backward_hook(bwd_hook(i)))
+            handles_.append(blk.register_full_backward_pre_hook(pre_bwd_hook(i)))
+            handles_.append(blk.register_full_backward_hook(bwd_hook(i)))
+########
+######## head and tail:
+
+    def pre_hook_ht(i):
+        def _pre(module, inputs):
+            fwd_start_ht[i] = time.perf_counter()
+        return _pre
+
+    def fwd_hook_ht(i):
+        def _hook(module, inputs, outputs):
+            nonlocal fwd_times_ht
+            dt = time.perf_counter() - fwd_start_ht[i]
+            fwd_times_ht[i] += dt
+
+        return _hook
+
+    def pre_bwd_hook_ht(i):
+        def _pre(module, inputs):
+            bwd_start_ht[i] = time.perf_counter()
+        return _pre
+
+    def bwd_hook_ht(i):
+        def _bwd(module, grad_input, grad_output):
+            nonlocal bwd_times_ht, bwd_start_ht
+            now = time.perf_counter()
+            bwd_times_ht[i] += now - bwd_start_ht[i]
+        return _bwd
+
+    handles_ht = []
+    i = 0
+    for name, blk in HeadAndTail.items():
+        handles_ht.append(blk.register_forward_pre_hook(pre_hook_ht(i)))
+        handles_ht.append(blk.register_forward_hook(fwd_hook_ht(i)))
+        # full backward hook (PyTorch 1.10+). If not available, comment out.
+        if hasattr(blk, "register_full_backward_hook"):
+            handles_ht.append(blk.register_full_backward_pre_hook(pre_bwd_hook_ht(i)))
+            handles_ht.append(blk.register_full_backward_hook(bwd_hook_ht(i)))
+        i+=1
+
+
 
     # Run
     iters = args.iters
@@ -252,6 +334,7 @@ def main():
     total_T = total_T/denom
 
     fwd_times = [t /iters for t in fwd_times]
+    fwd_times_ht = [t /iters for t in fwd_times_ht]
     # bwd_times may be zeros if backward hook did not capture; fall back to autograd total split
     # Here we approximate by proportional split if hooks unavailable.
     total_bwd = 0.0  # not robust via hooks on CPU; optional
@@ -260,6 +343,12 @@ def main():
         bwd_times = [0.0 for _ in range(L)]
     else:
         bwd_times = [t /iters for t in bwd_times]
+
+    if sum(bwd_times_ht) == 0.0:
+        # Fall back: just mark unknown
+        bwd_times_ht = [0.0 for _ in range(LL)]
+    else:
+        bwd_times_ht = [t /iters for t in bwd_times_ht]
 
 
     # Pack results for metis version:
@@ -328,7 +417,8 @@ def main():
         "hidden": hidden,
         "embed_param_bytes": embed_params,
         "tail_param_bytes": tail_params,
-        "layers": []
+        "layers": [],
+        "head&tail": []
     }
     for i in range(L):
         result["layers"].append({
@@ -339,6 +429,15 @@ def main():
             "backward_time_s": bwd_times[i],  # may be zero if hook unsupported
         })
 
+    i = 0
+    for name, attribute in HeadAndTail.items():
+        result["head&tail"].append({
+            "index": name,
+            "forward_time_s": fwd_times_ht[i],
+            "backward_time_s": bwd_times_ht[i],  # may be zero if hook unsupported
+        })      
+        i+=1  
+
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
 
@@ -348,7 +447,9 @@ def main():
         json.dump(metis_result, f, indent=2)
 
     # Cleanup hooks
-    for h in handles:
+    for h in handles_:
+        h.remove()
+    for h in handles_ht:
         h.remove()
 
 if __name__ == "__main__": 

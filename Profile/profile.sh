@@ -31,7 +31,7 @@ for util in "${UTILS[@]}"; do
     # -p WorkingDirectory: run in current dir so outputs land here
     systemd-run --scope --quiet \
       -p "CPUQuota=${QUOTA_PCT}" \
-      -- python measure_layers.py --batch "${bs}" --out "${OUTFILE}" --host "cpu${util}"
+      -- python measure_layers.py --batch "${bs}" --out "${OUTFILE}" --host "CPU${util}"
   done
 done
 

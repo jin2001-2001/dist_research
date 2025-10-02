@@ -126,7 +126,7 @@ class Device:
         batch_act_storage = 7*seq*hidden*4 *layers *(inversestage*2+1)   #no batch, we need calculate batches...#4 is float32 needs 4 bytes
         parameter_storage = self.layer_param_bytes * layers *4 #(2 for opt, 1 for gradient)
         
-        max1 = self.Mconstraint*1024*1024/(batch_act_storage+parameter_storage)
+        max1 = self.Mconstraint*1e6/(batch_act_storage+parameter_storage)
         max2 = 1024*512
         #max2 = self.Econstraint * self.Tability/(self.Eability*(layers**2)*(layers_size**2))/(seq*hidden)
         #print(max1, max2)
@@ -154,15 +154,15 @@ class Profilelor:
         batch_act_storage = 7*self.seq_len*self.hiddenSize*4 *layers *(inverseStage*2+1)*self.MbatchSize # this 4 is float32
         parameter_storage = self.DList[0].layer_param_bytes * layers *4*self.MbatchSize
 
-        total_size = (batch_act_storage+parameter_storage)*(device_slice[1]-device_slice[0])/1024/1024 #M
+        total_size = (batch_act_storage+parameter_storage)*(device_slice[1]-device_slice[0])/1e6 #M
         if total_mem<total_size:
             return False
         return True
     
     def communication_solver(self, layer_slice=1): #simple version
         #T = bsize*self.hiddenSize*self.seq_len/(self.bandwidth)
-        T = self.DList[0].activation_bytes_per_sample * self.MbatchSize/1024/1024/self.bandwidth*8
-        #print(T)
+        T = self.DList[0].activation_bytes_per_sample * self.MbatchSize/1e6/self.bandwidth*8
+        print(T)
         return T
 
     def gathering_solver(self, device_slice, layer_slice): #simple version
@@ -178,7 +178,7 @@ class Profilelor:
 
         total_parameter_bytes = accum*(D_amount-1)/D_amount *2 #plus embedding estimiation
 
-        T = total_parameter_bytes*8/1024/1024/(self.bandwidth/D_amount)
+        T = total_parameter_bytes*8/1e6/(self.bandwidth/D_amount)
 
         return T
 
