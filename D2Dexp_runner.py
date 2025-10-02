@@ -320,6 +320,7 @@ def main():
             broadcast_buffers=False,
             gradient_as_bucket_view=True
         )        
+        print(f"之前的组 {prev_g}")
         stage = PipelineStage_with_mutiple_ranks(stage_mod, stage_index=shard_stage,
                                 num_stages=world, device=device,
                                 group=dist.group.WORLD,  # Used for world pp 
