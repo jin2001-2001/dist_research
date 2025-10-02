@@ -3,12 +3,12 @@
     "total_devices": 4,
     "total_stages": 3,
     "total_batchs": 20,
-    "estimated":82.589333,
-    "device_order": ["cpu30", "cpu60", "cpu30", "cpu30"],
+    "estimated":61.9,
+    "device_order": ["cpu30", "cpu30", "cpu60", "cpu30"],
     
     "stage_info": [
-        {"index":0, "ranks":[0], "shard_layer":[0,14], "batch_allocate":[5]},
-        {"index":1, "ranks":[1], "shard_layer":[14,21], "batch_allocate":[5]},
-        {"index":2, "ranks":[2], "shard_layer":[21,28], "batch_allocate":[5]}
+        {"index":0, "ranks":[0], "shard_layer":[0,9], "batch_allocate":[5]},
+        {"index":1, "ranks":[1], "shard_layer":[9,25], "batch_allocate":[5]},
+        {"index":2, "ranks":[2], "shard_layer":[25,28], "batch_allocate":[5]}
     ]
 }

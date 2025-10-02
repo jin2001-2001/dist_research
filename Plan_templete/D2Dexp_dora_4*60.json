@@ -7,8 +7,8 @@
     "device_order": ["cpu60", "cpu60", "cpu60", "cpu60"],
     
     "stage_info": [
-        {"index":0, "ranks":[0], "shard_layer":[0,10], "batch_allocate":[5]},
-        {"index":1, "ranks":[1], "shard_layer":[10,19], "batch_allocate":[5]},
-        {"index":2, "ranks":[2], "shard_layer":[19,28], "batch_allocate":[5]}
+        {"index":0, "ranks":[0], "shard_layer":[0,12], "batch_allocate":[5]},
+        {"index":1, "ranks":[1], "shard_layer":[12,23], "batch_allocate":[5]},
+        {"index":2, "ranks":[2], "shard_layer":[23,28], "batch_allocate":[5]}
     ]
 }
