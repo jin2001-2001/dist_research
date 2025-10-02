@@ -1369,7 +1369,8 @@ class PipelineScheduleRuntimeWithDirection(schedule.PipelineScheduleMulti):
                         self._pack_groups[g_id] = len(mb_ids)
                         for mid in mb_ids:
                             self._mb_to_group[(stage_idx, mid)] = g_id
-                            
+
+                    print("到这里")
                     with self._rec.record(current_batch+1,action_id,"FORWARD", stage_idx, mb_ids):
                         output = stage.forward_one_chunk(rep_id, cat_args, cat_kwargs, len(mb_ids))
 
