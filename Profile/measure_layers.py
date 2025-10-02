@@ -126,7 +126,7 @@ def model_state_bytes(n_params: int,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model_path", type=str, default="Qwen/Qwen3-0.6B", help="HF name or local path")
-    ap.add_argument("--seq_len", type=int, default=256)
+    ap.add_argument("--seq_len", type=int, default=128)
     ap.add_argument("--batch", type=int, default=1)
     ap.add_argument("--dtype", type=str, default="float32", choices=["float32","bfloat16","float16"])
     ap.add_argument("--iters", type=int, default=4)
@@ -167,7 +167,7 @@ def main():
     t0 = time.perf_counter()
     enc = tok(
         texts[0:args.batch],
-        padding="max_length",      # ensures exactly 2048 tokens
+        padding="max_length", 
         truncation=True,
         max_length=args.seq_len,
         return_attention_mask=False,
@@ -321,9 +321,9 @@ def main():
         loss = out.loss
         if it >= warmup:
             # Measure backward only after warmup as well
-            t0 = time.perf_counter()
+            #t0 = time.perf_counter()
             loss.backward()
-            t1 = time.perf_counter()
+            #t1 = time.perf_counter()
         else:
             loss.backward()
     print("record/profile over")

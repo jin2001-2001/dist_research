@@ -24,14 +24,14 @@ for util in "${UTILS[@]}"; do
     # To target X% of the entire machine, multiply by core count.
     QUOTA_PCT=$(( util * CORES ))%
 
-    OUTFILE="./cpu${util}_bs${bs}.json"
+    OUTFILE="./CPU${util}_bs${bs}.json"
 
     # --scope: transient scope cgroup
     # --wait/--collect: wait for completion & collect status
     # -p WorkingDirectory: run in current dir so outputs land here
     systemd-run --scope --quiet \
       -p "CPUQuota=${QUOTA_PCT}" \
-      -- python measure_layers.py --batch "${bs}" --out "${OUTFILE}" --host "CPU${util}"
+        "${bs}" --out "${OUTFILE}" --host "CPU${util}"
   done
 done
 

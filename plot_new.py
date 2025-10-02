@@ -113,7 +113,7 @@ def first_peak_end_time_raw(
 
 
 
-with open("./record/r_dora_4*100_3.json", "r") as f:
+with open("./record/r_dora_4*100_0.json", "r") as f:
     records = json.load(f)
 
 def smooth_series(values, window_size=5):
