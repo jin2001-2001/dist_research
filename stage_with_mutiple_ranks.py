@@ -556,6 +556,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                 buf = [None]
                 dist.broadcast_object_list(buf, src=self.leader, group=self.dp_group)
                 composite_args = buf[0]
+                print("广播结束")
         else:
             print("到这里3")
             if args:
