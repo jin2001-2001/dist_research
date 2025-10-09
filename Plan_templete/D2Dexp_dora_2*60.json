@@ -3,7 +3,7 @@
     "total_devices": 4,
     "total_stages": 3,
     "total_batchs": 20,
-    "estimated":67,
+    "estimated":68.82,
     "device_order": ["cpu30", "cpu60", "cpu60", "cpu30"],
     
     "stage_info": [
