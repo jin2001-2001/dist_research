@@ -47,7 +47,7 @@ def generate_profiler_samples_nolimit(n=4,layers = 28, type_list = ["cpu100"]*5,
     dList = []
     for i in range(len(type_list)):
         # type, tprofile_loc, eprofile_loc = 0, Mem = 0, Energy = 1000)
-        dList.append(Device(type_list[i], profilehome, layers, Mem = 55*1024))
+        dList.append(Device(type_list[i], profilehome, layers, Mem = 100*1024))
     simprofile = Profilelor(dList,hiddenSize=1024, seq=256, total_layer= 28 ,MbatchSize = MbatchSize, Bandwidth = band)
     return simprofile, band
 
@@ -55,15 +55,15 @@ def test_Profilelor_DPsolver():  #a self defined examples...
     #for example, we have a 15 layer models:
     simprofile, band = generate_profiler_samples_nolimit()
     #plan1 = [{'layer':(0,26), 'device':(0,1)},{'layer':(26,28), 'device':(1,3)}]
-    #plan1 = [{'layer':(0,28), 'device':(0,1)}]
-    plan1 = [{'layer':(0,10), 'device':(0,1)},{'layer':(10,19), 'device':(1,2)},{'layer':(19,28), 'device':(2,3)}]
+    plan1 = [{'layer':(0,28), 'device':(0,1,2,3)}]
+    plan1 = [{'layer':(0,7), 'device':(0,1)},{'layer':(7,14), 'device':(1,2)}, {'layer':(14,21), 'device':(2,3)},{'layer':(21,28), 'device':(3,4)}]
     #plan1 = [{'layer':(0,14), 'device':(0,1)},{'layer':(14,15), 'device':(1,3)},{'layer':(15,28), 'device':(3,4)}]
     #plan2 = [{'layer':(0,5), 'device':(0,1)}, {'layer':(5,15), 'device':(1,3)}]
 
     #sharded_batches = simprofile.DP_solver(plan1[0]['device'], plan1[0]['layer'], 0)
     simprofile, band = generate_profiler_samples_nolimit(
             n = 4,
-            type_list = ["cpu60"]*0 +["cpu30"]*3 + ["cpu100"]*0,  
+            type_list = ["cpu60"]*0 + ["cpu60"]*0+["cpu30"]*4,  
             MbatchSize=5)
     #print(sharded_batches) ##pass!##
     B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList = simprofile.getall(plan1)
@@ -77,7 +77,7 @@ def test_DP_solver_onlytime(ks, ss):
     nmbatch = 20
     mbatchsize = 5
     layers = 28
-    test_list = ["CPU100"]*4 + ["CPU100"]*0+["CPU100"]*0
+    test_list = ["CPU60"]*4 + ["CPU30"]*2+["CPU100"]*0
     score_list = []
     plan_list = []
     allo_list = []

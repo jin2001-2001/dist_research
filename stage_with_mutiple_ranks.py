@@ -539,8 +539,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
         composite_args = None
 
-        use_scheduler_inputs = bool(args) and pack_size > 1
-
+        use_scheduler_inputs = bool(args) and pack_size >= 1
         if need_rt_bcast and not use_scheduler_inputs:
             if self.is_leader:
                 if not args or len(args) == 0:
@@ -562,7 +561,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
                     composite_args = ()
                 else:
                     composite_args = self._retrieve_recv_activations(fwd_chunk_id)
-
+    
         is_first_stage = getattr(self, 'prev_group', None) is None
         has_kwargs_data = kwargs and any(v is not None for v in kwargs.values())
 
@@ -575,7 +574,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
 
 
         composite_kwargs = kwargs or {}
-
+   
         if (
             pack_size > 1
             and composite_args
@@ -599,6 +598,7 @@ class PipelineStage_with_mutiple_ranks(PipelineStage):
         self._validate_fwd_input(args_for_val, kwargs_for_val)
 
         prep_done = time.perf_counter()
+       
 
         # Compute forward
         try:
