@@ -16,11 +16,11 @@ inputs=""
 pureinputs=""
 for f in "$@"; do
   pureinputs="$pureinputs ${f}"
-  inputs="$inputs ../Profile/${f}.json"
+  inputs="$inputs ../Profile_exp_0.6/${f}.json"
 done
 
 LAST_INPUT=${!#}   # the last argument, e.g., CPU100_bs6
-lastinput="../Profile/${LAST_INPUT}.json"
+lastinput="../Profile_exp_0.6/${LAST_INPUT}.json"
 
 echo "inputs = $inputs"
 echo "last input = $lastinput"
@@ -36,7 +36,7 @@ python3 plan_from_measured.py \
   --bandwidth bandwidth_matrix.json \
   --memory_model memory_model.json \
   --devices devices.json \
-  --tied_embed true \
+  --tied_embed false \
   --max_stages None \
   --out_dir out_measured \
   --nbatch $NBATCH

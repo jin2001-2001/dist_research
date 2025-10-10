@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Dict, Tuple, List
 
 import pandas as pd
+import time
 
 from asteroid_Hpp_plan import Device, plan_hpp_dynamic
 from asteroid_Batch_plan import allocate_microbatch_samples
@@ -43,6 +44,7 @@ def load_bandwidth_matrix(path: str) -> Dict[Tuple[str,str], float]:
     return d
 
 def main():
+    Tstart = time.time()
     ap = argparse.ArgumentParser()
     ap.add_argument("--layers", required=True)
     ap.add_argument("--capacities", required=True)
@@ -100,6 +102,11 @@ def main():
         s,e = span
         sum_w = sum(ws[i]  for i in range(s,e))
         sum_a = sum(as_[i] for i in range(s,e))
+        if dev_name == "4050_3":
+            sum_ww = sum(ws[i]  for i in range(8,28))
+            sum_aa = sum(as_[i] for i in range(8,28))
+            print(ws[-1],as_[4],batch,alpha,Kp, tail)
+            print (int(base + alpha*sum_ww + Kp*sum_aa*batch)/1024/1024/1024)
         return int(base + alpha*sum_w + Kp*sum_a*batch)
 
     # Run planner
@@ -171,6 +178,7 @@ def main():
         for name in st.device_names:
             lines.append(f"      y[{name}] = {st.y_allocation.get(name, 0)}")
     (out_dir / "summary.txt").write_text("\n".join(lines), encoding="utf-8")
+    print(f"T cost: {time.time()-Tstart}")
 
 if __name__ == "__main__":
     main()

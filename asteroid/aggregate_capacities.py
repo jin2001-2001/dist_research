@@ -18,6 +18,31 @@ All measurements must use the SAME batch size and seq_len.
 """
 
 import argparse, json, statistics
+import os
+
+def name_extractor(name_list):
+    datas = []
+    prefixes = []
+
+    for p in name_list:
+        # load JSON
+        with open(p, "r") as f:
+            datas.append(json.load(f))
+
+        # filename without folder path
+        fname = os.path.basename(p)        # e.g. "CPU100_bs5.json"
+
+        # remove extension
+        stem, _ = os.path.splitext(fname)  # e.g. "CPU100_bs5"
+
+        # take prefix before first "_"
+        prefix = stem.split("_", 1)[0]     # e.g. "CPU100"
+
+        prefixes.append(prefix)
+
+    return prefixes
+
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -28,9 +53,10 @@ def main():
     args = ap.parse_args()
 
     datas = [json.load(open(p,"r")) for p in args.inputs]
+    name_list = name_extractor(args.inputs)
     by_host = {}
     for i in range(len(datas)):
-        name = str(datas[i]["host"]) + f'_{i}'
+        name = str(name_list[i]) + f'_{i}'
         by_host[name] = datas[i]
     #{d["host"]: d for d in datas}
     #assert args.ref_host in by_host, "ref_host not in inputs"

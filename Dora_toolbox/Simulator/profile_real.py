@@ -161,11 +161,18 @@ class Device:
         E =0
         return E
 
-    def maximum_batches_available(self, layers, inversestage,seq,hidden): #reversely get the maximum batches that can be assigned on this devices
-        batch_act_storage = 7*seq*hidden*4 *layers *(inversestage*2+1)   #no batch, we need calculate batches...#4 is float32 needs 4 bytes
+    def maximum_batches_available(self, layer_slice, inversestage,seq,hidden): #reversely get the maximum batches that can be assigned on this devices
+        layers = layer_slice[1]-layer_slice[0]
+        batch_act_storage = 6*seq*hidden*4 *layers *(inversestage*2+1)   #no batch, we need calculate batches...#4 is float32 needs 4 bytes
         parameter_storage = self.layer_param_bytes * layers *4 #(2 for opt, 1 for gradient)
-        
-        max1 = self.Mconstraint*1024*1024/(batch_act_storage+parameter_storage)
+
+        if layer_slice[1] == self.total_layers:
+            parameter_storage+= self.tail_param_bytes*4
+        if layer_slice[0] == 0:
+            parameter_storage+= self.embedding_param_bytes*4
+
+        #print((parameter_storage+batch_act_storage*8)/1024/1024/1024)
+        max1 = (self.Mconstraint*1024*1024-parameter_storage)/(batch_act_storage)
         max2 = 1024*512
         #max2 = self.Econstraint * self.Tability/(self.Eability*(layers**2)*(layers_size**2))/(seq*hidden)
         #print(max1, max2)
@@ -186,17 +193,17 @@ class Profilelor:
         self.bandwidth = Bandwidth
         self.total_layers = total_layer
 
-
-    def batch_checker(self, device_slice, layer_slice, inverseStage):
-        total_mem = sum(self.DList[i].Mconstraint for i in range(device_slice[0], device_slice[1]))
-        layers = (layer_slice[1]-layer_slice[0])
-        batch_act_storage = 7*self.seq_len*self.hiddenSize*4 *layers *(inverseStage*2+1)*self.MbatchSize # this 4 is float32
-        parameter_storage = self.DList[0].layer_param_bytes * layers *4*self.MbatchSize
-
-        total_size = (batch_act_storage+parameter_storage)*(device_slice[1]-device_slice[0])/1e6 #M
-        if total_mem<total_size:
-            return False
-        return True
+    #never use batch_checker
+    #def batch_checker(self, device_slice, layer_slice, inverseStage):
+    #    total_mem = sum(self.DList[i].Mconstraint for i in range(device_slice[0], device_slice[1]))
+    #    layers = (layer_slice[1]-layer_slice[0])
+    #    batch_act_storage = 7*self.seq_len*self.hiddenSize*4 *layers *(inverseStage*2+1)*self.MbatchSize # this 4 is float32
+    #    parameter_storage = self.DList[0].layer_param_bytes * layers *4*self.MbatchSize
+#
+    #    total_size = (batch_act_storage+parameter_storage)*(device_slice[1]-device_slice[0])/1e6 #M
+    #    if total_mem<total_size:
+    #        return False
+    #    return True
     
     def communication_solver(self, layer_slice=1): #simple version
         #T = bsize*self.hiddenSize*self.seq_len/(self.bandwidth)
@@ -226,7 +233,7 @@ class Profilelor:
         #print(device_slice,layer_slice)
         layers = layer_slice[1]-layer_slice[0]
         c_list = [1/self.DList[i].computeprofile.forward for i in range(device_slice[0],device_slice[1])]
-        b_list = [int(self.DList[i].maximum_batches_available(layers, inverseStage,self.seq_len,self.hiddenSize)) for i in range(device_slice[0],device_slice[1])] #memeory bound but tranfer to upperbound of batches
+        b_list = [int(self.DList[i].maximum_batches_available(layer_slice, inverseStage,self.seq_len,self.hiddenSize)) for i in range(device_slice[0],device_slice[1])] #memeory bound but tranfer to upperbound of batches
         if sum(b_list)<self.MbatchSize:              # layers, inversestage,seq,hidden
             #print(b_list, self.MbatchSize)
             return False ##cannot reach the batch assignment...
@@ -309,6 +316,7 @@ class Profilelor:
                 ee=0
                 ###jin important: we gathering actually only involve transmission energy cost, it is little...
                 if (devices > 1):
+                    #print("a DP group")
                     tt = self.gathering_solver(device_slice, layer_slice)
                 T_gathering.append(tt)
                 E_gathering.append(ee)

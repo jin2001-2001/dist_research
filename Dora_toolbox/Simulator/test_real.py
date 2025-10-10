@@ -43,12 +43,12 @@ def test_heap_func():
     assert 1 == 1
 
 #For Qwen3:
-def generate_profiler_samples_nolimit(n=4,layers = 28, type_list = ["cpu100"]*5,MbatchSize=4, profilehome="../../Profile", band = 100):
+def generate_profiler_samples_nolimit(n=4,hidden_size = 0, seq = 256, layers = 28, type_list = ["cpu100"]*5,MbatchSize=4, profilehome="../../Profile", band = 100, mem_list = [100*1024]*5):
     dList = []
     for i in range(len(type_list)):
         # type, tprofile_loc, eprofile_loc = 0, Mem = 0, Energy = 1000)
-        dList.append(Device(type_list[i], profilehome, layers, Mem = 100*1024))
-    simprofile = Profilelor(dList,hiddenSize=1024, seq=256, total_layer= 28 ,MbatchSize = MbatchSize, Bandwidth = band)
+        dList.append(Device(type_list[i], profilehome, layers, Mem = mem_list[i]))
+    simprofile = Profilelor(dList,hiddenSize=hidden_size, seq=seq, total_layer= layers ,MbatchSize = MbatchSize, Bandwidth = band)
     return simprofile, band
 
 def test_Profilelor_DPsolver():  #a self defined examples...
@@ -88,7 +88,9 @@ def test_DP_solver_onlytime(ks, ss):
         simprofile, band = generate_profiler_samples_nolimit(
             n = ndevice, layers = layers,
             type_list = device_order,  
-            MbatchSize=mbatchsize)
+            profilehome = "../../Profile_exp_0.7",
+            MbatchSize=mbatchsize,
+            band=200)
         #print("Communication" ,simprofile.communication_solver(10))
         #print("computation:", simprofile.DList[0].computeprofile.batchFuncforward(5), simprofile.DList[0].computeprofile.batchFuncbackward(5))
 

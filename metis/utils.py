@@ -44,9 +44,9 @@ def factor(N: int, upper: int = None, lower: int = None) -> List:
 
 
 class DeviceType(Enum):
-    A100 = "a100"
-    V100 = "v100"
-    P100 = "p100"
+    A100 = "A100"
+    V100 = "V100"
+    P100 = "P100"
     T4 = "t4"
     CPU100 = "CPU100"
     CPU90 = "CPU90"
@@ -56,11 +56,20 @@ class DeviceType(Enum):
     CPU50 = "CPU50"
     CPU40 = "CPU40"
     CPU30 = "CPU30"
+    Samsung = "Samsung"
+    Xiaomi = "Xiaomi"
+    A40 = "A40"
+    G4060 = "4060"
+    G4050 = "4050"
+    Camera = "Camera"
+    
 
     @staticmethod
     def from_string(s: str) -> 'DeviceType':
         try:
-            return DeviceType[s.upper()]
+            if s.isdigit():
+                s = f"G{s}"
+            return DeviceType[s]
         except KeyError:
             raise ValueError
 

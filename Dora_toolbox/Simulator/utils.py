@@ -89,6 +89,8 @@ def plan_estimator(P, M, SLO, Profilelor, alpha):
     #B_list = []  # Your logic to create B_list
     #M = Profilelor.M  #XXXXX ERROR
     #SLO_latency = Profilelor.slo_T #XXXXXXX ERROR
+    if Profilelor.getall(P) == False:
+        print("error")
     B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList = Profilelor.getall(P) 
     B_list = [B_ft, B_bt]
     #print(B_list)

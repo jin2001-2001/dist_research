@@ -14,10 +14,23 @@ def main():
 
     data = {}
     # enumerate all inputs, add suffix
+    # for final test, we use above dictionary for mem searching...:
+    mem_dict = {
+        "Samsung": 12*2,
+        "Xiaomi": 12*2,
+        "2630": 32*2,
+        "4050":8*2,
+        "4060":12*2,
+        "V100": 32*2,
+        "A40": 48*2,
+        "Camera": 16*2
+    }
+
+
     for i, name in enumerate(args.inputs):
         base = name.split("_")[0]   # take only the first part
         key = f"{base}_{i}"
-        data[key] = args.value
+        data[key] = mem_dict[base]
 
     # write JSON
     with open(args.out, "w") as f:
