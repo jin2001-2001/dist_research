@@ -1,0 +1,108 @@
+{
+  "host": "CPU50",
+  "dtype": "float32",
+  "seq_len": 256,
+  "batch": 1,
+  "vocab_size": 30522,
+  "hidden": 768,
+  "embed_param_bytes": 93763584,
+  "tail_param_bytes": 0,
+  "layers": [
+    {
+      "index": 0,
+      "param_bytes": 28351488,
+      "activation_bytes_per_sample": 786432,
+      "forward_time_s": 0.014804385124076018,
+      "backward_time_s": 0.015788836016339458
+    },
+    {
+      "index": 1,
+      "param_bytes": 28351488,
+      "activation_bytes_per_sample": 786432,
+      "forward_time_s": 0.014523943326755934,
+      "backward_time_s": 0.015308407923254939
+    },
+    {
+      "index": 2,
+      "param_bytes": 28351488,
+      "activation_bytes_per_sample": 786432,
+      "forward_time_s": 0.014156342447884137,
+      "backward_time_s": 0.015103111265430088
+    },
+    {
+      "index": 3,
+      "param_bytes": 28351488,
+      "activation_bytes_per_sample": 786432,
+      "forward_time_s": 0.01424128259481206,
+      "backward_time_s": 0.01542458894289623
+    },
+    {
+      "index": 4,
+      "param_bytes": 28351488,
+      "activation_bytes_per_sample": 786432,
+      "forward_time_s": 0.014028395080319412,
+      "backward_time_s": 0.016289437732897052
+    },
+    {
+      "index": 5,
+      "param_bytes": 28351488,
+      "activation_bytes_per_sample": 786432,
+      "forward_time_s": 0.014162506785649292,
+      "backward_time_s": 0.015174668237506487
+    },
+    {
+      "index": 6,
+      "param_bytes": 28351488,
+      "activation_bytes_per_sample": 786432,
+      "forward_time_s": 0.014612140485260806,
+      "backward_time_s": 0.015215855807597317
+    },
+    {
+      "index": 7,
+      "param_bytes": 28351488,
+      "activation_bytes_per_sample": 786432,
+      "forward_time_s": 0.015078495074210269,
+      "backward_time_s": 0.014358466282107876
+    },
+    {
+      "index": 8,
+      "param_bytes": 28351488,
+      "activation_bytes_per_sample": 786432,
+      "forward_time_s": 0.01444926520318396,
+      "backward_time_s": 0.01428927199786573
+    },
+    {
+      "index": 9,
+      "param_bytes": 28351488,
+      "activation_bytes_per_sample": 786432,
+      "forward_time_s": 0.014154286876818087,
+      "backward_time_s": 0.01517439872731621
+    },
+    {
+      "index": 10,
+      "param_bytes": 28351488,
+      "activation_bytes_per_sample": 786432,
+      "forward_time_s": 0.014253643322766593,
+      "backward_time_s": 0.01270165949074212
+    },
+    {
+      "index": 11,
+      "param_bytes": 28351488,
+      "activation_bytes_per_sample": 786432,
+      "forward_time_s": 0.014576765422554405,
+      "backward_time_s": 0.013587563666709804
+    }
+  ],
+  "head&tail": [
+    {
+      "index": "embed",
+      "forward_time_s": 0.00019053916708735395,
+      "backward_time_s": 3.214111129001025e-06
+    },
+    {
+      "index": "lm_head",
+      "forward_time_s": 0.016485282488185628,
+      "backward_time_s": 0.038543606279653315
+    }
+  ]
+}
