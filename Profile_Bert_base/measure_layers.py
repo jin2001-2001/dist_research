@@ -104,7 +104,7 @@ def make_mlm_labels(input_ids, tokenizer, mlm_prob=0.15):
     device = input_ids.device
     labels = input_ids.clone()
     special = torch.tensor(
-        [tokenizer.get_special_tokens_mask(x.tolist(), True) for x in input_ids],
+        [tokenizer.get_special_tokens_mask(x.tolist(), already_has_special_tokens=True) for x in input_ids],
         dtype=torch.bool, device=device
     )
     prob = torch.full(labels.shape, mlm_prob, device=device)
