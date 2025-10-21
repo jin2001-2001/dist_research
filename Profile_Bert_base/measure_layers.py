@@ -184,7 +184,7 @@ def main():
     # Load model locally
     from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
     from transformers import AutoModelForMaskedLM
-    tok = AutoTokenizer.from_pretrained(args.model_path)
+    tok = AutoTokenizer.from_pretrained(args.model_path, use_fast=False)
     config = AutoConfig.from_pretrained(args.model_path)
     model = AutoModelForMaskedLM.from_pretrained(args.model_path, config=config, torch_dtype=dtype).to(device)
     model.train()
