@@ -301,25 +301,31 @@ def main():
     import gc; gc.collect()
 
     raw = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
-    block = 128
+    block = 256
 
     ##info:::
     def tok_fn(ex):
         # no special tokens here; we’ll add them after chunking
         return tok(ex["text"], add_special_tokens=False, return_attention_mask=False)
 
+    ###important: modified for Bert::
     def grp_fn(ex):
-        concat = sum(ex["input_ids"], [])
-        inner = block - 2  # room for [CLS] and [SEP]
+        concat = sum(ex["input_ids"], [])          # flatten list of lists
+        inner = block - 2                          # room for [CLS] and [SEP]
         tot = (len(concat) // inner) * inner
+        if tot == 0:
+            return {"input_ids": [], "attention_mask": [], "token_type_ids": []}
+
         chunks = [concat[i:i+inner] for i in range(0, tot, inner)]
-        # wrap each chunk with CLS/SEP → final length exactly 128
-        ids = [[tok.cls_token_id] + c + [tok.sep_token_id] for c in chunks]
-        return {"input_ids": ids}
+        ids = [[tok.cls_token_id] + c + [tok.sep_token_id] for c in chunks]           # (N, block)
+        attn = [[1] * len(x) for x in ids]                                            # all real tokens
+        segs = [[0] * len(x) for x in ids]                                            # single segment (A)
+
+        return {"input_ids": ids, "attention_mask": attn, "token_type_ids": segs}
 
     ds = (raw.map(tok_fn, batched=True, remove_columns=["text"])
               .map(grp_fn, batched=True))
-    ds.set_format("torch", columns=["input_ids"])
+    ds.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids"])
 
     # ----- 2) Collator: dynamic MLM masking (creates attention_mask + labels) -----
     collator = DataCollatorForLanguageModeling(
