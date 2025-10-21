@@ -1,0 +1,220 @@
+{
+  "host": "CPU50",
+  "dtype": "float32",
+  "seq_len": 256,
+  "batch": 7,
+  "vocab_size": 151936,
+  "hidden": 2048,
+  "embed_param_bytes": 1244659712,
+  "tail_param_bytes": 1244667904,
+  "layers": [
+    {
+      "index": 0,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12586818238938355,
+      "backward_time_s": 0.3951698313170716
+    },
+    {
+      "index": 1,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.1377285718871994,
+      "backward_time_s": 0.3935049624013256
+    },
+    {
+      "index": 2,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12720598523602852,
+      "backward_time_s": 0.391136570070965
+    },
+    {
+      "index": 3,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12181142035691389,
+      "backward_time_s": 0.39589707116516754
+    },
+    {
+      "index": 4,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12001218632779632,
+      "backward_time_s": 0.39073027262239474
+    },
+    {
+      "index": 5,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12133395634550821,
+      "backward_time_s": 0.3937531741377845
+    },
+    {
+      "index": 6,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.11569229693353764,
+      "backward_time_s": 0.39355174016867867
+    },
+    {
+      "index": 7,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.11389877942530337,
+      "backward_time_s": 0.39284353230906344
+    },
+    {
+      "index": 8,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.11922427451444884,
+      "backward_time_s": 0.37030735440337426
+    },
+    {
+      "index": 9,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.11521509464007866,
+      "backward_time_s": 0.37449067540807746
+    },
+    {
+      "index": 10,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.11980663392110982,
+      "backward_time_s": 0.39032124985080935
+    },
+    {
+      "index": 11,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.11776646432829552,
+      "backward_time_s": 0.3981707234785237
+    },
+    {
+      "index": 12,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.11772690646562325,
+      "backward_time_s": 0.38673199624247256
+    },
+    {
+      "index": 13,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.11725197374235831,
+      "backward_time_s": 0.3902067823146444
+    },
+    {
+      "index": 14,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.11829982222061955,
+      "backward_time_s": 0.3907095830326989
+    },
+    {
+      "index": 15,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.11717074846693964,
+      "backward_time_s": 0.38422550451979576
+    },
+    {
+      "index": 16,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12060958052490159,
+      "backward_time_s": 0.3771974809566476
+    },
+    {
+      "index": 17,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12155285109439763,
+      "backward_time_s": 0.36339399330120314
+    },
+    {
+      "index": 18,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.11961432920867696,
+      "backward_time_s": 0.3709757849660565
+    },
+    {
+      "index": 19,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12058354070368356,
+      "backward_time_s": 0.3738050151415914
+    },
+    {
+      "index": 20,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12317606159694762,
+      "backward_time_s": 0.3665267899538711
+    },
+    {
+      "index": 21,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.11856667419128258,
+      "backward_time_s": 0.36480537203212354
+    },
+    {
+      "index": 22,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12189027921070449,
+      "backward_time_s": 0.34351569959423217
+    },
+    {
+      "index": 23,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12420523392430892,
+      "backward_time_s": 0.34380034830906053
+    },
+    {
+      "index": 24,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12200947877562746,
+      "backward_time_s": 0.34446228806353224
+    },
+    {
+      "index": 25,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12322279420977812,
+      "backward_time_s": 0.3461348113230227
+    },
+    {
+      "index": 26,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12259768883552997,
+      "backward_time_s": 0.34808307489097995
+    },
+    {
+      "index": 27,
+      "param_bytes": 201344000,
+      "activation_bytes_per_sample": 2097152,
+      "forward_time_s": 0.12415091783400316,
+      "backward_time_s": 0.34104770380967575
+    }
+  ],
+  "head&tail": [
+    {
+      "index": "embed",
+      "forward_time_s": 0.0007248803103521988,
+      "backward_time_s": 4.4870494513745685e-06
+    },
+    {
+      "index": "lm_head",
+      "forward_time_s": 0.6117557647741956,
+      "backward_time_s": 1.516069989704417
+    }
+  ]
+}

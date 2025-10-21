@@ -102,11 +102,11 @@ def main():
         s,e = span
         sum_w = sum(ws[i]  for i in range(s,e))
         sum_a = sum(as_[i] for i in range(s,e))
-        if dev_name == "4050_3":
-            sum_ww = sum(ws[i]  for i in range(8,28))
-            sum_aa = sum(as_[i] for i in range(8,28))
-            print(ws[-1],as_[4],batch,alpha,Kp, tail)
-            print (int(base + alpha*sum_ww + Kp*sum_aa*batch)/1024/1024/1024)
+        if dev_name == "4050_2":
+            sum_ww = sum(ws[i]  for i in range(18,28))
+            sum_aa = sum(as_[i] for i in range(18,28))
+            #print(ws[-1],as_[4],batch,alpha,Kp, tail)
+            #print (int(base + alpha*sum_ww + Kp*sum_aa*batch)/1024/1024/1024)
         return int(base + alpha*sum_w + Kp*sum_a*batch)
 
     # Run planner

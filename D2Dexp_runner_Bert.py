@@ -17,7 +17,7 @@ import argparse, os, torch, torch.nn as nn, torch.nn.functional as F, torch.opti
 import torch.distributed as dist
 
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
-from transformers import BertTokenizerFast, BertForMaskedLM
+from transformers import BertTokenizerFast, BertForMaskedLM, AutoModelForMaskedLM
 from transformers import DataCollatorForLanguageModeling
 
 from datasets import load_dataset
@@ -69,7 +69,7 @@ class PartStart(nn.Module):
         hidden = self.embeddings(input_ids=input_ids, token_type_ids=token_type_ids)
 
         # Build extended mask once and carry it downstream
-        ext_mask = self.mask(self.bert, attention_mask, input_ids.shape, device)
+        ext_mask = self.mask(attention_mask, input_ids.shape, device)
 
         # Run the first chunk of layers
         for layer in self.layers:
@@ -125,7 +125,7 @@ class PartWhole(nn.Module):                                # rank 4：25-27 + no
         hidden = self.embeddings(input_ids=input_ids, token_type_ids=token_type_ids)
 
         # Build extended mask once and carry it downstream
-        ext_mask = self.mask(self.bert, attention_mask, input_ids.shape, device)
+        ext_mask = self.mask(attention_mask, input_ids.shape, device)
 
         # Run the first chunk of layers
         for layer in self.layers:
@@ -237,10 +237,10 @@ def main():
 
     device = torch.device("cpu")     
 
-    name = "bert-base-uncased"
+    name = "google-bert/bert-base-uncased"
 
-    tok = BertTokenizerFast.from_pretrained(name, trust_remote_code=True)
-    full = BertForMaskedLM.from_pretrained(name, trust_remote_code=True)
+    tok = AutoTokenizer.from_pretrained(name, trust_remote_code=True, use_fast=False)
+    full = AutoModelForMaskedLM.from_pretrained(name, trust_remote_code=True)
     #tok = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
     #tok.pad_token = tok.eos_token
     #full = AutoModelForCausalLM.from_pretrained(name, trust_remote_code=True)

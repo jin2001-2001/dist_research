@@ -28,6 +28,14 @@ if [ "${MODEL_NAME}" == "Qwen3" ]; then
     ATTENTION_HEAD_SIZE=16
   fi
 
+  if [ "${MODEL_SIZE}" == "1.7B" ] ; then
+    HIDDEN_SIZE=2048
+    SEQUENCE_LENGTH=256
+    NUM_LAYERS=28
+    VOCAB_SIZE=151936
+    ATTENTION_HEAD_SIZE=16
+  fi
+
   model_specific_options="
                 --hidden_size=${HIDDEN_SIZE}
                 --sequence_length=${SEQUENCE_LENGTH}

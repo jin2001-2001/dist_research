@@ -2,18 +2,21 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Values
-values = [586, 15.5, 586, 32.3, 11.4]
+values = [297, 25.6, 24.08, 545, 64.62, 43.53]
 # Grouping: Group 1 -> bars 1&2; Group 2 -> bars 3,4,5
-group_indices = [[0, 1], [2, 3, 4]]
-group_names = ["D2D link", "Shared BW"]
+group_indices = [[0, 1, 2], [3, 4, 5]]
+group_names = ["Cloud Network Setup", "Edge Network Setup"]
 
 # Colors (close shades) and legend mapping:
+
+
+
 color_map = {
-    "cat1": "#5C97D6",  # Bars 1 & 3
-    "cat2": "#47979B",  # Bars 2 & 4
-    "cat3": "#71cfd3",  # Bar 5
+    "cat1": "#4e79a7",  # Bars 1 & 3
+    "cat2": "#6b9acb",  # Bars 2 & 4
+    "cat3": "#9fbbe3",  # Bar 5
 }
-colors = [color_map["cat1"], color_map["cat2"],
+colors = [color_map["cat1"], color_map["cat2"], color_map["cat3"],
           color_map["cat1"], color_map["cat2"], color_map["cat3"]]
 legend_items = [("Metis", color_map["cat1"]),
                 ("Astroid", color_map["cat2"]),
@@ -39,7 +42,7 @@ bars = ax.bar(positions, values, width=width,
 ax.grid(True, axis='y', linestyle='--', alpha=0.25)
 
 # Zoomed view; keep small bars readable
-ylim = 40
+ylim = 110
 ax.set_ylim(0, ylim)
 
 # Annotate values; clamp tall bars just below the top so they don't hit the title
@@ -47,10 +50,10 @@ for bar, val in zip(bars, values):
     x = bar.get_x() + bar.get_width() / 2
     h = bar.get_height()
     if h > ylim:
-        ax.annotate(f'{val}', xy=(x, ylim - 4), xycoords='data',
+        ax.annotate(f'{val}', xy=(x, ylim - 10), xycoords='data',
                     xytext=(0, 6), textcoords='offset points',
                     ha='center', va='bottom')
-        ax.annotate("↑", xy=(x, ylim - 0.8), ha='center', va='bottom')
+        ax.annotate("↑", xy=(x, ylim - 1.2), ha='center', va='bottom')
     else:
         ax.annotate(f'{val}', xy=(x, h), xytext=(0, 4),
                     textcoords='offset points', ha='center', va='bottom')

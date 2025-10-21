@@ -238,6 +238,9 @@ def plan_hpp_dynamic(
             return stage_latency_of_device(d, layer_span, y)
 
         y_alloc = allocate_fn(group_devs, micro_batch_size, mem_of, lat_of, block_size)
+        if y_alloc == False:
+            print("failed on",group_devs, layer_span)
+            return False
 
         # Ef/Eb: max over devices of per-layer sums under y_d
         Ef, Eb = 0.0, 0.0
@@ -331,8 +334,11 @@ def plan_hpp_dynamic(
             span = (L - l, L)
             group = devs_sorted[N - n : N]
             st = build_stage(span, group)
-            obj, _ = compose_round_latency([st])
-            return obj, (st,)
+            if st != False:
+                obj, _ = compose_round_latency([st])
+                return obj, (st,)
+            else:
+                return False, False
 
         best_obj = float("inf")
         best: Tuple[StageSpec, ...] = tuple()
@@ -342,13 +348,15 @@ def plan_hpp_dynamic(
             for n_sub in range(1, n):
                 # sub-pipeline with p-1 stages on (l_sub, n_sub)
                 sub_obj, sub_stages = solve(l_sub, n_sub, p - 1)
-                if sub_obj == float("inf"):
+                if sub_obj == float("inf") or sub_obj == False:
                     continue
 
                 # head stage on (l - l_sub) layers, (n - n_sub) devices
                 span_head = (L - l, L - l_sub)
                 group_head = devs_sorted[N - n : N - n_sub]
                 st_head = build_stage(span_head, group_head)
+                if st_head == False:
+                    continue
 
                 obj, _ = compose_round_latency([st_head, *sub_stages])
                 if obj < best_obj:
@@ -361,10 +369,11 @@ def plan_hpp_dynamic(
     best_plan: Tuple[StageSpec, ...] = tuple()
     for p in range(1, P_cap + 1):
         obj, sts = solve(L, N, p)
+        if obj == False:
+            continue
         if obj < best_overall:
             best_overall = obj
             best_plan = sts
-
     round_latency, meta = compose_round_latency(list(best_plan))
     return PipelinePlan(stages=list(best_plan), round_latency=round_latency, meta=meta)
 

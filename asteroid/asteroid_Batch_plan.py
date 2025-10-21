@@ -55,7 +55,9 @@ def allocate_microbatch_samples(
                     total_cap += v_d
 
             if not headroom:
-                raise ValueError("Micro-batch cannot fit into the group's memory budgets.")
+                print("OK, bad allocation...", remaining, beta, )
+                return False
+                #raise ValueError("Micro-batch cannot fit into the group's memory budgets.")
 
             alloc_floor: Dict[str, int] = {name: 0 for name in headroom}
             frac_part: Dict[str, float] = {name: 0.0 for name in headroom}
@@ -85,6 +87,7 @@ def allocate_microbatch_samples(
                 y[name] += add
 
             remaining = remaining_after_floor
+        return True
 
            
     def straggler_workload_offloading(group: List["Device"], y: Dict[str, int]) -> None:
@@ -119,7 +122,8 @@ def allocate_microbatch_samples(
 
     y: Dict[str, int] = {d.name: 0 for d in group}
 
-    memory_aware_balancing(group, micro_batch_size, y)
+    if False == memory_aware_balancing(group, micro_batch_size, y):
+        return False
 
     straggler_workload_offloading(group, y)
 

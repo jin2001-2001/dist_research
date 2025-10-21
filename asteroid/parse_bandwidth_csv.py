@@ -46,7 +46,7 @@ def name_extractor(name_list):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--inputs",nargs="+", required=True)
-    ap.add_argument("--mbps", default=250)
+    ap.add_argument("--mbps", default=400)
     ap.add_argument("--out", default="bandwidth_matrix.json")
     args = ap.parse_args()
 
