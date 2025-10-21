@@ -165,13 +165,12 @@ class Device:
         layers = layer_slice[1]-layer_slice[0]
         batch_act_storage = 6*seq*hidden*4 *layers *(inversestage*2+1)   #no batch, we need calculate batches...#4 is float32 needs 4 bytes
         parameter_storage = self.layer_param_bytes * layers *4 #(2 for opt, 1 for gradient)
-
         if layer_slice[1] == self.total_layers:
             parameter_storage+= self.tail_param_bytes*4
         if layer_slice[0] == 0:
             parameter_storage+= self.embedding_param_bytes*4
 
-        #print((parameter_storage+batch_act_storage*8)/1024/1024/1024)
+        #print(layer_slice, (parameter_storage+batch_act_storage*8)/1024/1024/1024)
         max1 = (self.Mconstraint*1024*1024-parameter_storage)/(batch_act_storage)
         max2 = 1024*512
         #max2 = self.Econstraint * self.Tability/(self.Eability*(layers**2)*(layers_size**2))/(seq*hidden)

@@ -17,6 +17,7 @@ from DPsolver import dynamic_programming_planning
 from collections import Counter
 import utils
 import time
+import random
 
 def clear_scratch_folder(folder_path):
     if not os.path.exists(folder_path):
@@ -67,7 +68,7 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
     #print(result)
     #cj.RCPSP_plot(model, result)
     if result.objective>0:
-        enable = True
+        enable = False
         score = vpg.pip_ploting_graph(num_stages = nsteps, num_microbatches = nmbatch,
                     forward_times = B_ft,
                     backward_times = B_bt,
@@ -134,7 +135,14 @@ def dora_best(  ndevice,
 
     topK = utils.TopKContainer(ks)
 
-    for perm_indices in itertools.permutations(range(len(test_list))):
+    Permuaccounts = 0
+
+    perms = list(itertools.permutations(range(len(test_list))))
+    random.shuffle(perms)   # now order is randomized
+
+    for perm_indices in perms[:]:
+        if Permuaccounts>len(test_list):
+            continue
         device_order = [test_list[i] for i in perm_indices]
         mem_order    = [mem_list[i] for i in perm_indices]
 
@@ -153,7 +161,7 @@ def dora_best(  ndevice,
                                           Profilelor = simprofile, 
                                           alpha = 1, SLO = 0)
         topK.merge_with_device_type(result, perm_indices)  # notice here that we use it to store perm_indices, not actual device name anymore...
-        
+        Permuaccounts+=1
 
     for j in range(len(topK.scores)):
         score_list.append(topK.scores[j])
@@ -166,6 +174,7 @@ def dora_best(  ndevice,
     score_list_after = []
     print(score_list)
     print(plan_list)
+    print(allo_list)
     print(device_order_list)
 
     Tpart1 = time.time() - start1
@@ -269,20 +278,20 @@ if __name__ == "__main__":
     nmbatch = 20
     mbatchsize = 8
     layers = 28
-    hidden_size = 1024
+    hidden_size = 2048
     seq = 256
-    profilehome="../Profile_exp_0.6"
+    profilehome="../Profile_exp_1.7"
     band = 250
     set_list = ["2630"]*0 + ["4050"]*1+["4060"]*1+ ["A40"]*0 + ["Camera"]*0 + ["Samsung"]*1 + ["V100"]*0 + ["Xiaomi"]*1
     mem_list = [32*2]*0+     [8*2]*1+    [12*2]*1  + [48*2]*0+    [16*2]*0+     [12*2]*1+       [32*2]*0+    [12*2]*1
     mem_list = [x*1024 for x in mem_list]
 
-    test_dlist =["4060"]*1 + ["Samsung"]*1 + ["Xiaomi"]*1 + ["4050"]*1
-    mem_tlist = [12*2, 12*2, 12*2, 8*2]
+    test_dlist =["4060"]*1 + ["Samsung"]*1 + ["Xiaomi"]*1 +["4050"]*1
+    mem_tlist = [12*2, 12*2, 12*2 , 8*2]
     mem_tlist = [x*1024 for x in mem_tlist]
-    #plan1 = [{'layer':(0,26), 'device':(0,1)},{'layer':(26,28), 'device':(1,3)}]
-    plan1 = [{'layer':(0,28), 'device':(0,4)}]
-    #plan1 = [{'layer':(0,1), 'device':(0,1)},{'layer':(1,2), 'device':(1,2)}, {'layer':(2,8), 'device':(2,3)},{'layer':(8,28), 'device':(3,4)}]
+    #plan1 = [{'layer':(0,13), 'device':(0,2)},{'layer':(13,28), 'device':(2,4)}]
+    #plan1 = [{'layer':(0,28), 'device':(0,4)}]
+    plan1 = [{'layer':(0,1), 'device':(0,1)},{'layer':(1,8), 'device':(1,2)}, {'layer':(8,17), 'device':(2,3)},{'layer':(17,28), 'device':(3,4)}]
     #plan1 = [{'layer':(0,14), 'device':(0,1)},{'layer':(14,15), 'device':(1,3)},{'layer':(15,28), 'device':(3,4)}]
     #plan2 = [{'layer':(0,5), 'device':(0,1)}, {'layer':(5,15), 'device':(1,3)}]
 
@@ -296,7 +305,7 @@ if __name__ == "__main__":
                 band,
                 profilehome,
                 set_list, 
-                mem_list,ks=1, ss = 1)
+                mem_list,ks=20, ss = 1)
     
     if 1==0:    
         simulator_eval(  ndevice,
@@ -309,5 +318,5 @@ if __name__ == "__main__":
                 profilehome,
                 plan1,
                 test_dlist,
-                mem_tlist,ks=10, ss = 1)
+                mem_tlist,ks=30, ss = 1)
     
