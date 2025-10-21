@@ -48,6 +48,13 @@ def find_blocks(model: nn.Module) -> List[nn.Module]:
                 layers = getattr(inner, "layers")
                 if isinstance(layers, (list, nn.ModuleList)):
                     return list(layers)
+                
+    # BERT layout: model.bert.encoder.layer (ModuleList)
+    if hasattr(model, "bert") and hasattr(model.bert, "encoder"):
+        enc = model.bert.encoder
+        if hasattr(enc, "layer") and isinstance(enc.layer, (list, nn.ModuleList)):
+            return list(enc.layer)
+        
     # Fallback: search modules named "*layers*"
     for name, mod in model.named_modules():
         if name.endswith("layers") and isinstance(mod, (list, nn.ModuleList)):
@@ -62,10 +69,12 @@ def find_special_modules(model: nn.Module) -> Dict[str, nn.Module]:
     candidates = {
         "embed": [
             "model.embed_tokens", "transformer.wte", "embed_tokens",
-            "tok_embeddings", "embeddings.word_embeddings"  # BERT
+            "tok_embeddings", 
+            "bert.embeddings.word_embeddings"  # BERT
         ],
         "lm_head": [
-            "lm_head", "cls", "language_model_head", "lm_head.linear"
+            "lm_head", "cls", "language_model_head", "lm_head.linear",
+            "cls.prediections"   # BERT
         ],
     }
     found = {}
@@ -86,6 +95,37 @@ def get_vocab_hidden(model: nn.Module):
     vocab = emb.weight.shape[0]
     hidden = emb.weight.shape[1]
     return vocab, hidden, emb.weight.element_size()
+
+###for BERT
+def make_mlm_labels(input_ids, tokenizer, mlm_prob=0.15):
+    """
+    Create masked input_ids and labels following 80/10/10 rule.
+    """
+    device = input_ids.device
+    labels = input_ids.clone()
+    special = torch.tensor(
+        [tokenizer.get_special_tokens_mask(x.tolist(), True) for x in input_ids],
+        dtype=torch.bool, device=device
+    )
+    prob = torch.full(labels.shape, mlm_prob, device=device)
+    prob.masked_fill_(special, 0.0)
+    mask_idx = torch.bernoulli(prob).bool()
+
+    # Only masked positions contribute to loss
+    labels[~mask_idx] = -100
+
+    # 80% replace with [MASK]
+    replace_mask = torch.bernoulli(torch.full(labels.shape, 0.8, device=device)).bool() & mask_idx
+    input_ids[replace_mask] = tokenizer.mask_token_id
+
+    # 10% replace with random token
+    replace_rand = mask_idx & ~replace_mask
+    rand_mask = torch.bernoulli(torch.full(labels.shape, 0.5, device=device)).bool() & replace_rand
+    rand_tokens = torch.randint(0, tokenizer.vocab_size, input_ids.shape, device=device)
+    input_ids[rand_mask] = rand_tokens[rand_mask]
+
+    # Remaining 10% unchanged
+    return input_ids, labels
 
 
 DT_SIZES = {
@@ -135,16 +175,19 @@ def main():
     ap.add_argument("--host", type=str, default="CPU100", help="Identifier for this machine, e.g., cpu1")
     args = ap.parse_args()
 
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Resolve dtype
     dtype_map = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}
     dtype = dtype_map[args.dtype]
 
     # Load model locally
     from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
-    tok = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(args.model_path, config=config, torch_dtype=dtype, trust_remote_code=True, low_cpu_mem_usage=False)
-    model.eval()
+    from transformers import AutoModelForMaskedLM
+    tok = AutoTokenizer.from_pretrained(args.model_path)
+    config = AutoConfig.from_pretrained(args.model_path)
+    model = AutoModelForMaskedLM.from_pretrained(args.model_path, config=config, torch_dtype=dtype).to(device)
+    model.train()
     for p in model.parameters():
         p.requires_grad_(True)  # we will run backward
 
@@ -170,7 +213,7 @@ def main():
         padding="max_length", 
         truncation=True,
         max_length=args.seq_len,
-        return_attention_mask=False,
+        return_attention_mask=True,
         return_tensors="pt"        # PyTorch tensors (faster downstream)
     )
     t1 = time.perf_counter()
@@ -180,9 +223,16 @@ def main():
 
     B = args.batch
     T = args.seq_len
-    input_ids = torch.randint(0, vocab, (B, T), dtype=torch.long)
+    #input_ids = torch.randint(0, vocab, (B, T), dtype=torch.long)
     # labels for LM loss
-    labels = torch.randint(0, vocab, (B, T), dtype=torch.long)
+    #labels = torch.randint(0, vocab, (B, T), dtype=torch.long)
+
+    input_ids = enc["input_ids"].to(device)
+    attention_mask = enc["attention_mask"].to(device)
+    # Build MLM training labels
+    mlm_input_ids, mlm_labels = make_mlm_labels(input_ids.clone(), tok, mlm_prob=0.15)
+    mlm_input_ids = mlm_input_ids.to(device)
+    mlm_labels = mlm_labels.to(device)
 
     # Locate blocks
     blocks = find_blocks(model)
@@ -308,6 +358,7 @@ def main():
 
 
     # Run
+    opt = torch.optim.AdamW(model.parameters(), lr=5e-5)
     iters = args.iters
     warmup = args.warmup
     print("begin warmup")
@@ -315,8 +366,10 @@ def main():
         if it == warmup:
             total_T_start = time.perf_counter() # begin record total time...
             print("begin record actual")
-        model.zero_grad(set_to_none=True)
-        out = model(input_ids=input_ids, labels=labels)
+        opt.zero_grad(set_to_none=True)
+        out = model(input_ids=mlm_input_ids,
+                    attention_mask=attention_mask,
+                    labels=mlm_labels)
         print("out success")
         loss = out.loss
         if it >= warmup:
