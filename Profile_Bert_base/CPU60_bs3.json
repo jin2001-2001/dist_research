@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.09168973575287964,
-      "backward_time_s": 0.049108520994195715
+      "forward_time_s": 0.02670305898936931,
+      "backward_time_s": 0.047245449968613684
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0938151364971418,
-      "backward_time_s": 0.051271250515128486
+      "forward_time_s": 0.025985468746512197,
+      "backward_time_s": 0.043531378512852825
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.09789966851531062,
-      "backward_time_s": 0.0468728412524797
+      "forward_time_s": 0.026513236734899692,
+      "backward_time_s": 0.04578909774136264
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.09764927678043023,
-      "backward_time_s": 0.04742196900770068
+      "forward_time_s": 0.02658039823290892,
+      "backward_time_s": 0.04253787474590354
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.09983054325857665,
-      "backward_time_s": 0.04691765100869816
+      "forward_time_s": 0.025151057241600938,
+      "backward_time_s": 0.043546476983465254
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.09977220598375425,
-      "backward_time_s": 0.047297106255427934
+      "forward_time_s": 0.026339449992519803,
+      "backward_time_s": 0.04716644326981623
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.10054936024243943,
-      "backward_time_s": 0.04697289998875931
+      "forward_time_s": 0.02575547876767814,
+      "backward_time_s": 0.047393628759891726
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.10115382249932736,
-      "backward_time_s": 0.05020292023255024
+      "forward_time_s": 0.025465011509368196,
+      "backward_time_s": 0.045221804233733565
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.10291793674696237,
-      "backward_time_s": 0.050486065752920695
+      "forward_time_s": 0.025418171746423468,
+      "backward_time_s": 0.0441587190143764
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.10154658624378499,
-      "backward_time_s": 0.057109593239147216
+      "forward_time_s": 0.024912968510761857,
+      "backward_time_s": 0.045508239258197136
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.10405504224763718,
-      "backward_time_s": 0.057677024757140316
+      "forward_time_s": 0.025370758972712792,
+      "backward_time_s": 0.04074752950691618
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.10432521547772922,
-      "backward_time_s": 0.06288894075260032
+      "forward_time_s": 0.0249195224896539,
+      "backward_time_s": 0.043149377990630455
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 0.0006630964926443994,
-      "backward_time_s": 4.807996447198093e-06
+      "forward_time_s": 0.0007844267383916304,
+      "backward_time_s": 4.890243872068822e-06
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.08760743548918981,
-      "backward_time_s": 0.15284204251656774
+      "forward_time_s": 0.06991180348268244,
+      "backward_time_s": 0.13840759676531889
     }
   ]
 }
