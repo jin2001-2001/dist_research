@@ -27,10 +27,12 @@ import argparse
 import json
 import time
 from typing import Dict, List
-
+from datasets import load_dataset
+from torch.utils.data import DataLoader
 import torch
 import torch.nn as nn
 import psutil
+from transformers import DataCollatorForLanguageModeling
 
 def _get_attr(obj, path: str):
     cur = obj
@@ -234,9 +236,58 @@ def main():
     mlm_input_ids = mlm_input_ids.to(device)
     mlm_labels = mlm_labels.to(device)
 
+    raw = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+
+    def tok_fn(ex):
+        return tok(ex["text"], add_special_tokens=False, return_attention_mask=False)
+
+    def grp_fn(ex):
+        concat = sum(ex["input_ids"], [])
+        inner = T - 2                       # reserve 2 tokens
+        tot = (len(concat) // inner) * inner
+        if tot == 0:
+            return {"input_ids": [], "attention_mask": [], "token_type_ids": []}
+    
+        chunks = [concat[i:i+inner] for i in range(0, tot, inner)]
+        ids  = [[tok.cls_token_id] + c + [tok.sep_token_id] for c in chunks]
+        attn = [[1]*len(x) for x in ids]        # pad mask (no padding here)
+        segs = [[0]*len(x) for x in ids]        # single segment (A)
+        return {"input_ids": ids,
+                "attention_mask": attn,
+                "token_type_ids": segs}
+
+    # 4. Apply maps sequentially
+    ds = (raw.map(tok_fn, batched=True, remove_columns=["text"])
+              .map(grp_fn, batched=True, remove_columns=["token_type_ids","attention_mask"]))
+    ds.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids"])
+
+    # 5. Dynamic masking collator (does 80/10/10 mask rule, builds labels)
+    collator = DataCollatorForLanguageModeling(
+        tokenizer=tok,
+        mlm=True,
+        mlm_probability=0.15
+    )
+    loader = DataLoader(
+        ds,
+        batch_size=B,
+        shuffle=False,
+        drop_last=True,
+        collate_fn=collator
+    )
+
+    thebatch = next(iter(loader))
+    # Extract the tensors
+    mlm_input_ids  = thebatch["input_ids"].to(device)         # masked input tokens (includes [MASK])
+    mlm_labels     = thebatch["labels"].to(device)            # labels: original ids for masked tokens, -100 elsewhere
+    attention_mask = thebatch["attention_mask"].to(device)    # 1 for valid tokens, 0 for padding
+
+
+
     # Locate blocks
     blocks = find_blocks(model)
     HeadAndTail = find_special_modules(model)
+
+
 
 
     L = len(blocks)
@@ -379,6 +430,7 @@ def main():
             #t1 = time.perf_counter()
         else:
             loss.backward()
+        opt.step()
     print("record/profile over")
     total_T = time.perf_counter() - total_T_start
     # Average over measured iterations
