@@ -189,7 +189,7 @@ def main():
     tok = AutoTokenizer.from_pretrained(args.model_path, use_fast=False)
     config = AutoConfig.from_pretrained(args.model_path)
     model = AutoModelForMaskedLM.from_pretrained(args.model_path, config=config, torch_dtype=dtype).to(device)
-    model.train()
+    model.eval()
     for p in model.parameters():
         p.requires_grad_(True)  # we will run backward
 
@@ -409,7 +409,7 @@ def main():
 
 
     # Run
-    opt = torch.optim.AdamW(model.parameters(), lr=5e-5)
+    #opt = torch.optim.AdamW(model.parameters(), lr=5e-5)
     iters = args.iters
     warmup = args.warmup
     print("begin warmup")
@@ -417,7 +417,7 @@ def main():
         if it == warmup:
             total_T_start = time.perf_counter() # begin record total time...
             print("begin record actual")
-        opt.zero_grad(set_to_none=True)
+        #opt.zero_grad(set_to_none=True)
         out = model(input_ids=mlm_input_ids,
                     attention_mask=attention_mask,
                     labels=mlm_labels)
@@ -430,7 +430,7 @@ def main():
             #t1 = time.perf_counter()
         else:
             loss.backward()
-        opt.step()
+        #opt.step()
     print("record/profile over")
     total_T = time.perf_counter() - total_T_start
     # Average over measured iterations
