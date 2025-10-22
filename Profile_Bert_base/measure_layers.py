@@ -258,7 +258,7 @@ def main():
 
     # 4. Apply maps sequentially
     ds = (raw.map(tok_fn, batched=True, remove_columns=["text"])
-              .map(grp_fn, batched=True, remove_columns=["token_type_ids","attention_mask"]))
+              .map(grp_fn, batched=True))
     ds.set_format("torch", columns=["input_ids", "attention_mask", "token_type_ids"])
 
     # 5. Dynamic masking collator (does 80/10/10 mask rule, builds labels)
