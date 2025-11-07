@@ -194,18 +194,7 @@ class Profilelor:
         self.bandwidth = Bandwidth
         self.total_layers = total_layer
 
-    #never use batch_checker
-    #def batch_checker(self, device_slice, layer_slice, inverseStage):
-    #    total_mem = sum(self.DList[i].Mconstraint for i in range(device_slice[0], device_slice[1]))
-    #    layers = (layer_slice[1]-layer_slice[0])
-    #    batch_act_storage = 7*self.seq_len*self.hiddenSize*4 *layers *(inverseStage*2+1)*self.MbatchSize # this 4 is float32
-    #    parameter_storage = self.DList[0].layer_param_bytes * layers *4*self.MbatchSize
-#
-    #    total_size = (batch_act_storage+parameter_storage)*(device_slice[1]-device_slice[0])/1e6 #M
-    #    if total_mem<total_size:
-    #        return False
-    #    return True
-    
+
     def communication_solver(self, layer_slice=1): #simple version
         #T = bsize*self.hiddenSize*self.seq_len/(self.bandwidth)
         T = self.DList[0].activation_bytes_per_sample * self.MbatchSize/1e6/self.bandwidth*8
@@ -335,24 +324,203 @@ class Profilelor:
 
         return B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList
 
+###########
+###########
+###########
+#graph version:
+
+
+###helper func...
+def stage_helper(phase_index, the_whole_plan):
+    curphase = phase_index[0]
+    maping = {}
+    #print(the_whole_plan)
+    for shard in the_whole_plan:
+        ph_idx = shard['phase']
+        if ph_idx[0]>curphase:
+            if ph_idx in maping:
+                maping[ph_idx]+=1
+            else:
+                maping[ph_idx] = 1
+    # the mapping stores all phase_idx tuples' internal shard numbers...
+    maping1 = {}
+    for atuple in maping:
+        phase = atuple[0]
+        amount = maping[atuple]
+        if phase in maping1:
+            if amount> maping1[phase]:
+                maping1[phase] = amount
+        else:
+            maping1[phase] = amount
+    
+    return sum(maping1.values())
+
+class GraphProfilelor:
+    """
+    Maintains the k smallest (score, plan) pairs.
+    """
+    def __init__(self,DList,hiddenSize, seq, total_layer, MbatchSize, Bandwidth, map_dict):
+        #self.deviceN = damount
+        self.DList = DList      #per ele should be a list of Devices, and use map_dict to get the correct devices...
+        self.hiddenSize = hiddenSize # the same, is a list 
+        self.seq_len = seq    # list 
+        self.MbatchSize = MbatchSize # not list 
+        self.bandwidth = Bandwidth # not list 
+        self.total_layers = total_layer # list...
+        self.phase_mapping = map_dict
+
+    
+    def communication_solver(self,phase_index, layer_slice=1): #simple version
+        #T = bsize*self.hiddenSize*self.seq_len/(self.bandwidth)
+        index = self.phase_mapping[phase_index]
+        T = self.DList[0][index].activation_bytes_per_sample * self.MbatchSize/1e6/self.bandwidth*8
+        #print(T)
+        return T
+
+    def gathering_solver(self,phase_index, device_slice, layer_slice): #simple version
+
+        index = self.phase_mapping[phase_index]
+
+        D_amount = device_slice[1]-device_slice[0]
+        l_amount = layer_slice[1]-layer_slice[0]
+
+        accum= l_amount*self.DList[0][index].layer_param_bytes
+
+        if layer_slice[0] == 0:
+            accum += self.DList[0][index].embedding_param_bytes
+        if layer_slice[1] == self.total_layers[index]:
+            accum += self.DList[0][index].tail_param_bytes
+
+        total_parameter_bytes = accum*(D_amount-1)/D_amount *2 #plus embedding estimiation
+
+        T = total_parameter_bytes*8/1e6/(self.bandwidth/D_amount)
+
+        return T
+
+
+
+
+
+    def DP_solver(self, phase_index, device_slice, layer_slice, inverseStage, the_whole_plan):
+
+        index = self.phase_mapping[phase_index]
+        rest_stage = stage_helper(phase_index, the_whole_plan)
+
+        #print(device_slice,layer_slice)
+        layers = layer_slice[1]-layer_slice[0]
+        c_list = [1/self.DList[i][index].computeprofile.forward for i in range(device_slice[0],device_slice[1])]
+        #notice here, we need to take the rest stage into calculation...
+        b_list = [int(self.DList[i][index].maximum_batches_available(layer_slice, inverseStage + rest_stage,self.seq_len[index],self.hiddenSize[index])) for i in range(device_slice[0],device_slice[1])] #memeory bound but tranfer to upperbound of batches
+        if sum(b_list)<self.MbatchSize:              # layers, inversestage,seq,hidden
+            #print(b_list, self.MbatchSize)
+            return False ##cannot reach the batch assignment...
+        if len(b_list)>self.MbatchSize:
+            return False
+        ###  "Largest Remainder Method" to distribute the batch in average...###
+        n = len(b_list)
+        c_sum = sum(c_list)
+        ideal = [c * (self.MbatchSize) / c_sum for c in c_list]
+        floored = [max(min(int(x), b_list[i]),1) for i, x in enumerate(ideal)]
+        assigned = sum(floored)
+        remainder = self.MbatchSize - assigned
+
+        fractional = [(i, ideal[i] - int(ideal[i])) for i in range(n)]
+        # Sort descending by fractional part
+        fractional.sort(key=lambda x: -x[1])
+
+        if remainder<0: # that is, too many necessary 1's, so we have to discard some value from 
+            while remainder<0:
+                fractional.sort(key=lambda x: x[1])
+                for i, frac in fractional:
+                    if floored[i] >1:
+                        floored[i]-=1
+                        remainder+=1
+
+        # Distribute remaining units
+        for i, frac in fractional:
+            if remainder == 0:
+                break
+            gap = b_list[i] - floored[i]
+            if gap > 0:
+                assign = min(gap, remainder)
+                floored[i] += assign
+                remainder -= assign
+        return floored
+
+
+
+    def getall(self, P):
+        #print("profilor's info:", P)
+
+        ##warning: if having multiple decoders at the end,,, we need to change stepsN to s*len(P) and consider 
+        ##redundant communication step envolved that might affect drawing...
+        stepsN = 2*len(P)-1
+        B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering = ([] for _ in range(6))
+        BatchAllocateList = []
+        for s in range(stepsN):
+            if s%2 == 0: # calculation step:
+                stepinfo = P[s//2]
+                layer_slice = stepinfo['layer']
+                device_slice = stepinfo['device']
+                phase_index = stepinfo['phase']
+                #for each loops, use DP solver to get the answer,
+                inverseStage = stepinfo['inver_internal_stage_idx']
+                batch_shard = self.DP_solver(phase_index,device_slice, layer_slice, inverseStage, P)
+                if batch_shard == False:
+                    return False #failed to allocate batch for one Devices group
+                BatchAllocateList.append(batch_shard)
+                #calculate the time latency for the device group...
+                layers = layer_slice[1]- layer_slice[0]
+                devices = device_slice[1] - device_slice[0]
+                latencyf = 0
+                latencyb = 0
+                index = 0
+                total_energy = 0
+
+                the_model_index = self.phase_mapping[phase_index]
+                for i in range(device_slice[0],device_slice[1]):
+                    d = self.DList[i][the_model_index]
+                    b = batch_shard[index]
+                    lf,lb = d.Tlatency(layer_slice, b)
+                    total_energy+=d.Econsump(layer_slice, self.DList[0][the_model_index].layer_param_bytes, b,self.seq_len[the_model_index],self.hiddenSize[the_model_index])
+                    if lf>latencyf:
+                        latencyf = lf
+                    if lb>latencyb:
+                        latencyb = lb
+                    index+=1
+                #now, we get latency of the device group
+
+                ###jin important: we multiply a constant to estimate the backward cost
+                B_ft.append(latencyf)
+                B_bt.append(latencyb)
+                B_fe.append(total_energy*0.4)
+                B_be.append(total_energy*0.6)
+                tt=0
+                ee=0
+                ###jin important: we gathering actually only involve transmission energy cost, it is little...
+                if (devices > 1):
+                    #print("a DP group")
+                    tt = self.gathering_solver(phase_index, device_slice, layer_slice)
+                T_gathering.append(tt)
+                E_gathering.append(ee)
+            else: # communication step:
+                T = self.communication_solver(phase_index, self.MbatchSize)
+                B_ft.append(T)
+                B_bt.append(T)
+                B_fe.append(0)
+                B_be.append(0)                
+                T_gathering.append(0)
+                E_gathering.append(0)                   
+
+
+
+
+        return B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList
     
 
+if __name__ == "__main__":
 
 
-#def compute_integer_ai(c_list, total_C):
-#    c_sum = sum(c_list)
-#    ideal = [c * total_C / c_sum for c in c_list]
-#    floored = [int(x) for x in ideal]
-#    remainder = total_C - sum(floored)
-#
-#    # Get fractional parts with index
-#    fractional = [(i, ideal[i] - floored[i]) for i in range(len(c_list))]
-#    # Sort by descending fractional part
-#    fractional.sort(key=lambda x: -x[1])
-#
-#    # Distribute remaining units
-#    for i in range(remainder):
-#        idx = fractional[i][0]
-#        floored[idx] += 1
-#
-#    return floored
+    exampleP = [{'phase': (0, 0), 'layer': (0, 9), 'device': (0, 1)}, {'phase': (0, 0), 'layer': (9, 10), 'device': (1, 2)}, {'phase': (0, 1), 'layer': (0, 15), 'device': (2, 3)}, {'phase': (1, 0), 'layer': (0, 20), 'device': (3, 4)}]
+
+    print(stage_helper((1,0),exampleP))

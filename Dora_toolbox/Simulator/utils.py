@@ -137,7 +137,7 @@ def plan_parser(P):
     for shard in P:
         L.append(shard['phase'])
 
-
+    #print(L)
     # Step 1: Group indices by phase and index type
     phase_to_indices = defaultdict(lambda: defaultdict(list))
     for idx, (phase, branch) in enumerate(L):
@@ -187,7 +187,7 @@ def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha):
     chain_list = plan_parser(P)
 
     T_max = -1
-
+    BatchAllocateList = BatchAllocateList_a
     for per_chain in chain_list:
         ##construct the index list:
         actual_index_l = []
@@ -201,7 +201,7 @@ def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha):
         B_ft = [B_ft_a[i] for i in actual_index_l]
         B_bt = [B_bt_a[i] for i in actual_index_l]
         T_gathering = [T_gathering_a[i] for i in actual_index_l]
-        BatchAllocateList = [BatchAllocateList_a[i] for i in actual_index_l]
+
 
 
 
@@ -215,9 +215,9 @@ def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha):
         d = max(range(S), key=lambda i: (B_ft[i] + B_bt[i],i)) #if the same big, choose one with hight step idx.
 
         # Compute phase times
-        T1 = start_phase_time_est(P, B_list, d)
+        T1 = start_phase_time_est(B_ft, B_list, d)
         T2 = (M - S + d) * (B_ft[d] + B_bt[d])
-        T3_list = end_phase_time_est(P, B_list, d)
+        T3_list = end_phase_time_est(B_ft, B_list, d)
 
         T_latency = float('-inf')
 
@@ -250,7 +250,7 @@ def start_phase_time_est(P, B_list, d):
     Implements StartPhaseTimeEst.
     """
     B_ft, B_bt = B_list
-    S = 2 * len(P) - 1
+    S = len(P)
     CritiPathT = 0
 
     for p in range(d, S):
@@ -275,7 +275,7 @@ def end_phase_time_est(P, B_list, d):
     Implements EndPhaseTimeEst.
     """
     B_ft, B_bt = B_list
-    S = 2 * len(P) - 1
+    S = len(P)
     CritiPathTList = []
 
     for s in range(S):
@@ -296,6 +296,6 @@ def end_phase_time_est(P, B_list, d):
 if __name__ == "__main__":
 
 
+    exampleP = [{'phase': (0, 0), 'layer': (0, 9), 'device': (0, 1)}, {'phase': (0, 0), 'layer': (9, 10), 'device': (1, 2)}, {'phase': (0, 1), 'layer': (0, 15), 'device': (2, 3)}, {'phase': (1, 0), 'layer': (0, 20), 'device': (3, 4)}]
 
-
-    print(get_all_chains([0,0,0,1,1]))
+    print(plan_parser(exampleP))

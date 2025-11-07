@@ -72,7 +72,7 @@ def dynamic_programming_planning_MM(Structure, Layer_structure, N, M, k, s, Prof
     ## now the Layer L is a list:
     # L = [(10,10),(30)] : tells that each partition's structure...
 
-
+    #print(Layer_structure)
     top_k_container = TopKContainer(k)
 
     
@@ -153,17 +153,17 @@ def dynamic_programming_planning_MM(Structure, Layer_structure, N, M, k, s, Prof
                                     if Previous_Plan == []:
                                         continue
 
-                                add_shard = {'phase':(phase,branch_num), 'layer':(L-l, L - l_prime), 'device':(N - n, N-n_prime)}
-                                #if Profilelor.DP_solver(add_shard['device'], add_shard['layer'], p-1) == False:
-                                    #print("fail")
-                                #    continue
+                                add_shard = {'phase':(phase,branch_num), 'layer':(L-l, L - l_prime), 'device':(N - n, N-n_prime), 'inver_internal_stage_idx':p-1}
 
                                 for r in range(min(s, len(Previous_Plan))):
                                     # Generate plan and get score. plan has s lists, in which an element is a dict...
                                     #important here: we consider l and n are inversed counting
 
                                     subplan = Previous_Plan[r]
-                                    
+                                    #for all subplan, test if the device is OOM or not...
+                                    if Profilelor.DP_solver(add_shard['phase'],add_shard['device'], add_shard['layer'], p-1, subplan) == False:
+                                        #print("fail")
+                                        continue                                    
 
                                     plan = [add_shard]+ subplan
                                     score, allocateplan = graph_plan_estimator((phase,branch_num),plan,M,SLO, Profilelor, alpha)

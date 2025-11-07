@@ -1,4 +1,4 @@
-from profile_real import Device, Profilelor
+from profile_real import Device, Profilelor, GraphProfilelor
 from DPsolver import dynamic_programming_planning
 import utils
 from collections import Counter
@@ -50,6 +50,23 @@ def generate_profiler_samples_nolimit(n=4,hidden_size = 0, seq = 256, layers = 2
         dList.append(Device(type_list[i], profilehome, layers, Mem = mem_list[i]))
     simprofile = Profilelor(dList,hiddenSize=hidden_size, seq=seq, total_layer= layers ,MbatchSize = MbatchSize, Bandwidth = band)
     return simprofile, band
+
+
+def generate_profiler_samples_nolimit_MM(model_names=['x','x', 'x'],n=4,hidden_size = [0]*3, seq = [0]*3, layers = [0]*3, type_list = ["cpu100"]*5,MbatchSize=4, profilehome="../../Profile", band = 100, mem_list = [100*1024]*5,map_dict={}):
+    dList = []
+    for i in range(len(type_list)):
+        # type, tprofile_loc, eprofile_loc = 0, Mem = 0, Energy = 1000)
+        pd_modellist = []
+        for idx, model_name in enumerate(model_names):
+            real_profile_name = str(type_list[i])+str(model_name)
+            pd_modellist.append(Device(real_profile_name, profilehome, layers[idx], Mem = mem_list[i]))
+            
+
+        dList.append(pd_modellist)
+    simprofile = GraphProfilelor(dList,hiddenSize=hidden_size, seq=seq, total_layer= layers ,MbatchSize = MbatchSize, Bandwidth = band,map_dict=map_dict)
+    return simprofile, band
+
+
 
 def test_Profilelor_DPsolver():  #a self defined examples...
     #for example, we have a 15 layer models:

@@ -12,8 +12,8 @@ import test_real as tr
 import sample_generation_graph as sgg
 import classical_jobshop as cj
 import visiualize_pip_graph as vpg
-from profile_real import Device, Profilelor
-from DPsolver import dynamic_programming_planning
+from profile_real import Device, Profilelor, GraphProfilelor
+from DPsolver import dynamic_programming_planning, dynamic_programming_planning_MM
 from collections import Counter
 import utils
 import time
@@ -111,14 +111,70 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
     #print(score_dy_list)
     #print(best_score_dy_index)
     return score_list, time_cost
-                        
 
-def dora_best(  ndevice,
+def structure_generator_for_DPsolver(M, L):
+
+    ##examples...
+    #L = [10, 20, 30]
+    #M = {(0,0): 0, (0,1): 1, (1,0): 2}
+
+    # find how many layers are needed
+    max_i = max(i for (i, j) in M.keys())
+
+    # initialize 2D list with empty lists
+    result = [[] for _ in range(max_i + 1)]
+    counter = [0 for _ in range(max_i + 1)]
+
+    # fill in according to mapping
+    for (i, j), idx in M.items():
+        counter[i]+=1
+        # make sure inner list is large enough
+        while len(result[i]) <= j:
+            result[i].append(None)
+        result[i][j] = L[idx]         
+    return counter, result    
+
+
+def dependency_generator_for_drawing(plan):
+
+    L = []
+
+    for shard in plan:
+        index = shard['phase']
+        L.append(index)
+        if shard !=plan[-1]:
+            L.append(index) 
+
+    #L = [(0,0), (0,0), (0,1), (0,1), (1,0), (1,0)]
+
+    n = len(L)
+    deps = [-1] * n  # initialize all with -1
+
+    # 1Rule 1: identical neighbors
+    for i in range(n - 1):
+        if L[i] == L[i + 1]:
+            deps[i] = i + 1
+
+    # Rule 2: last (0,*) → first (1,0)
+    first_1_idx = next(i for i, t in enumerate(L) if t == (1,0))
+    # find last index of each unique (0, y)
+    seen = set()
+    for i in range(n - 1, -1, -1):
+        if L[i][0] == 0 and L[i][1] not in seen:
+            deps[i] = first_1_idx
+            seen.add(L[i][1])
+
+    return(deps)
+
+def dora_best_MM(
+                model_maping, #dict
+                model_names,
+                ndevice,
                 nmbatch,
                 mbatchsize,
-                hidden_size,
-                seq,
-                layers,
+                hidden_size, #list
+                seq,         #list ## should calculate by oursevlves:: For different encoder and the backbone...
+                layers,      #list
                 band,
                 profilehome,
                 test_list = [],
@@ -147,18 +203,24 @@ def dora_best(  ndevice,
         device_order = [test_list[i] for i in perm_indices]
         mem_order    = [mem_list[i] for i in perm_indices]
 
-        simprofile, band = tr.generate_profiler_samples_nolimit(
-            n = ndevice,hidden_size = hidden_size,
-              seq = seq, layers = layers,
+        simprofile, band = tr.generate_profiler_samples_nolimit_MM(
+            model_names = model_names,
+            n = ndevice,
+            hidden_size = hidden_size,
+            seq = seq, 
+            layers = layers,
             type_list = device_order,  
             MbatchSize=mbatchsize,
             profilehome=profilehome,
             band = band,
-            mem_list = mem_order)
+            mem_list = mem_order,
+            map_dict = model_maping)
         #print("Communication" ,simprofile.communication_solver(10))
         #print("computation:", simprofile.DList[0].computeprofile.batchFuncforward(5), simprofile.DList[0].computeprofile.batchFuncbackward(5))
 
-        result = dynamic_programming_planning(L = layers, N= ndevice , M = nmbatch, k = ks, s = ss,
+        Structure,layer_Structure = structure_generator_for_DPsolver(model_maping, layers)
+
+        result = dynamic_programming_planning_MM(Structure=Structure,Layer_structure = layer_Structure, N= ndevice , M = nmbatch, k = ks, s = ss,
                                           Profilelor = simprofile, 
                                           alpha = alpha, SLO = 0)
         topK.merge_with_device_type(result, perm_indices)  # notice here that we use it to store perm_indices, not actual device name anymore...
@@ -182,19 +244,27 @@ def dora_best(  ndevice,
 
     Tpart2 = 0
 
+    ###for test...###
+    print("Drawing begins...")
+
+
     for j in range(len(score_list)):
         #noticed: we should regenerate the simprofile...
         perm_indices = device_order_list[j]
         device_order = [test_list[i] for i in perm_indices]
         mem_order    = [mem_list[i] for i in perm_indices]
-        simprofile, band = tr.generate_profiler_samples_nolimit(
-            n = ndevice,hidden_size = hidden_size,
-              seq = seq, layers = layers,
+        simprofile, band = tr.generate_profiler_samples_nolimit_MM(
+            model_names = model_names,
+            n = ndevice,
+            hidden_size = hidden_size,
+            seq = seq, 
+            layers = layers,
             type_list = device_order,  
             MbatchSize=mbatchsize,
             profilehome=profilehome,
             band = band,
-            mem_list = mem_order)
+            mem_list = mem_order,
+            map_dict = model_maping)
 
         B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList = simprofile.getall(plan_list[j])
 
@@ -208,8 +278,11 @@ def dora_best(  ndevice,
 
         rprofile = [(UnitR, UnitR) for i in range(int((len(B_ft)-1)/2))]
         grprofile = [UnitR if x != 0 else 0 for x in T_gathering]
-        sd_list = [i+1 if i < len(B_ft)-1 else -1 for i in range(len(B_ft))]
-        #print(sd_list)
+        #sd_list = [i+1 if i < len(B_ft)-1 else -1 for i in range(len(B_ft))]
+        sd_list = dependency_generator_for_drawing(plan_list[j])
+        
+        print(sd_list)
+        print(plan_list[j])
 
         score_compare, timecost = test_stramline(ratio1=j,ratio2=0,ratio3=0,
                                     B_ft = B_ft, B_bt = B_bt, rprofile = rprofile,
@@ -283,20 +356,21 @@ def simulator_eval(  ndevice,
                              
 
 if __name__ == "__main__":
-    ndevice = 8
+    ndevice = 6
     nmbatch = 20
     mbatchsize = 8
-    #layers = 28
-    layers = 12
-    #hidden_size = 2048
-    hidden_size = 768
-    seq = 256
-    #profilehome="../Profile_exp_0.6"
+    layers = [12]*3  ## should be a list 
+    hidden_size = [768]*3 ## should be a list 
+    seq = [256]*3 ## should be a list
     profilehome="../Profile_exp_bert"
-    band = 1000
-    alpha = 1.30 # 0 by default
-    set_list = ["2630"]*0 + ["4050"]*0+["4060"]*0+ ["A40"]*0 + ["Camera"]*8 + ["Samsung"]*0 + ["V100"]*0 + ["Xiaomi"]*0
-    mem_list = [32*2]*0+     [8*2]*0+    [12*2]*0 + [48*2]*0+    [16*2]*8+     [12*2]*2+       [32*2]*0+    [12*2]*2
+    profilemaping = {(0,0):0, (0,1):1, (1,0):2}   # 0: vision, 1: audio, 2: backbone
+    model_names = [""]*3
+    #model_names = ["vision", "audio", "thinker"]
+    band = 700
+    alpha = 0 # 0 by default
+    set_list = ["2630"]*6 + ["4050"]*0+["4060"]*0+ ["A40"]*0 + ["Camera"]*0 + ["Samsung"]*0 + ["V100"]*0 + ["Xiaomi"]*0
+    #mem_list = [32*2]*0+     [8*2]*0+    [12*2]*0 + [48*2]*0+    [16*2]*0+     [12*2]*2+       [32*2]*0+    [12*2]*2
+    mem_list = [500*2]*6
     mem_list = [x*1024 for x in mem_list]
 
 
@@ -316,7 +390,10 @@ if __name__ == "__main__":
     #plan2 = [{'layer':(0,5), 'device':(0,1)}, {'layer':(5,15), 'device':(1,3)}]
 
     if 1==1:
-        dora_best(  ndevice,
+        dora_best_MM(
+                profilemaping, 
+                model_names,
+                ndevice,
                 nmbatch,
                 mbatchsize,
                 hidden_size,
@@ -325,7 +402,7 @@ if __name__ == "__main__":
                 band,
                 profilehome,
                 set_list, 
-                mem_list,ks=5, ss = 1,
+                mem_list,ks=1, ss = 1,
                 alpha=alpha)
     
     if 1==0:    
