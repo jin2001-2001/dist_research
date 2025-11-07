@@ -142,10 +142,10 @@ class Device:
 
 
 
-    def Tlatency(self, layer_slice, batch_size):
+    def Tlatency(self, layer_slice, batch_size,seq, hidden):
         layers = layer_slice[1]-layer_slice[0]
-        Tf = self.computeprofile.batchFuncforward(batch_size)*layers/self.computeprofile.layer_base
-        Tb = self.computeprofile.batchFuncbackward(batch_size)*layers/self.computeprofile.layer_base
+        Tf = self.computeprofile.batchFuncforward(batch_size)*layers/self.computeprofile.layer_base       *seq*hidden/2048/256
+        Tb = self.computeprofile.batchFuncbackward(batch_size)*layers/self.computeprofile.layer_base      *seq*hidden/2048/256
         if layer_slice[0] == 0:
             Tf+=self.computeprofile_h.batchFuncforward(batch_size)
             Tb+=self.computeprofile_h.batchFuncbackward(batch_size)
@@ -158,7 +158,7 @@ class Device:
         return Tf,Tb
     
     def Econsump(self, layer_slice, layers_size, batch_size,seq,hidden):
-        T1, T2 = self.Tlatency(layer_slice, batch_size)
+        T1, T2 = self.Tlatency(layer_slice, batch_size,seq,hidden)
         coff = (1/self.computeprofile.forward)**1.5
         E =(T1+T2)*coff
         return E
@@ -288,7 +288,7 @@ class Profilelor:
                 for i in range(device_slice[0],device_slice[1]):
                     d = self.DList[i]
                     b = batch_shard[index]
-                    lf,lb = d.Tlatency(layer_slice, b)
+                    lf,lb = d.Tlatency(layer_slice, b,self.seq_len,self.hiddenSize)
                     total_energy+=d.Econsump(layer_slice, self.DList[0].layer_param_bytes, b,self.seq_len,self.hiddenSize)
                     if lf>latencyf:
                         latencyf = lf
@@ -371,9 +371,10 @@ class GraphProfilelor:
 
     
     def communication_solver(self,phase_index, layer_slice=1): #simple version
-        #T = bsize*self.hiddenSize*self.seq_len/(self.bandwidth)
         index = self.phase_mapping[phase_index]
-        T = self.DList[0][index].activation_bytes_per_sample * self.MbatchSize/1e6/self.bandwidth*8
+        T = self.MbatchSize*self.hiddenSize[index]*4*self.seq_len[index]/(self.bandwidth)/1e6*8
+        
+        #T = self.DList[0][index].activation_bytes_per_sample * self.MbatchSize/1e6/self.bandwidth*8
         #print(T)
         return T
 
@@ -481,7 +482,7 @@ class GraphProfilelor:
                 for i in range(device_slice[0],device_slice[1]):
                     d = self.DList[i][the_model_index]
                     b = batch_shard[index]
-                    lf,lb = d.Tlatency(layer_slice, b)
+                    lf,lb = d.Tlatency(layer_slice, b,self.seq_len[the_model_index],self.hiddenSize[the_model_index])
                     total_energy+=d.Econsump(layer_slice, self.DList[0][the_model_index].layer_param_bytes, b,self.seq_len[the_model_index],self.hiddenSize[the_model_index])
                     if lf>latencyf:
                         latencyf = lf

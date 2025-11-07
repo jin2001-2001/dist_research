@@ -198,7 +198,8 @@ def dora_best_MM(
     random.shuffle(perms)   # now order is randomized
 
     for perm_indices in perms[:]:
-        if Permuaccounts>len(test_list):
+        ##adjust
+        if Permuaccounts>0:
             continue
         device_order = [test_list[i] for i in perm_indices]
         mem_order    = [mem_list[i] for i in perm_indices]
@@ -273,7 +274,7 @@ def dora_best_MM(
         UnitR = 10000
 
         subtasksfb = mbatchsize+2    
-        subtasksg = 1+2
+        subtasksg = mbatchsize+2
         percentage = 0
 
         rprofile = [(UnitR, UnitR) for i in range(int((len(B_ft)-1)/2))]
@@ -281,8 +282,9 @@ def dora_best_MM(
         #sd_list = [i+1 if i < len(B_ft)-1 else -1 for i in range(len(B_ft))]
         sd_list = dependency_generator_for_drawing(plan_list[j])
         
-        print(sd_list)
-        print(plan_list[j])
+        #print(B_ft, B_bt)
+        #print(sd_list)
+        #print(plan_list[j])
 
         score_compare, timecost = test_stramline(ratio1=j,ratio2=0,ratio3=0,
                                     B_ft = B_ft, B_bt = B_bt, rprofile = rprofile,
@@ -356,19 +358,19 @@ def simulator_eval(  ndevice,
                              
 
 if __name__ == "__main__":
-    ndevice = 6
-    nmbatch = 20
-    mbatchsize = 8
-    layers = [12]*3  ## should be a list 
-    hidden_size = [768]*3 ## should be a list 
-    seq = [256]*3 ## should be a list
-    profilehome="../Profile_exp_bert"
+    ndevice = 3
+    nmbatch = 6
+    mbatchsize = 3
+    layers = [32,32,36]  ## should be a list 
+    hidden_size = [2048]*3 ## should be a list 
+    seq = [860, 400, 200]*3 ## should be a list
+    profilehome="../Profile_exp_0.6"
     profilemaping = {(0,0):0, (0,1):1, (1,0):2}   # 0: vision, 1: audio, 2: backbone
     model_names = [""]*3
     #model_names = ["vision", "audio", "thinker"]
-    band = 700
+    band = 800
     alpha = 0 # 0 by default
-    set_list = ["2630"]*6 + ["4050"]*0+["4060"]*0+ ["A40"]*0 + ["Camera"]*0 + ["Samsung"]*0 + ["V100"]*0 + ["Xiaomi"]*0
+    set_list = ["2630"]*0 + ["4050"]*0+["4060"]*3+ ["A40"]*0 + ["Camera"]*0 + ["Samsung"]*0 + ["V100"]*0 + ["Xiaomi"]*0
     #mem_list = [32*2]*0+     [8*2]*0+    [12*2]*0 + [48*2]*0+    [16*2]*0+     [12*2]*2+       [32*2]*0+    [12*2]*2
     mem_list = [500*2]*6
     mem_list = [x*1024 for x in mem_list]
@@ -402,7 +404,7 @@ if __name__ == "__main__":
                 band,
                 profilehome,
                 set_list, 
-                mem_list,ks=1, ss = 1,
+                mem_list,ks=8, ss = 1,
                 alpha=alpha)
     
     if 1==0:    
