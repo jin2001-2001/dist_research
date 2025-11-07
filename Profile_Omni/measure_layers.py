@@ -117,9 +117,9 @@ def main():
         loss_t.backward()
 
     # --- summarize ---
-    print_summary("Vision Encoder", fv, bv, iters-warmup)
-    print_summary("Audio Encoder", fa, ba, iters-warmup)
-    print_summary("Thinker Backbone", ft, bt, iters-warmup)
+    print_summary("Vision Encoder", fv, bv, iters)
+    print_summary("Audio Encoder", fa, ba, iters)
+    print_summary("Thinker Backbone", ft, bt, iters)
 
     for h in hv+ha+ht:
         h.remove()
