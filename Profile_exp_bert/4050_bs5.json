@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006698357554487023,
-      "backward_time_s": 0.005894499383408446
+      "forward_time_s": 0.0019452630581263534,
+      "backward_time_s": 0.005250352095065968
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0068053931480563995,
-      "backward_time_s": 0.005782301852519312
+      "forward_time_s": 0.0019821991256102475,
+      "backward_time_s": 0.005752607464823805
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.00696398989051782,
-      "backward_time_s": 0.006070846220228158
+      "forward_time_s": 0.0019490973515734029,
+      "backward_time_s": 0.005657324586781635
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006984292087743409,
-      "backward_time_s": 0.006056314895524153
+      "forward_time_s": 0.0020142673404350653,
+      "backward_time_s": 0.005734664371706306
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.007037026232972103,
-      "backward_time_s": 0.005205466409742242
+      "forward_time_s": 0.0019505662497935141,
+      "backward_time_s": 0.005596673184403492
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.007108524407474447,
-      "backward_time_s": 0.005600886264485503
+      "forward_time_s": 0.001998280855367344,
+      "backward_time_s": 0.004999802356492101
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.007026592682747208,
-      "backward_time_s": 0.005490552938501783
+      "forward_time_s": 0.0019033677924662755,
+      "backward_time_s": 0.006073115212361128
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.007088107167980533,
-      "backward_time_s": 0.005394174495123224
+      "forward_time_s": 0.0018672135277518044,
+      "backward_time_s": 0.006177705501918654
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0068294728306836725,
-      "backward_time_s": 0.005597993580097805
+      "forward_time_s": 0.0018280000344538113,
+      "backward_time_s": 0.006160368769463434
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.007205885940787884,
-      "backward_time_s": 0.005205752769867475
+      "forward_time_s": 0.0018783272264305084,
+      "backward_time_s": 0.006197567214955114
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0071149177784214385,
-      "backward_time_s": 0.004898103199190597
+      "forward_time_s": 0.0018950956899858088,
+      "backward_time_s": 0.006115821442309932
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.007229991822447409,
-      "backward_time_s": 0.005146348614757672
+      "forward_time_s": 0.0019014712984152878,
+      "backward_time_s": 0.006166996312905229
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 3.2168105829165026e-05,
-      "backward_time_s": 3.7754595511130053e-07
+      "forward_time_s": 4.586872924912554e-05,
+      "backward_time_s": 3.406607711821527e-07
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.005503789548877044,
-      "backward_time_s": 0.01608362675899421
+      "forward_time_s": 0.005524275776136442,
+      "backward_time_s": 0.016046017384190394
     }
   ]
 }

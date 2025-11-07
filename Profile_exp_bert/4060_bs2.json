@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0024527733529922592,
-      "backward_time_s": 0.002449233069344392
+      "forward_time_s": 0.0008662754314372657,
+      "backward_time_s": 0.0025298921909981797
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0024136685713414163,
-      "backward_time_s": 0.0022583389382884356
+      "forward_time_s": 0.0008657967871692261,
+      "backward_time_s": 0.002360209711960347
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0025164115449134703,
-      "backward_time_s": 0.0022895746174222366
+      "forward_time_s": 0.0008542329275261347,
+      "backward_time_s": 0.0023998539852845492
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.002494781764588802,
-      "backward_time_s": 0.0022396498189890704
+      "forward_time_s": 0.0007933310245942266,
+      "backward_time_s": 0.0023930200413445806
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0025726265584216507,
-      "backward_time_s": 0.0021113235026922967
+      "forward_time_s": 0.0007856007116530307,
+      "backward_time_s": 0.0021838591734363996
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.002598470943476625,
-      "backward_time_s": 0.0020553165986762633
+      "forward_time_s": 0.0007794020354922227,
+      "backward_time_s": 0.0023514595644527183
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.002665007799021842,
-      "backward_time_s": 0.002027028060919936
+      "forward_time_s": 0.0007860302689072034,
+      "backward_time_s": 0.0021925299476765235
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.002567931778369435,
-      "backward_time_s": 0.002296468331681275
+      "forward_time_s": 0.0007887463401807642,
+      "backward_time_s": 0.002223500129383565
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0025995644628812615,
-      "backward_time_s": 0.0022891792888576684
+      "forward_time_s": 0.0008542815645528427,
+      "backward_time_s": 0.0021616196542787415
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0026551058462221857,
-      "backward_time_s": 0.002287912682710913
+      "forward_time_s": 0.0008390946162265292,
+      "backward_time_s": 0.0021535527089678688
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.002668567010869343,
-      "backward_time_s": 0.002317736907627061
+      "forward_time_s": 0.0008371815872809247,
+      "backward_time_s": 0.0021929277179554073
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.002734049481868764,
-      "backward_time_s": 0.0024359151764433546
+      "forward_time_s": 0.0008617830767061188,
+      "backward_time_s": 0.0024108074913245132
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 2.459013365168608e-05,
-      "backward_time_s": 2.938735795445536e-07
+      "forward_time_s": 2.7769513045559264e-05,
+      "backward_time_s": 3.544503274241261e-07
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.002449248449312068,
-      "backward_time_s": 0.006397644510107543
+      "forward_time_s": 0.0023766528136139127,
+      "backward_time_s": 0.006693525165167455
     }
   ]
 }

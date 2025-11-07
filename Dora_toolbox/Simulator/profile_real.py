@@ -157,8 +157,10 @@ class Device:
         #print(batch_size,Tf,Tb)
         return Tf,Tb
     
-    def Econsump(self, layers, layers_size, batch_size,seq,hidden):
-        E =0
+    def Econsump(self, layer_slice, layers_size, batch_size,seq,hidden):
+        T1, T2 = self.Tlatency(layer_slice, batch_size)
+        coff = (1/self.computeprofile.forward)**1.5
+        E =(T1+T2)*coff
         return E
 
     def maximum_batches_available(self, layer_slice, inversestage,seq,hidden): #reversely get the maximum batches that can be assigned on this devices
@@ -298,7 +300,7 @@ class Profilelor:
                     d = self.DList[i]
                     b = batch_shard[index]
                     lf,lb = d.Tlatency(layer_slice, b)
-                    total_energy+=d.Econsump(layers, self.DList[0].layer_param_bytes, b,self.seq_len,self.hiddenSize)
+                    total_energy+=d.Econsump(layer_slice, self.DList[0].layer_param_bytes, b,self.seq_len,self.hiddenSize)
                     if lf>latencyf:
                         latencyf = lf
                     if lb>latencyb:

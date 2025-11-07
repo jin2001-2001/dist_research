@@ -68,7 +68,7 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
     #print(result)
     #cj.RCPSP_plot(model, result)
     if result.objective>0:
-        enable = False
+        enable = True
         score = vpg.pip_ploting_graph(num_stages = nsteps, num_microbatches = nmbatch,
                     forward_times = B_ft,
                     backward_times = B_bt,
@@ -123,7 +123,8 @@ def dora_best(  ndevice,
                 profilehome,
                 test_list = [],
                 mem_list = [],
-                ks=10, ss = 1):
+                ks=10, ss = 1,
+                alpha = 0):
     scratch_dir = "./scratch"
     clear_scratch_folder(scratch_dir)
 
@@ -159,7 +160,7 @@ def dora_best(  ndevice,
 
         result = dynamic_programming_planning(L = layers, N= ndevice , M = nmbatch, k = ks, s = ss,
                                           Profilelor = simprofile, 
-                                          alpha = 1, SLO = 0)
+                                          alpha = alpha, SLO = 0)
         topK.merge_with_device_type(result, perm_indices)  # notice here that we use it to store perm_indices, not actual device name anymore...
         Permuaccounts+=1
 
@@ -235,7 +236,8 @@ def simulator_eval(  ndevice,
                 test_plan,
                 test_list = [],
                 mem_list = []
-                ,ks=10, ss = 1):
+                ,ks=10, ss = 1,
+                alpha = 0):
     scratch_dir = "./scratch"
     clear_scratch_folder(scratch_dir)
 
@@ -251,7 +253,13 @@ def simulator_eval(  ndevice,
         mem_list = mem_list)   #bandwidth in mbps
 
     B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList = simprofile.getall(test_plan)
-    #print(T_gathering)
+
+    E_consumption = sum(
+        nmbatch * (B_fe[i] + B_be[i]) + E_gathering[i]
+        for i in range(len(B_fe))
+    )
+
+    print(B_ft, B_bt)
     ##Actually, the UnitR's value doesn't matter...
     UnitR = 10000
     subtasksfb = mbatchsize+2    
@@ -270,28 +278,40 @@ def simulator_eval(  ndevice,
     
     #print(B_ft, B_bt, T_gathering)
     print(score_compare)
+    print([k/(E_consumption**alpha) for k in score_compare])
 
                              
 
 if __name__ == "__main__":
     ndevice = 4
-    nmbatch = 20
+    nmbatch = 40
     mbatchsize = 8
-    layers = 28
-    hidden_size = 2048
+    #layers = 28
+    layers = 12
+    #hidden_size = 2048
+    hidden_size = 768
     seq = 256
-    profilehome="../Profile_exp_1.7"
-    band = 250
-    set_list = ["2630"]*0 + ["4050"]*1+["4060"]*1+ ["A40"]*0 + ["Camera"]*0 + ["Samsung"]*1 + ["V100"]*0 + ["Xiaomi"]*1
-    mem_list = [32*2]*0+     [8*2]*1+    [12*2]*1  + [48*2]*0+    [16*2]*0+     [12*2]*1+       [32*2]*0+    [12*2]*1
+    #profilehome="../Profile_exp_0.6"
+    profilehome="../Profile_exp_bert"
+    band = 2000
+    alpha = 1.30 # 0 by default
+    set_list = ["2630"]*0 + ["4050"]*0+["4060"]*0+ ["A40"]*0 + ["Camera"]*0 + ["Samsung"]*2 + ["V100"]*0 + ["Xiaomi"]*2
+    mem_list = [32*2]*0+     [8*2]*0+    [12*2]*0 + [48*2]*0+    [16*2]*0+     [12*2]*2+       [32*2]*0+    [12*2]*2
     mem_list = [x*1024 for x in mem_list]
 
+
+    #set_list = ["CPU60"]*4
+    #mem_list = [50*2, 50*2, 50*2 , 50*2]
+    #mem_list = [x*1024 for x in mem_list]
+
+    #bellows are for eval...
     test_dlist =["4060"]*1 + ["Samsung"]*1 + ["Xiaomi"]*1 +["4050"]*1
-    mem_tlist = [12*2, 12*2, 12*2 , 8*2]
+    #test_dlist = ["CPU60"]*4
+    mem_tlist = [50*2, 50*2, 50*2 , 50*2]
     mem_tlist = [x*1024 for x in mem_tlist]
     #plan1 = [{'layer':(0,13), 'device':(0,2)},{'layer':(13,28), 'device':(2,4)}]
-    #plan1 = [{'layer':(0,28), 'device':(0,4)}]
-    plan1 = [{'layer':(0,1), 'device':(0,1)},{'layer':(1,8), 'device':(1,2)}, {'layer':(8,17), 'device':(2,3)},{'layer':(17,28), 'device':(3,4)}]
+    #plan1 = [{'layer':(0,12), 'device':(0,1)}]
+    plan1 = [{'layer':(0,1), 'device':(0,1)},{'layer':(1,2), 'device':(1,2)}, {'layer':(2,3), 'device':(2,3)},{'layer':(3,28), 'device':(3,4)}]
     #plan1 = [{'layer':(0,14), 'device':(0,1)},{'layer':(14,15), 'device':(1,3)},{'layer':(15,28), 'device':(3,4)}]
     #plan2 = [{'layer':(0,5), 'device':(0,1)}, {'layer':(5,15), 'device':(1,3)}]
 
@@ -305,7 +325,8 @@ if __name__ == "__main__":
                 band,
                 profilehome,
                 set_list, 
-                mem_list,ks=20, ss = 1)
+                mem_list,ks=5, ss = 1,
+                alpha=alpha)
     
     if 1==0:    
         simulator_eval(  ndevice,
@@ -318,5 +339,6 @@ if __name__ == "__main__":
                 profilehome,
                 plan1,
                 test_dlist,
-                mem_tlist,ks=30, ss = 1)
+                mem_tlist,ks=30, ss = 1,
+                alpha=alpha)
     

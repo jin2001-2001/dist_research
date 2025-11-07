@@ -1,5 +1,8 @@
 import heapq
 import math
+import itertools
+from collections import defaultdict
+from itertools import product
 
 class TopKContainer:
     """
@@ -122,7 +125,125 @@ def plan_estimator(P, M, SLO, Profilelor, alpha):
         for i in range(S)
     )
 
-    return alpha*abs(T_latency-SLO) + (1-alpha) * E_consumption, BatchAllocateList
+    return abs(T_latency-SLO)+95e-6*(E_consumption**alpha), BatchAllocateList
+
+
+
+
+def plan_parser(P):
+
+    #example: L = [(0,0),(0,0),(0,1),(0,1),(1,0),(1,0),(1,0),(1,1),(1,1),(2,0),(2,1)]
+    L = []
+    for shard in P:
+        L.append(shard['phase'])
+
+
+    # Step 1: Group indices by phase and index type
+    phase_to_indices = defaultdict(lambda: defaultdict(list))
+    for idx, (phase, branch) in enumerate(L):
+        phase_to_indices[phase][branch].append(idx)
+
+    # Step 2: Generate all possible "branch choices" per phase
+
+    all_phases = sorted(phase_to_indices.keys())
+    choices_per_phase = [list(phase_to_indices[p].keys()) for p in all_phases]
+
+    # Step 3: For each branch combination (one per phase), form the chain
+    chains = []
+    for choice_tuple in product(*choices_per_phase):
+        chain_indices = []
+        for phase, branch in zip(all_phases, choice_tuple):
+            chain_indices.extend(phase_to_indices[phase][branch])
+        chains.append(sorted(chain_indices))
+
+    return chains
+
+
+
+def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha):
+    """
+    Implements Algorithm 2: Plan Estimator.
+    """
+    ## OK, now we need to generate a 
+
+    # Initialize task lists
+    #B_list = []  # Your logic to create B_list
+    #M = Profilelor.M  #XXXXX ERROR
+    #SLO_latency = Profilelor.slo_T #XXXXXXX ERROR
+
+    
+    
+    try:
+        B_ft_a, B_bt_a, B_fe_a, B_be_a, T_gathering_a, E_gathering_a, BatchAllocateList_a = Profilelor.getall(P) 
+
+    except Exception as e:
+        # Code that runs *only* if an error occurs
+        print("❌ Error caught:", e)
+        print("profilelor getall: error")   
+        return -len(P), []
+
+
+    # noticed that dependency don't count communication index, i,.e. len of dependency *2 - 1 equal to len of B_f/b
+    chain_list = plan_parser(P)
+
+    T_max = -1
+
+    for per_chain in chain_list:
+        ##construct the index list:
+        actual_index_l = []
+        for i in per_chain:
+            if i == per_chain[-1]: # the last state of chain...
+                actual_index_l = actual_index_l + [i*2]          ##for last part of the sharding, there is no commnuication...
+            else:
+                actual_index_l = actual_index_l + [i*2, i*2+1]   ##we need to also consider the communication part...
+
+
+        B_ft = [B_ft_a[i] for i in actual_index_l]
+        B_bt = [B_bt_a[i] for i in actual_index_l]
+        T_gathering = [T_gathering_a[i] for i in actual_index_l]
+        BatchAllocateList = [BatchAllocateList_a[i] for i in actual_index_l]
+
+
+
+        B_list = [B_ft, B_bt]
+
+        #print(B_list)
+
+        S = len(actual_index_l) 
+
+        # Find bottleneck step index
+        d = max(range(S), key=lambda i: (B_ft[i] + B_bt[i],i)) #if the same big, choose one with hight step idx.
+
+        # Compute phase times
+        T1 = start_phase_time_est(P, B_list, d)
+        T2 = (M - S + d) * (B_ft[d] + B_bt[d])
+        T3_list = end_phase_time_est(P, B_list, d)
+
+        T_latency = float('-inf')
+
+        for i in range(S):
+            T = T1 + T2 + T3_list[i]
+            if i % 2 == 0 and P[i // 2]['device'][1] > P[i // 2]['device'][0]+1: #so we know this line is mapped to a device group
+                T += T_gathering[i]
+
+            if T > T_latency:
+                T_latency = T
+
+        if T_latency>T_max:
+            T_max = T_latency
+
+    # Sum energy
+    E_consumption = sum(
+        M * (B_fe_a[i] + B_be_a[i]) + E_gathering_a[i]
+        for i in range(S)
+    )
+
+    return abs(T_max-SLO)+95e-6*(E_consumption**alpha), BatchAllocateList
+
+
+
+
+
 
 def start_phase_time_est(P, B_list, d):
     """
@@ -173,13 +294,8 @@ def end_phase_time_est(P, B_list, d):
     return CritiPathTList
 
 if __name__ == "__main__":
-    c = TopKContainer(3)
-    c.update(5, "A")
-    c.update(8, "B")
-    c.update(2, "C")
-    c.update(7, "D")
-    c.update(3, "E")
 
-    print("Heap:", c.heap)
-    print("Pairs:", c.pairs)
-    print("Scores:", c.scores)
+
+
+
+    print(get_all_chains([0,0,0,1,1]))

@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.010782178111387312,
-      "backward_time_s": 0.009679522076824112
+      "forward_time_s": 0.003313187373957286,
+      "backward_time_s": 0.008555560592716567
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.010665470778702809,
-      "backward_time_s": 0.009604183142073452
+      "forward_time_s": 0.003317153652864767,
+      "backward_time_s": 0.009253837628126248
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.010595453527154556,
-      "backward_time_s": 0.00949218565057006
+      "forward_time_s": 0.003326483833209042,
+      "backward_time_s": 0.010307313379253677
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.01122753319537474,
-      "backward_time_s": 0.009043067530360766
+      "forward_time_s": 0.003265336763838099,
+      "backward_time_s": 0.008520847371652384
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.011198248652767183,
-      "backward_time_s": 0.009372538181570297
+      "forward_time_s": 0.003238202472049225,
+      "backward_time_s": 0.008726040019401582
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.011092136902637623,
-      "backward_time_s": 0.008296791976915945
+      "forward_time_s": 0.003373683027651471,
+      "backward_time_s": 0.008085574267989783
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.011000571111960905,
-      "backward_time_s": 0.00852253608862969
+      "forward_time_s": 0.00325093511168638,
+      "backward_time_s": 0.008295151658573375
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.010857417624922365,
-      "backward_time_s": 0.008922989703135072
+      "forward_time_s": 0.0031567840552371405,
+      "backward_time_s": 0.009481627547012811
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.01134930711123161,
-      "backward_time_s": 0.009164938617133252
+      "forward_time_s": 0.0029171434871386737,
+      "backward_time_s": 0.008979876935914557
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.010888953541224407,
-      "backward_time_s": 0.009426975927845733
+      "forward_time_s": 0.003059690139101197,
+      "backward_time_s": 0.008655789919315355
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.011116874292686891,
-      "backward_time_s": 0.008538894783456997
+      "forward_time_s": 0.002947240639413293,
+      "backward_time_s": 0.008469053992510151
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.011250955152111903,
-      "backward_time_s": 0.008536073062412455
+      "forward_time_s": 0.003087296500679157,
+      "backward_time_s": 0.009338986501281735
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 4.829515334373961e-05,
-      "backward_time_s": 5.762431892039983e-07
+      "forward_time_s": 5.651748587196279e-05,
+      "backward_time_s": 6.701565336568553e-07
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.0092608257513752,
-      "backward_time_s": 0.02259639061420508
+      "forward_time_s": 0.009287593014758183,
+      "backward_time_s": 0.0265190106326081
     }
   ]
 }

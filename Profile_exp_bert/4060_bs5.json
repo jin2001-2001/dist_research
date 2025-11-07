@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005996739081904228,
-      "backward_time_s": 0.005277080916211679
+      "forward_time_s": 0.001741506766451525,
+      "backward_time_s": 0.004700404740435066
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0060925632480361685,
-      "backward_time_s": 0.005176635499122034
+      "forward_time_s": 0.0017745739710029074,
+      "backward_time_s": 0.005150051445679324
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006234547798135918,
-      "backward_time_s": 0.005434956329658154
+      "forward_time_s": 0.001744939437397854,
+      "backward_time_s": 0.005064748958622771
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006252723444712094,
-      "backward_time_s": 0.005421947086413745
+      "forward_time_s": 0.0018032832054029233,
+      "backward_time_s": 0.005133987799199916
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006299933959688544,
-      "backward_time_s": 0.00466022059959019
+      "forward_time_s": 0.0017462544760908812,
+      "backward_time_s": 0.005010450478427477
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006363943068464143,
-      "backward_time_s": 0.005014222260058642
+      "forward_time_s": 0.0017889712223521433,
+      "backward_time_s": 0.004476098797217638
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006290593270140741,
-      "backward_time_s": 0.004915445782006968
+      "forward_time_s": 0.0017039998142043648,
+      "backward_time_s": 0.005436987656545325
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006345664429705042,
-      "backward_time_s": 0.004829162484443352
+      "forward_time_s": 0.0016716325226068078,
+      "backward_time_s": 0.005530622651672922
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006114120707863629,
-      "backward_time_s": 0.0050116325694698335
+      "forward_time_s": 0.0016365264408718097,
+      "backward_time_s": 0.005515101852697792
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0064511064823526264,
-      "backward_time_s": 0.004660476964966406
+      "forward_time_s": 0.0016815821185590944,
+      "backward_time_s": 0.005548403952511292
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006369666766715702,
-      "backward_time_s": 0.004385052103124975
+      "forward_time_s": 0.0016965941718762837,
+      "backward_time_s": 0.005475220628746582
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006472687396998575,
-      "backward_time_s": 0.004607295089308569
+      "forward_time_s": 0.0017023019681426032,
+      "backward_time_s": 0.0055210351950807784
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 2.8798662335868423e-05,
-      "backward_time_s": 3.3799995981316073e-07
+      "forward_time_s": 4.1064215979521524e-05,
+      "backward_time_s": 3.049783090260991e-07
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.004927295925583746,
-      "backward_time_s": 0.014398949649950053
+      "forward_time_s": 0.004945636325995024,
+      "backward_time_s": 0.014365279663554517
     }
   ]
 }

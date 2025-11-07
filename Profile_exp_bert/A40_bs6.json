@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.004658955294498577,
-      "backward_time_s": 0.003328109594939415
+      "forward_time_s": 0.0012058908599637782,
+      "backward_time_s": 0.00341063765337506
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0047616191601637416,
-      "backward_time_s": 0.0033237025033959673
+      "forward_time_s": 0.001145376532057969,
+      "backward_time_s": 0.0034577958593683795
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0047974102120721136,
-      "backward_time_s": 0.003302853983588332
+      "forward_time_s": 0.0011475434812615649,
+      "backward_time_s": 0.0031108749002864786
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.00487438117330058,
-      "backward_time_s": 0.0032513075780454437
+      "forward_time_s": 0.0010951969616610603,
+      "backward_time_s": 0.0033856516363376305
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.004802895788228712,
-      "backward_time_s": 0.00325841578551037
+      "forward_time_s": 0.001091947186162146,
+      "backward_time_s": 0.0034263600741536167
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.004753053044670452,
-      "backward_time_s": 0.0032683304219491287
+      "forward_time_s": 0.0011027121348515486,
+      "backward_time_s": 0.003088685975425438
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.004788561730842607,
-      "backward_time_s": 0.003350786189356249
+      "forward_time_s": 0.0010743455898661453,
+      "backward_time_s": 0.0029643519592956326
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005043248775809144,
-      "backward_time_s": 0.003327305132834903
+      "forward_time_s": 0.0010578493141413976,
+      "backward_time_s": 0.0031809397522852686
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.004812052974534125,
-      "backward_time_s": 0.0033850691325516126
+      "forward_time_s": 0.001060079775365571,
+      "backward_time_s": 0.003111870577924477
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.004828795801119831,
-      "backward_time_s": 0.0033585014296041355
+      "forward_time_s": 0.0010943584295604616,
+      "backward_time_s": 0.0029597666363755225
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.004541905576703496,
-      "backward_time_s": 0.003114555231661128
+      "forward_time_s": 0.0011955853335213107,
+      "backward_time_s": 0.003021643727475177
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.004827730320334339,
-      "backward_time_s": 0.0030934375370198415
+      "forward_time_s": 0.001105574442473694,
+      "backward_time_s": 0.0032693430409027834
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 2.021663441645125e-05,
-      "backward_time_s": 6.126693049676655e-07
+      "forward_time_s": 3.483511570196312e-05,
+      "backward_time_s": 1.6711563764771154e-07
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.0035483030641887286,
-      "backward_time_s": 0.007309574479899131
+      "forward_time_s": 0.003047165378423718,
+      "backward_time_s": 0.007491533495851385
     }
   ]
 }

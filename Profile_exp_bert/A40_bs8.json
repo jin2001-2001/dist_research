@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0049763898975633755,
-      "backward_time_s": 0.004047800141217356
+      "forward_time_s": 0.0015291634033649012,
+      "backward_time_s": 0.0035777798842269283
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.004922524974785912,
-      "backward_time_s": 0.004016294768503444
+      "forward_time_s": 0.0015309939936298924,
+      "backward_time_s": 0.0038697866444891583
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.004890209320225179,
-      "backward_time_s": 0.003969459453874753
+      "forward_time_s": 0.0015353002307118657,
+      "backward_time_s": 0.004310331049506083
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005181938397865265,
-      "backward_time_s": 0.003781646421787229
+      "forward_time_s": 0.0015070785063868149,
+      "backward_time_s": 0.0035632634463273606
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005168422455123315,
-      "backward_time_s": 0.003919425057747578
+      "forward_time_s": 0.0014945549870996424,
+      "backward_time_s": 0.0036490712808406613
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005119447801217365,
-      "backward_time_s": 0.0034695675539830315
+      "forward_time_s": 0.001557084474300679,
+      "backward_time_s": 0.003381240148432091
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0050771866670588795,
-      "backward_time_s": 0.003563969637063324
+      "forward_time_s": 0.0015004315900090986,
+      "backward_time_s": 0.003468881602676139
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005011115826887245,
-      "backward_time_s": 0.0037314320576746665
+      "forward_time_s": 0.0014569772562632957,
+      "backward_time_s": 0.003965044246932631
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005238141743645358,
-      "backward_time_s": 0.003832610694437542
+      "forward_time_s": 0.0013463739171409262,
+      "backward_time_s": 0.0037552212641097237
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005025670865180496,
-      "backward_time_s": 0.0039421899334627615
+      "forward_time_s": 0.001412164679585168,
+      "backward_time_s": 0.0036196939662591484
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005130865058163181,
-      "backward_time_s": 0.00357081054580929
+      "forward_time_s": 0.0013602649104984428,
+      "backward_time_s": 0.0035416043968678813
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005192748531743956,
-      "backward_time_s": 0.0035696305533724814
+      "forward_time_s": 0.001424906077236534,
+      "backward_time_s": 0.003905394355081453
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 2.2290070774033666e-05,
-      "backward_time_s": 2.409744245762175e-07
+      "forward_time_s": 2.608499347936744e-05,
+      "backward_time_s": 2.802472777110486e-07
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.0042742272698654766,
-      "backward_time_s": 0.009449399711394852
+      "forward_time_s": 0.004286581391426854,
+      "backward_time_s": 0.011089768082727025
     }
   ]
 }

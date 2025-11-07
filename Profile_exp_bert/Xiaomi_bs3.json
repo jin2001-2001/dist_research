@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005165036943152598,
-      "backward_time_s": 0.004208991620385938
+      "forward_time_s": 0.0012785055700482593,
+      "backward_time_s": 0.003693340968095841
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005173363874039044,
-      "backward_time_s": 0.003975817312260081
+      "forward_time_s": 0.001271964513256939,
+      "backward_time_s": 0.003419147056422524
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005259677471056218,
-      "backward_time_s": 0.003923319505385893
+      "forward_time_s": 0.0012496372081740345,
+      "backward_time_s": 0.003557288478562984
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005444991652135892,
-      "backward_time_s": 0.003921472351987048
+      "forward_time_s": 0.0012683131660903907,
+      "backward_time_s": 0.003492389564041652
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.00549322227824531,
-      "backward_time_s": 0.003795532431230759
+      "forward_time_s": 0.0012605798191442671,
+      "backward_time_s": 0.0035726129647487915
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005504317609948985,
-      "backward_time_s": 0.0039044623905075014
+      "forward_time_s": 0.0012417732634478144,
+      "backward_time_s": 0.003713347371382337
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005299073041694808,
-      "backward_time_s": 0.003930249447214671
+      "forward_time_s": 0.0013493831389092116,
+      "backward_time_s": 0.003187469307520968
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005584886485950038,
-      "backward_time_s": 0.003687330769428343
+      "forward_time_s": 0.0012197318614602813,
+      "backward_time_s": 0.0035399227463382595
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0056399889160982436,
-      "backward_time_s": 0.003610104248811134
+      "forward_time_s": 0.00122077805523683,
+      "backward_time_s": 0.0032657275704313584
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005588605930420777,
-      "backward_time_s": 0.003431816364494944
+      "forward_time_s": 0.0012033352638051533,
+      "backward_time_s": 0.0031908026083350446
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005721099402257499,
-      "backward_time_s": 0.003659090887904241
+      "forward_time_s": 0.0012287002771497807,
+      "backward_time_s": 0.003288996740881162
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0054246213476289995,
-      "backward_time_s": 0.003954532313282075
+      "forward_time_s": 0.001251703749908807,
+      "backward_time_s": 0.0032366191880435135
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 3.463854227447882e-05,
-      "backward_time_s": 3.822540805450541e-07
+      "forward_time_s": 4.1515222821746844e-05,
+      "backward_time_s": 3.8887548956121853e-07
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.004641201791754509,
-      "backward_time_s": 0.010214202114511576
+      "forward_time_s": 0.0036874017775213965,
+      "backward_time_s": 0.009617334110487489
     }
   ]
 }

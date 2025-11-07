@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.008504130697624474,
-      "backward_time_s": 0.007535577488541716
+      "forward_time_s": 0.002201148719394709,
+      "backward_time_s": 0.007722439297499668
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.008691526127791161,
-      "backward_time_s": 0.00752559885686587
+      "forward_time_s": 0.0020906901034475705,
+      "backward_time_s": 0.007829215924093825
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.00875685660726446,
-      "backward_time_s": 0.007478393188888252
+      "forward_time_s": 0.0020946455007582626,
+      "backward_time_s": 0.007043710010004939
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.00889735400911367,
-      "backward_time_s": 0.007361680706278045
+      "forward_time_s": 0.001999095830046867,
+      "backward_time_s": 0.007665865419102794
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.008766869593790125,
-      "backward_time_s": 0.007377775262850951
+      "forward_time_s": 0.001993163917454072,
+      "backward_time_s": 0.007758038341552912
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.008675890140510515,
-      "backward_time_s": 0.007400224196404278
+      "forward_time_s": 0.0020128135008523076,
+      "backward_time_s": 0.006993469368010442
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.008740705209344833,
-      "backward_time_s": 0.007586922322457077
+      "forward_time_s": 0.0019610351963296672,
+      "backward_time_s": 0.006711949608435097
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.009205593103835842,
-      "backward_time_s": 0.00753375600810298
+      "forward_time_s": 0.0019309240499632366,
+      "backward_time_s": 0.0072023523582806425
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.008783584480334686,
-      "backward_time_s": 0.0076645465014735245
+      "forward_time_s": 0.0019349953776681302,
+      "backward_time_s": 0.0070459644447766045
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.008814145663375149,
-      "backward_time_s": 0.007604391335742897
+      "forward_time_s": 0.001997565232278293,
+      "backward_time_s": 0.006701567421434099
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.008290476340514668,
-      "backward_time_s": 0.007052043095639905
+      "forward_time_s": 0.0021823377331896994,
+      "backward_time_s": 0.00684167086497935
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.008812200809371864,
-      "backward_time_s": 0.007004227956201363
+      "forward_time_s": 0.0020180381567197446,
+      "backward_time_s": 0.007402516990068054
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 3.6902028561340386e-05,
-      "backward_time_s": 1.3872190475502906e-06
+      "forward_time_s": 6.358558047255274e-05,
+      "backward_time_s": 3.7838682925473613e-07
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.006476823902619134,
-      "backward_time_s": 0.01655049610905305
+      "forward_time_s": 0.0055620822689565206,
+      "backward_time_s": 0.016962491635441945
     }
   ]
 }

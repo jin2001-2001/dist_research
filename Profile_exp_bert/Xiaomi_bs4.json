@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005657166318592822,
-      "backward_time_s": 0.005237853360222469
+      "forward_time_s": 0.0018424819588997504,
+      "backward_time_s": 0.004327293774600807
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005677792180601196,
-      "backward_time_s": 0.005178473102528852
+      "forward_time_s": 0.001749745208750634,
+      "backward_time_s": 0.004582478476848394
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0059085479580163434,
-      "backward_time_s": 0.005004266166522098
+      "forward_time_s": 0.0018754209579330764,
+      "backward_time_s": 0.00410840110604839
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006018978055281978,
-      "backward_time_s": 0.0046438677478011095
+      "forward_time_s": 0.0017597803048880045,
+      "backward_time_s": 0.004044401127175086
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0058442179021464345,
-      "backward_time_s": 0.004822901006522975
+      "forward_time_s": 0.0017039209447425995,
+      "backward_time_s": 0.00405851640327182
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005896695250056735,
-      "backward_time_s": 0.004771288319604964
+      "forward_time_s": 0.001710041278177717,
+      "backward_time_s": 0.004097538161148564
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.00636851533393686,
-      "backward_time_s": 0.004760320334034519
+      "forward_time_s": 0.0016887626948624123,
+      "backward_time_s": 0.0042067743467881155
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005932891012990795,
-      "backward_time_s": 0.004797189090614439
+      "forward_time_s": 0.0017080723054176713,
+      "backward_time_s": 0.004109096107820395
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006178749527963292,
-      "backward_time_s": 0.004641570434068135
+      "forward_time_s": 0.0017732124162850797,
+      "backward_time_s": 0.004125346007237851
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006101407999974779,
-      "backward_time_s": 0.004364095158689092
+      "forward_time_s": 0.0018832223342744529,
+      "backward_time_s": 0.004100884978563742
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006274738319916651,
-      "backward_time_s": 0.004198501086030008
+      "forward_time_s": 0.0018235347371147426,
+      "backward_time_s": 0.004084182965519503
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0063820045696856035,
-      "backward_time_s": 0.004668838123417287
+      "forward_time_s": 0.0019270698604587878,
+      "backward_time_s": 0.004161983536760666
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 3.5907778106371145e-05,
-      "backward_time_s": 3.916788901471102e-07
+      "forward_time_s": 4.790005510181395e-05,
+      "backward_time_s": 3.5227253377849876e-07
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.005172971610995268,
-      "backward_time_s": 0.01217586667853934
+      "forward_time_s": 0.005138833056359241,
+      "backward_time_s": 0.01183014847807542
     }
   ]
 }

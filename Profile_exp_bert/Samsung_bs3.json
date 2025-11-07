@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.00488291307650981,
-      "backward_time_s": 0.003988295430552968
+      "forward_time_s": 0.0012086712321884806,
+      "backward_time_s": 0.003499682640180703
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.004890785175036911,
-      "backward_time_s": 0.0037673474906434476
+      "forward_time_s": 0.001202487460011812,
+      "backward_time_s": 0.003239865937359171
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.004972384163813652,
-      "backward_time_s": 0.0037176023777626623
+      "forward_time_s": 0.0011813797136099066,
+      "backward_time_s": 0.003370763989050318
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005147576141725108,
-      "backward_time_s": 0.00371585207884915
+      "forward_time_s": 0.0011990355561778904,
+      "backward_time_s": 0.0033092680138671836
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005193172321870567,
-      "backward_time_s": 0.0035965157494433782
+      "forward_time_s": 0.001191724618938908,
+      "backward_time_s": 0.0033852849441252594
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.00520366160604421,
-      "backward_time_s": 0.0036997340254621646
+      "forward_time_s": 0.0011739453120830179,
+      "backward_time_s": 0.0035186400185757724
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005009627875551814,
-      "backward_time_s": 0.0037241689518551003
+      "forward_time_s": 0.0012756773372040865,
+      "backward_time_s": 0.0030203360854037637
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005279829661087221,
-      "backward_time_s": 0.00349398758301637
+      "forward_time_s": 0.0011531078522208542,
+      "backward_time_s": 0.0033543088195639686
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0053319222946306925,
-      "backward_time_s": 0.003420810393068228
+      "forward_time_s": 0.0011540969009591882,
+      "backward_time_s": 0.0030944909187982537
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005283345942624684,
-      "backward_time_s": 0.003251870937143149
+      "forward_time_s": 0.0011376068670426872,
+      "backward_time_s": 0.0030234946063998737
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005408602376083771,
-      "backward_time_s": 0.003467228444343719
+      "forward_time_s": 0.0011615863964651288,
+      "backward_time_s": 0.0031165399829323373
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005128318500909768,
-      "backward_time_s": 0.0037471785590275845
+      "forward_time_s": 0.0011833333770146285,
+      "backward_time_s": 0.0030669088186329923
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 3.274652105780561e-05,
-      "backward_time_s": 3.622107954228416e-07
+      "forward_time_s": 3.924758460039093e-05,
+      "backward_time_s": 3.6848501445313966e-07
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.004387690769515818,
-      "backward_time_s": 0.009678625973675763
+      "forward_time_s": 0.003485989075387875,
+      "backward_time_s": 0.00911305441930088
     }
   ]
 }

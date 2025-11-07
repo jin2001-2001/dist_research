@@ -35,7 +35,7 @@ def clear_scratch_folder(folder_path):
 
 def test_stramline(ratio1=0,ratio2=0,ratio3=0,B_ft = [1,3,5], B_bt = [2,4,6], rprofile = [(15,17)],T_gathering= [20,0,20], grprofile = [20,0,20],subtasksfb=5, UnitR = 20, subtasksg=6,nmbatch = 8,pct = 0.6):
 
-    sd_list = [1,4,3,4,-1]
+    sd_list = [1,2,3,8,5,6,7,8,9,10,-1]
 
     nsteps = len(B_ft)
     candidate = [{'device':[0],'layer':[0]}]*((nsteps+1)//2)
@@ -52,7 +52,7 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,B_ft = [1,3,5], B_bt = [2,4,6], rp
     #print(result)
     #cj.RCPSP_plot(model, result)
     if result.objective>0:
-        enable = False
+        enable = True
         score = vpg.pip_ploting_graph(num_stages = nsteps, num_microbatches = nmbatch,
                     forward_times = B_ft,
                     backward_times = B_bt,
@@ -121,9 +121,9 @@ if __name__ == "__main__":
     with open(f"./record/test_improve_b{nmbatch}_sub{subtasksfb}.csv", mode="w", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(data[0])
-        for fo1 in np.arange(r1,1000,40):
-            for fo2 in np.arange(r2,1000,40):
-                for comm in np.arange(r3,1000,40):
+        for fo1 in np.arange(r1,140,40):
+            for fo2 in np.arange(r2,140,40):
+                for comm in np.arange(r3,140,40):
                     percentage = 0
                     gather_ratio = 1.0
                     i1 = fo1
@@ -136,13 +136,25 @@ if __name__ == "__main__":
                     B_ft = []
                     B_bt = []
                     rprofile = [(UnitR,UnitR)]*(number_stage-1)
+                    rprofile = [(UnitR,UnitR)]*(5)
                     T_gathering = []
                     grprofile = []
 
-                    B_ft = [fo1, comm, fo2, comm, 500]
-                    B_bt = [fo1*back_ratio, comm*back_ratio, fo2*back_ratio, comm*back_ratio, 500*back_ratio]
-                    T_gathering = [0,0,0,0,0]
-                    grprofile = [0,0, 0, 0 , 0]
+                    comm1 = 1
+                    comm2 = 1
+                    comm3 = 1
+
+                    aa = 2
+                    bb= 2
+                    cc = 3
+                    dd = 3
+                    ee = 2.5
+                    ff = 2.5
+
+                    B_ft = [aa, comm1, bb, comm1,cc, comm2, dd, comm2 ,ee,comm3, ff]
+                    B_bt = [aa*1.2, comm1, bb*1.2, comm1, cc*1.2, comm2, dd*1.2, comm2 ,ee*1.2,comm3,ff*1.2]
+                    T_gathering = [0,0,0,0,0,0,0,0,0,0,0]
+                    grprofile = [0,0,0,0,0,0,0,0,0,0,0]
 
 
                     score_list = test_stramline(ratio1=i1,ratio2=i2,ratio3=i3,

@@ -16,11 +16,11 @@ inputs=""
 pureinputs=""
 for f in "$@"; do
   pureinputs="$pureinputs ${f}"
-  inputs="$inputs ../Profile_exp_1.7/${f}.json"
+  inputs="$inputs ../Profile_exp_bert/${f}.json"
 done
 
 LAST_INPUT=${!#}   # the last argument, e.g., CPU100_bs6
-lastinput="../Profile_exp_1.7/${LAST_INPUT}.json"
+lastinput="../Profile_exp_bert/${LAST_INPUT}.json"
 
 echo "inputs = $inputs"
 echo "last input = $lastinput"

@@ -8,12 +8,12 @@ import matplotlib.font_manager as fm
 #    For each panel: a (4, 3) array-like where axis=0 is groups, axis=1 is bar index in group
 # ----------------------------
 panel_data = [
-    np.array([[0,  0,  0],
+    np.array([[84.26,  15.10,  2.01],
               [ 586,  32.25,  11.408],
               [545,  64.62,  43.5],
               [  0,  0,  0]], dtype=float),
 
-    np.array([[ 0,  0. , 0],
+    np.array([[ 53.02,  9.444 , 2.01],
               [ 370,  20.23 ,  9.252],
               [ 350,  40.42 ,  27],
               [ 0,  0 ,  0]], dtype=float),

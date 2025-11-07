@@ -43,6 +43,25 @@ if [ "${MODEL_NAME}" == "Qwen3" ]; then
               "
 fi
 
+
+if [ "${MODEL_NAME}" == "Bert" ]; then
+
+  HIDDEN_SIZE=768
+  SEQUENCE_LENGTH=256
+  NUM_LAYERS=12
+  VOCAB_SIZE=30522
+  ATTENTION_HEAD_SIZE=4
+
+
+  model_specific_options="
+                --hidden_size=${HIDDEN_SIZE}
+                --sequence_length=${SEQUENCE_LENGTH}
+                --vocab_size=${VOCAB_SIZE}
+              "
+fi
+
+
+
 HOST_FILE_PATH="${HOME_DIR}/hostfile"
 CLUSTER_INFO_FILE_PATH="${HOME_DIR}/clusterfile.json"
 
