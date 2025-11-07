@@ -11,7 +11,7 @@ Profiles:
 
 import torch, time, json
 import torch.nn as nn
-from transformers import AutoModelForSpeechTextVision, AutoProcessor
+#from transformers import AutoModelForSpeechTextVision, AutoProcessor
 from transformers.models.qwen2_5_omni import Qwen2_5OmniThinkerForConditionalGeneration
 from transformers import AutoConfig, AutoTokenizer
 from transformers.models.qwen2_5_omni import Qwen2_5OmniThinkerForConditionalGeneration
