@@ -68,9 +68,9 @@ def main():
     model.eval()
     #proc = AutoProcessor.from_pretrained(model_name)
 
-    vision = model.thinker.visual
-    audio  = model.thinker.audio_tower
-    thinker = model.thinker.model
+    vision = model.visual
+    audio  = model.audio_tower
+    thinker = model.model
 
     # --- dummy inputs similar to your dataset ---
     img = torch.randn(1, 3, 224, 224)
