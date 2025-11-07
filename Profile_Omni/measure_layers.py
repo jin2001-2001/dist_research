@@ -83,7 +83,7 @@ def main():
     embeds = torch.randn(1, seq_len, hidden)
 
     # --- find layers ---
-    v_blocks = list(vision.encoder.blocks)
+    v_blocks = list(vision.blocks)
     a_blocks = list(audio.layers)
     t_blocks = list(thinker.layers)
 
