@@ -9,7 +9,11 @@ class TaskStatus_prime:
                 isgathering = False, aa = 0,
                 gatheringTprofile= [20,0,20], gatheringRprofile=[20,0,20],
                 method1 = None, method2 = None,
-                percentage = 0.5):
+                percentage = 0.5,
+                plan_list = None,
+                BatchAllocateList = None,
+                band_str = None,
+                sd_list = None):
         self.index = index
         self.s = s
         self.b = b
@@ -22,6 +26,13 @@ class TaskStatus_prime:
         self.UnitR = UnitR
         self.isgathering = isgathering
         self.percentage = percentage
+        self.substitution = []
+
+
+        self.plan_list = plan_list
+        self.BatchAllocateList = BatchAllocateList
+        self.band_str = band_str
+        self.sd_list = sd_list
         """
         Initialize the status variables based on input parameters.
         """

@@ -191,6 +191,7 @@ def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha):
 
     T_max = -1
     BatchAllocateList = BatchAllocateList_a
+    #print(T_gathering_a,B_ft_a, chain_list )
     for per_chain in chain_list:
         ##construct the index list:
         actual_index_l = []
@@ -206,7 +207,7 @@ def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha):
         T_gathering = [T_gathering_a[i] for i in actual_index_l]
 
 
-
+        #print(T_gathering, B_ft, B_bt)
 
         B_list = [B_ft, B_bt]
 
@@ -226,7 +227,7 @@ def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha):
 
         for i in range(S):
             T = T1 + T2 + T3_list[i]
-            if i % 2 == 0 and P[i // 2]['device'][1] > P[i // 2]['device'][0]+1: #so we know this line is mapped to a device group
+            if i % 2 == 0: #so we know this line is mapped to a device group
                 T += T_gathering[i]
 
             if T > T_latency:

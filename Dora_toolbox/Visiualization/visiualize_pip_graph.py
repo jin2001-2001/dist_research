@@ -214,7 +214,7 @@ def construct_processing(num_microbatches,num_stages,
                          Idependent,
                          mode = ''
                          ):
-    print("with in precessing func:", num_stages, num_microbatches, Idependent)
+    #print("with in precessing func:", num_stages, num_microbatches, Idependent)
     communication_recorder_end = 0
     while(1):  #brute force update:
         #print(len(fp_schedule)+len(bp_schedule))
@@ -641,10 +641,10 @@ def pip_ploting_graph(num_stages = 5, num_microbatches = 10,
             
     steps_plist = sgg.steps_precedence_list(steps_dlist)
 
-    print(steps_plist)
-    print(steps_dlist)
-    print(forward_times,backward_times, gathering_times)
-    print("begin working...")
+    #print(steps_plist)
+    #print(steps_dlist)
+    #print(forward_times,backward_times, gathering_times)
+    #print("begin working...")
     if trivial_mode == "fifo":
         construct_processing(num_microbatches,num_stages,
                          fp_schedule,bp_schedule,gathering_schedule,
@@ -760,7 +760,8 @@ def pip_ploting_graph_real(RCPSP_tasks, TaskL = None,
                         enablegraph = True,
                         storage = "./scratch",
                         group_plan = [],
-                        percentage = 0.6):
+                        percentage = 0.6,
+                        ratio = 0):
     fp_schedule = {}
     bp_schedule = {}
     gathering_schedule = {}
@@ -826,7 +827,7 @@ def pip_ploting_graph_real(RCPSP_tasks, TaskL = None,
     steps_plist = sgg.steps_precedence_list(steps_dlist)
     #now, the only thing is that we try to extract out the dependencies of the sub communication task...
     comm_Independent = []
-
+    biggest_end = 0
     for i in range(fb_amount): 
         if_compute,if_first_part, nsteps, nmicrobatch, ntasks, if_back = sgg.partitioner_shift(i,s,b,a,aa)
         if if_compute == 0:
@@ -836,6 +837,7 @@ def pip_ploting_graph_real(RCPSP_tasks, TaskL = None,
                             aa,if_gathering = False)
             if start == end: #dummy tasks
                 continue
+            if end>biggest_end: biggest_end = end
             comm_Independent.append([0,nsteps, nmicrobatch, ntasks,if_back, start])
     for i in range(fb_amount, total_amount):
         nsteps, ntasks = sgg.partitioner_shift(i,s,b,a,aa)
@@ -846,9 +848,11 @@ def pip_ploting_graph_real(RCPSP_tasks, TaskL = None,
         #print(i, start, end )
         if start == end: #dummy tasks
             continue
+        if end>biggest_end: biggest_end = end
         comm_Independent.append([1,nsteps,-1, ntasks,-1, start])
 
     comm_Independent.sort(key=lambda x: x[-1])
+    return biggest_end/ratio
     #print(comm_Independent)
     ##now, we want to reindex the ntasks value, so that biggest ntask is always the final one to be finished...
     counter_dict = {}

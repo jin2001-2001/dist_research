@@ -140,7 +140,7 @@ def dynamic_programming_planning_MM(Structure, Layer_structure, N, M, k, s, Prof
                                     # a single stage, and we need to concatinte the last phase's plans onto it...
                                     # original:Previous_Plan = P[((phase, branch_num), 0, 0, p-1)]
                                     Previous_Plan = P[(last_chunk_index, n_prime)]
-                                    if Previous_Plan == []:
+                                    if Previous_Plan == [[]]:
                                         continue
 
                                 elif n_prime == 0 and l_prime == 0 and last_chunk_index == (-1, -1):
@@ -150,7 +150,7 @@ def dynamic_programming_planning_MM(Structure, Layer_structure, N, M, k, s, Prof
                                     continue     
                                 else:
                                     Previous_Plan = P[((phase, branch_num), l_prime, n_prime, p-1)]
-                                    if Previous_Plan == []:
+                                    if Previous_Plan == [[]]:
                                         continue
 
                                 add_shard = {'phase':(phase,branch_num), 'layer':(L-l, L - l_prime), 'device':(N - n, N-n_prime), 'inver_internal_stage_idx':p-1}

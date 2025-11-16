@@ -32,7 +32,12 @@ def RCPSP_solver(pfile = "./scratch1.sm"):
     # It's not necessary to define jobs, but it will add coloring to the plot.
     jobs = [model.add_job() for _ in range(instance.num_jobs)]
     tasks = [model.add_task(job=jobs[idx]) for idx in range(instance.num_jobs)]
-    resources = [model.add_renewable(capacity) for capacity in instance.capacities]
+    resources = [
+        model.add_renewable(capacity=capacity)
+        if renewable
+        else model.add_non_renewable(capacity=capacity)
+        for capacity, renewable in zip(instance.capacities, instance.renewable)
+        ]
 
 
     for idx, duration, demands in instance.modes:
@@ -48,7 +53,7 @@ def RCPSP_solver(pfile = "./scratch1.sm"):
             model.add_end_before_start(task, tasks[succ])
 
 
-    result = model.solve(time_limit=40, display=False)
+    result = model.solve(time_limit=10, display=False)
     #print(result.best.tasks)
     #print(result.status)
     #print(result.objective/result.lower_bound)

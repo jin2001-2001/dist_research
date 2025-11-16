@@ -13,6 +13,15 @@ import numpy as np
 ## 1. forward & backward time cost for base situation: 1 batches, for a fixed number of layers
 
 ## how to get more 
+def syn_func(original_fun, tlist):
+    def new_func(x):
+        l = len(tlist)
+        if x <=l:
+            return original_fun(x)
+        else:
+            diff = tlist[-1] - tlist[-2]
+            return tlist[-1] + diff*(x-l)
+    return new_func
 
 def fit_cubic_from_series(y_series):
     """
@@ -125,16 +134,22 @@ class Device:
         #print(outbackward)
 
         a = fit_cubic_from_series(outforward)
+        a = syn_func(a,outforward)
         b = fit_cubic_from_series(outbackward)
+        b = syn_func(b,outbackward)
         self.computeprofile = ComputProfile(forward,backward,
                                             1,1,a,b)
 
         a = fit_cubic_from_series(headoutforward)
+        a = syn_func(a,headoutforward )
         b = fit_cubic_from_series(headoutbackward)
+        b = syn_func(b, headoutbackward)
         self.computeprofile_h = ComputProfile(headforward,headbackward,
                                             1,0,a,b)
         a = fit_cubic_from_series(tailoutforward)
+        a = syn_func(a, tailoutforward)
         b = fit_cubic_from_series(tailoutbackward)
+        b = syn_func(b, tailoutbackward)
         self.computeprofile_t = ComputProfile(tailforward,tailbackward,
                                             1,0,a,b)
 
@@ -359,20 +374,24 @@ class GraphProfilelor:
     """
     Maintains the k smallest (score, plan) pairs.
     """
-    def __init__(self,DList,hiddenSize, seq, total_layer, MbatchSize, Bandwidth, map_dict):
+    def __init__(self,DList,hiddenSize, seq, total_layer, MbatchSize, band_str, map_dict):
         #self.deviceN = damount
         self.DList = DList      #per ele should be a list of Devices, and use map_dict to get the correct devices...
         self.hiddenSize = hiddenSize # the same, is a list 
         self.seq_len = seq    # list 
         self.MbatchSize = MbatchSize # not list 
-        self.bandwidth = Bandwidth # not list 
+        self.band_str = band_str # not list 
         self.total_layers = total_layer # list...
         self.phase_mapping = map_dict
 
     
-    def communication_solver(self,phase_index, layer_slice=1): #simple version
+    def communication_solver(self,phase_index, device_slice_from, layer_slice=1): #simple version
         index = self.phase_mapping[phase_index]
-        T = self.MbatchSize*self.hiddenSize[index]*4*self.seq_len[index]/(self.bandwidth)/1e6*8
+
+        #bw = self.band_str.available_bw(device_slice_from[0], device_slice_from[-1]+1)
+        bw =  self.band_str.shardband
+
+        T = self.MbatchSize*self.hiddenSize[index]*4*self.seq_len[index]/(bw)/1e6*8
         
         #T = self.DList[0][index].activation_bytes_per_sample * self.MbatchSize/1e6/self.bandwidth*8
         #print(T)
@@ -394,7 +413,12 @@ class GraphProfilelor:
 
         total_parameter_bytes = accum*(D_amount-1)/D_amount *2 #plus embedding estimiation
 
-        T = total_parameter_bytes*8/1e6/(self.bandwidth/D_amount)
+
+        #local_lan = self.band_str.available_group_lan_bw(list(range(device_slice[0], device_slice[1])))
+        local_lan = 0
+        bb = local_lan + self.band_str.shardband
+
+        T = total_parameter_bytes*8/1e6/(bb/D_amount)
 
         return T
 

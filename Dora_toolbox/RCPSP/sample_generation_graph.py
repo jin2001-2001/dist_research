@@ -4,6 +4,17 @@ import math
 from psplib_ import TaskStatus_prime
 import random
 
+def extract_path(steps_index,sd_list, plan_list, band_str, BatchAllocateList):
+    #print(steps_index, sd_list, plan_list)
+    to_index = sd_list[steps_index]
+    to_device_tuple = plan_list[to_index//2]['device']
+    from_device_tuple = plan_list[steps_index//2]['device']
+
+    ##simplified version:
+    
+    return band_str.give_cost_option(from_device_tuple[0], to_device_tuple[0])
+
+
 class TaskStatus_graph(TaskStatus_prime):
     def initialize(self):
         if self.isgathering == False:
@@ -20,8 +31,10 @@ class TaskStatus_graph(TaskStatus_prime):
                     self.T = 0
                     self.R = 0
                 else: # ok, we have the subtask
+
                     self.T, self.R = self.suballocator(self.T, self.R, self.a-2 ,self.UnitR)
                     self.R = math.ceil(self.R)
+                    self.substitution = extract_path(self.nsteps,self.sd_list, self.plan_list, self.band_str, self.BatchAllocateList)
         else:
             #print(aa)
             self.isgathering = True
@@ -116,7 +129,7 @@ def get_rank(steps_dependent_list):
                 tmax = max(tmax, final[tvalue])
                 
         final[idx] = tmax+1
-    print("the final rank RCPSP will use:",steps_dependent_list, final)
+    #print("the final rank RCPSP will use:",steps_dependent_list, final)
     return final
 
 
@@ -298,8 +311,12 @@ def generatesm_graph(pfile = "scratch_graph.sm",s= 5, b=3, a=3,
                 TProfile=[(100,200),(300,400),(500,600),(700, 800),(900,1000)], RProfile = [(80,80)]*2, UnitR = 80,
                 gatheringTprofile= [1000,0,1000,0,0],gatheringRprofile= [80,0,80,0,0],
                 aa = 5,percent = 1, sd_list = [1,4,3,4,-1],
+                plan_list = None,
+                BatchAllocateList = None,
+                band_str = None,
                 indexer = indexer_shift, indexerg = gindexer_shift,
                 d_generate = depedency_generate_graph, scheduler = OFOB_graph_scheduler):
+    total_LAN_resource = len(band_str.LAN_resource)
     total_amount = (s//2+1)*b*2*2+(s//2)*b*2*a   #one more *2 for two divided computation tasks...
     end_node_index = total_amount+s*aa
     #print(total_amount)
@@ -309,7 +326,11 @@ def generatesm_graph(pfile = "scratch_graph.sm",s= 5, b=3, a=3,
         ptr = TaskStatus_graph(i, s,b,a , TProfile, RProfile, UnitR,
                                     isgathering = False, aa=-1,
                                     method1=partitioner_shift,method2=suballocator_shift,
-                                    percentage=percent
+                                    percentage=percent,
+                                    plan_list = plan_list,
+                                    BatchAllocateList = BatchAllocateList,
+                                    band_str = band_str,
+                                    sd_list = sd_list
                                     )
         ptr.initialize()
         TaskL.append(ptr)
@@ -337,6 +358,12 @@ def generatesm_graph(pfile = "scratch_graph.sm",s= 5, b=3, a=3,
         num = steps*mbatch*amount
         #file.write(str(num) + "\n")
 
+        R_head = ""
+
+        for i in range(total_LAN_resource+1):
+            buf = "R " + str(i+1) + " "
+            R_head+=buf
+
         #1st part: PRECEDENCE RELATIONS:
         file.write("PRECEDENCE RELATIONS:"+ "\n")
         file.write("jobnr.    #modes  #successors   successors"+ "\n")
@@ -357,7 +384,7 @@ def generatesm_graph(pfile = "scratch_graph.sm",s= 5, b=3, a=3,
 
         #2nd part: REQUESTS/DURATIONS::
         file.write("REQUESTS/DURATIONS:"+ "\n")
-        file.write("jobnr. mode duration  R 1"+"\n")
+        file.write("jobnr. mode duration"+R_head+" "+"\n")
         file.write("---------dummy line---------"+"\n")
             #real work begin
 
@@ -374,14 +401,34 @@ def generatesm_graph(pfile = "scratch_graph.sm",s= 5, b=3, a=3,
             #if if_comput == 0:
             #    cost = RProfile[step_counter//2]
             cost = TaskL[t].R
-            strline= strline+str(cost)+" "
+            strline= strline+str(cost)+" " + "0 "*total_LAN_resource
             file.write(strline + "\n")
+            
+            
+            idx = 1
+            if TaskL[t].substitution != None:
+                for per_path in TaskL[t].substitution:
+                    recorder = [0]*total_LAN_resource
+                    for per_r in per_path:
+                        recorder[per_r] = cost
+
+                    pure = ""
+                    for per in recorder:
+                        pure += (str(per) + " ")
+
+                    idx+=1
+                    strline = " "*4+" "*5+str(idx)+" "*5
+                    strline= strline+str(T)+" "*5
+                    strline= strline+"0"+" " + pure
+                    file.write(strline + "\n")
+
+
 
             #if comput_counter %(mbatch*amount) == 0: # the line is over, will switch modes...
             #    if_comput = if_comput ^ 1
             #    step_counter+=1
 
-        file.write(" "+str(end_node_index+1)+"      1     0       0 "+"\n")
+        file.write(" "+str(end_node_index+1)+"      1     0       0 "+ "0 "*total_LAN_resource +"\n")
 
         file.write("---------dummy line---------"+"\n")
 
@@ -389,10 +436,17 @@ def generatesm_graph(pfile = "scratch_graph.sm",s= 5, b=3, a=3,
 
         #3rd part RESOURCEAVAILABILITIES
         file.write("RESOURCEAVAILABILITIES:\n")
-        file.write("   R 1   "+"\n")
+        file.write("   "+R_head+"\n")
             #real work begin
 
-        file.write("   "+str(UnitR)+"   "+"\n")
+        pure = "  "
+
+        for per_r in band_str.LAN_resource:
+            ratio = per_r/band_str.shardband
+            pure+= (str(int(ratio*UnitR))+"   ")
+
+
+        file.write("   "+str(UnitR)+"   "+pure+"\n")
 
         file.write("---------dummy end---------"+"\n")
     return TaskL
