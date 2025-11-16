@@ -105,11 +105,14 @@ def plan_estimator(P, M, SLO, Profilelor, alpha):
     d = max(range(S), key=lambda i: (B_ft[i] + B_bt[i],i)) #if the same big, choose one with hight step idx.
 
     # Compute phase times
-    T1 = start_phase_time_est(P, B_list, d)
+    T1 = start_phase_time_est(B_ft, B_list, d)
     T2 = (M - S + d) * (B_ft[d] + B_bt[d])
-    T3_list = end_phase_time_est(P, B_list, d)
+    T3_list = end_phase_time_est(B_ft, B_list, d)
 
     T_latency = float('-inf')
+
+    #print(B_list)
+    #print(T3_list)
 
     for i in range(S):
         T = T1 + T2 + T3_list[i]

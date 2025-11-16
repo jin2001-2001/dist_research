@@ -106,10 +106,17 @@ def get_rank(steps_dependent_list):
     final = [-1]*nsteps
     for i, value in enumerate(list(reversed(steps_dependent_list))):
         idx = nsteps-1-i
-        if value == -1 or value == None:
-            final[idx] = 0
-        else:
-            final[idx] = final[value]+1
+        if not isinstance(value, (list, tuple)):
+            value = [value]
+        tmax = -1
+        for tvalue in value:
+            if tvalue == -1 or tvalue == None:
+                final[idx] = 0
+            else:
+                tmax = max(tmax, final[tvalue])
+                
+        final[idx] = tmax+1
+    print("the final rank RCPSP will use:",steps_dependent_list, final)
     return final
 
 
@@ -174,33 +181,42 @@ def depedency_generate_graph(TaskL, s= 3, b=3, a=4, aa = 5,sd_list = [1,4,3,4,-1
             #from comp to comm:
             if(i %2 == 0): #computation step
                 next = sd_list[i]
-                if next == -1 or next == None: continue
-                id1 = indexer(s,a,b,i,j)
-                id2 = indexer(s,a,b,next,j,0)
-                TaskL[id1].add_dependency(id2)
-                TaskL[id2].add_precedence(id1)
+                if  not isinstance(next, (list, tuple)):
+                    next = [next]
 
-                id1 = indexer(s,a,b,next,b+j,a-1)
-                id2 = indexer(s,a,b,i,b+j)
+                for tnext in next:
+                    if tnext == -1 or tnext == None: continue
+                    id1 = indexer(s,a,b,i,j)
+                    id2 = indexer(s,a,b,tnext,j,0)
+                    TaskL[id1].add_dependency(id2)
+                    TaskL[id2].add_precedence(id1)
 
-                TaskL[id1].add_dependency(id2)
-                TaskL[id2].add_precedence(id1)
+                    id1 = indexer(s,a,b,tnext,b+j,a-1)
+                    id2 = indexer(s,a,b,i,b+j)
+
+                    TaskL[id1].add_dependency(id2)
+                    TaskL[id2].add_precedence(id1)
 
             else:
                 next = sd_list[i]
-                if next == -1 or next == None: continue
-                id1 = indexer(s,a,b,i,j,a-1)
-                id2 = indexer(s,a,b,next,j)
 
-                TaskL[id1].add_dependency(id2)
-                TaskL[id2].add_precedence(id1)
+                if  not isinstance(next, (list, tuple)):
+                    next = [next]
 
-                id1 = indexer(s,a,b,next,b+j)
-                id2 = indexer(s,a,b,i,b+j,0)
+                for tnext in next:
+                    if tnext == -1 or tnext == None: continue
+                    id1 = indexer(s,a,b,i,j,a-1)
+                    id2 = indexer(s,a,b,tnext,j)
+
+                    TaskL[id1].add_dependency(id2)
+                    TaskL[id2].add_precedence(id1)
+
+                    id1 = indexer(s,a,b,tnext,b+j)
+                    id2 = indexer(s,a,b,i,b+j,0)
 
 
-                TaskL[id1].add_dependency(id2)
-                TaskL[id2].add_precedence(id1)             
+                    TaskL[id1].add_dependency(id2)
+                    TaskL[id2].add_precedence(id1)             
 
 
 

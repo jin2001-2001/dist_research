@@ -46,7 +46,7 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
 
     ##we try to get a good ratio...
     smallest = min(B_ft)
-    ratio = int((10+smallest-1)/smallest)
+    ratio = int((100+smallest-1)/smallest)
     ratio = min(ratio, 1)
     ##we get the ratio, 
 
@@ -55,10 +55,11 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
     candidate = [{'device':[0],'layer':[0]}]*((nsteps+1)//2)
     pp=pct
     tprofile = list(zip([math.ceil(x*ratio) for x in B_ft], [math.ceil(y*ratio) for y in B_bt]))
+    gathering_amp = [math.ceil(x*ratio) for x in T_gathering]
     score_list = []
     sgg.generatesm_graph(pfile = "./scratch/scratchtest_graph.sm",s= nsteps, b=nmbatch, a=subtasksfb,
                     TProfile=tprofile, RProfile = rprofile, UnitR = UnitR,
-                    gatheringTprofile= T_gathering,gatheringRprofile= grprofile,
+                    gatheringTprofile= gathering_amp,gatheringRprofile= grprofile,
                       aa = subtasksg, percent = pp, sd_list = sd_list)
 
     #call RCPSP solver:
@@ -77,7 +78,8 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
                     enableshare = False, enablegraph = enable,
                     storage = f"./scratch/plot{ratio1:.1f},{ratio2:.1f},{ratio3:.1f}_d2d.png",
                     group_plan = candidate,
-                    percentage = pp
+                    percentage = pp,
+                    trivial_mode = "fifo"
                     ) 
         score_list.append(score)
         score = vpg.pip_ploting_graph(num_stages = nsteps, num_microbatches = nmbatch,
@@ -86,9 +88,21 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
                     gathering_times = T_gathering, 
                     steps_dlist = sd_list,
                     enableshare = True, enablegraph = enable,
-                    storage = f"./scratch/plot{ratio1:.1f},{ratio2:.1f},{ratio3:.1f}_shared.png",
+                    storage = f"./scratch/plot{ratio1:.1f},{ratio2:.1f},{ratio3:.1f}_shared_FIFO.png",
                     group_plan = candidate,
-                    percentage = pp)   
+                    percentage = pp,
+                    trivial_mode = "fifo")   
+        score_list.append(score)
+        score = vpg.pip_ploting_graph(num_stages = nsteps, num_microbatches = nmbatch,
+                    forward_times = B_ft,
+                    backward_times = B_bt,
+                    gathering_times = T_gathering, 
+                    steps_dlist = sd_list,
+                    enableshare = True, enablegraph = enable,
+                    storage = f"./scratch/plot{ratio1:.1f},{ratio2:.1f},{ratio3:.1f}_shared_even.png",
+                    group_plan = candidate,
+                    percentage = pp,
+                    trivial_mode = "even")   
         score_list.append(score)
         score = vpg.pip_ploting_graph_real(result.best.tasks,
                            ns=nsteps, a=subtasksfb, b=nmbatch, aa=subtasksg, 
@@ -358,21 +372,21 @@ def simulator_eval(  ndevice,
                              
 
 if __name__ == "__main__":
-    ndevice = 3
-    nmbatch = 6
-    mbatchsize = 3
-    layers = [32,32,36]  ## should be a list 
-    hidden_size = [2048]*3 ## should be a list 
-    seq = [860, 400, 200]*3 ## should be a list
+    ndevice = 10
+    nmbatch = 5
+    mbatchsize = 8
+    layers = [32,32,32,32,32,32,32]  ## should be a list 
+    hidden_size = [2048]*7 ## should be a list 
+    seq = [256*36, 256*36, 256*36, 256*36,256*36, 770*36, 1000*36] ## should be a list
     profilehome="../Profile_exp_0.6"
-    profilemaping = {(0,0):0, (0,1):1, (1,0):2}   # 0: vision, 1: audio, 2: backbone
-    model_names = [""]*3
+    profilemaping = {(0,0):0, (0,1):1, (0,2):1, (0,3):1,(0,4):5, (1,0):6}   # 0: vision, 1: audio, 2: backbone
+    model_names = [""]*7
     #model_names = ["vision", "audio", "thinker"]
-    band = 800
+    band = 700
     alpha = 0 # 0 by default
-    set_list = ["2630"]*0 + ["4050"]*0+["4060"]*3+ ["A40"]*0 + ["Camera"]*0 + ["Samsung"]*0 + ["V100"]*0 + ["Xiaomi"]*0
+    set_list = ["2630"]*0 + ["4050"]*5+["4060"]*5+ ["A40"]*0 + ["Camera"]*0 + ["Samsung"]*0 + ["V100"]*0 + ["Xiaomi"]*0
     #mem_list = [32*2]*0+     [8*2]*0+    [12*2]*0 + [48*2]*0+    [16*2]*0+     [12*2]*2+       [32*2]*0+    [12*2]*2
-    mem_list = [500*2]*6
+    mem_list = [500*2]*10
     mem_list = [x*1024 for x in mem_list]
 
 
@@ -404,7 +418,7 @@ if __name__ == "__main__":
                 band,
                 profilehome,
                 set_list, 
-                mem_list,ks=8, ss = 1,
+                mem_list,ks=4, ss = 1,
                 alpha=alpha)
     
     if 1==0:    

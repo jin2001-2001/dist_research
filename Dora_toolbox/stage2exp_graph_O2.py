@@ -55,10 +55,11 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
     candidate = [{'device':[0],'layer':[0]}]*((nsteps+1)//2)
     pp=pct
     tprofile = list(zip([math.ceil(x*ratio) for x in B_ft], [math.ceil(y*ratio) for y in B_bt]))
+    gathering_amp = [math.ceil(x*ratio) for x in T_gathering]
     score_list = []
     sgg.generatesm_graph(pfile = "./scratch/scratchtest_graph.sm",s= nsteps, b=nmbatch, a=subtasksfb,
                     TProfile=tprofile, RProfile = rprofile, UnitR = UnitR,
-                    gatheringTprofile= T_gathering,gatheringRprofile= grprofile,
+                    gatheringTprofile= gathering_amp,gatheringRprofile= grprofile,
                       aa = subtasksg, percent = pp, sd_list = sd_list)
 
     #call RCPSP solver:
@@ -77,7 +78,8 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
                     enableshare = False, enablegraph = enable,
                     storage = f"./scratch/plot{ratio1:.1f},{ratio2:.1f},{ratio3:.1f}_d2d.png",
                     group_plan = candidate,
-                    percentage = pp
+                    percentage = pp,
+                    trivial_mode = "fifo"
                     ) 
         score_list.append(score)
         score = vpg.pip_ploting_graph(num_stages = nsteps, num_microbatches = nmbatch,
@@ -88,7 +90,19 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
                     enableshare = True, enablegraph = enable,
                     storage = f"./scratch/plot{ratio1:.1f},{ratio2:.1f},{ratio3:.1f}_shared.png",
                     group_plan = candidate,
-                    percentage = pp)   
+                    percentage = pp,
+                    trivial_mode = "fifo")   
+        score_list.append(score)
+        score = vpg.pip_ploting_graph(num_stages = nsteps, num_microbatches = nmbatch,
+                    forward_times = B_ft,
+                    backward_times = B_bt,
+                    gathering_times = T_gathering, 
+                    steps_dlist = sd_list,
+                    enableshare = True, enablegraph = enable,
+                    storage = f"./scratch/plot{ratio1:.1f},{ratio2:.1f},{ratio3:.1f}_shared_even.png",
+                    group_plan = candidate,
+                    percentage = pp,
+                    trivial_mode = "even")   
         score_list.append(score)
         score = vpg.pip_ploting_graph_real(result.best.tasks,
                            ns=nsteps, a=subtasksfb, b=nmbatch, aa=subtasksg, 
@@ -142,7 +156,8 @@ def dora_best(  ndevice,
     random.shuffle(perms)   # now order is randomized
 
     for perm_indices in perms[:]:
-        if Permuaccounts>len(test_list):
+        #####jin: change here to adjust...
+        if Permuaccounts>1:
             continue
         device_order = [test_list[i] for i in perm_indices]
         mem_order    = [mem_list[i] for i in perm_indices]
@@ -283,9 +298,20 @@ def simulator_eval(  ndevice,
                              
 
 if __name__ == "__main__":
-    ndevice = 8
+
+    #score_compare = test_stramline(ratio1=0,ratio2=0,ratio3=0,
+    #                            B_ft = [10,15,20,20,15], B_bt = [15,15,20,25,10], rprofile = [(10000,10000)]*5,
+    #                            T_gathering= [25,0,25,0,0], grprofile = [10000,0,10000,0,0],
+    #                            subtasksfb=7, UnitR = 10000, subtasksg=7,
+    #                            nmbatch = 5,pct= 0,
+    #                            sd_list=[1,4,3,4,-1])
+    #
+    #print(score_compare)
+
+
+    ndevice = 7
     nmbatch = 20
-    mbatchsize = 8
+    mbatchsize = 5
     #layers = 28
     layers = 12
     #hidden_size = 2048
@@ -294,9 +320,9 @@ if __name__ == "__main__":
     #profilehome="../Profile_exp_0.6"
     profilehome="../Profile_exp_bert"
     band = 1000
-    alpha = 1.30 # 0 by default
-    set_list = ["2630"]*0 + ["4050"]*0+["4060"]*0+ ["A40"]*0 + ["Camera"]*8 + ["Samsung"]*0 + ["V100"]*0 + ["Xiaomi"]*0
-    mem_list = [32*2]*0+     [8*2]*0+    [12*2]*0 + [48*2]*0+    [16*2]*8+     [12*2]*2+       [32*2]*0+    [12*2]*2
+    alpha = 0 # 0 by default
+    set_list = ["2630"]*0 + ["4050"]*0+["4060"]*0+ ["A40"]*0 + ["Camera"]*0 + ["Samsung"]*3 + ["V100"]*0 + ["Xiaomi"]*4
+    mem_list = [1000*2]*7+     [8*2]*2+    [12*2]*1 + [48*2]*0+    [16*2]*0+     [12*2]*2+       [32*2]*0+    [12*2]*2
     mem_list = [x*1024 for x in mem_list]
 
 
@@ -316,6 +342,9 @@ if __name__ == "__main__":
     #plan2 = [{'layer':(0,5), 'device':(0,1)}, {'layer':(5,15), 'device':(1,3)}]
 
     if 1==1:
+        #for mbatchsize in range(8,10):
+        #    for band in range(500,2500, 200):
+        #print(f'#########mbatchsize:{mbatchsize}, bandwidth:{band}:\n')
         dora_best(  ndevice,
                 nmbatch,
                 mbatchsize,
@@ -325,7 +354,7 @@ if __name__ == "__main__":
                 band,
                 profilehome,
                 set_list, 
-                mem_list,ks=5, ss = 1,
+                mem_list,ks=4, ss = 1,
                 alpha=alpha)
     
     if 1==0:    
