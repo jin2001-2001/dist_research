@@ -28,6 +28,15 @@ class Bandwidth_str:
         self.LAN_resource = []
         self.LAN_link = {}
 
+    def resource_ratio_list(self):
+        L = self.LAN_resource.copy()
+
+        for i in range(len(L)):
+            L[i] = L[i]/self.shardband
+        return L
+
+    
+
     def give_cost_option(self, index_from, index_to):
         for key, value in self.LAN_link.items():
             if (index_from,index_to) == key or (index_to,index_from) == key:
@@ -57,11 +66,13 @@ class Bandwidth_str:
                         if best_band < buffer:
                             best_band = buffer
                             best_path = per_path
-            
-
 
         return self.shardband+best_band, best_path
     
+
+
+
+
     def available_group_lan_bw(self, index_list):
         lowest_band = float('inf')
         ss= set()
@@ -176,6 +187,23 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
                     trivial_mode = "fifo"
                     ) 
         score_list.append(score)
+
+        score = vpg.pip_ploting_graph(num_stages = nsteps, num_microbatches = nmbatch,
+                    forward_times = B_ft,
+                    backward_times = B_bt,
+                    gathering_times = T_gathering,
+                    steps_dlist = sd_list,
+                    enableshare = True, enablegraph = enable,
+                    storage = f"./scratch/plot{ratio1:.1f},{ratio2:.1f},{ratio3:.1f}_shared_average.png",
+                    group_plan = candidate,
+                    percentage = pp,
+                    trivial_mode = "average",
+                    plan_list = plan_list,
+                    BatchAllocateList = BatchAllocateList,
+                    band_str = band_str
+                    ) 
+        score_list.append(score)
+
 
         bftt, bbtt = simplified_FIFO_modify(B_ft,B_bt,sd_list,plan_list,  band_str, BatchAllocateList)
 
@@ -341,6 +369,7 @@ def dora_best_MM(
         result = dynamic_programming_planning_MM(Structure=Structure,Layer_structure = layer_Structure, N= ndevice , M = nmbatch, k = ks, s = ss,
                                           Profilelor = simprofile, 
                                           alpha = alpha, SLO = 0)
+        #print("the iteraion's result is ", result.amount())
         topK.merge_with_device_type(result, perm_indices)  # notice here that we use it to store perm_indices, not actual device name anymore...
         Permuaccounts+=1
 
@@ -481,7 +510,7 @@ def simulator_eval(  ndevice,
 def construct_band(name, band, ratio):
     if name == "mesh":
         structure = Bandwidth_str("mesh", band)
-        ch = [4,5,6,7]
+        ch = [1,3,2,4]
         #  0  --- 0 ---- 1
         #  |             |
         #  3             1 
@@ -496,9 +525,9 @@ def construct_band(name, band, ratio):
 
 
 if __name__ == "__main__":
-    ndevice = 8
+    ndevice = 4
     nmbatch = 5
-    mbatchsize = 5
+    mbatchsize = 4
     layers = [32,32,36]  ## should be a list 
     hidden_size = [1280,1280,3584] ## should be a list 
     seq = [256*4, 500*4, 700*4] ## should be a list
@@ -506,13 +535,13 @@ if __name__ == "__main__":
     profilemaping = {(0,0):0, (0,1):1, (1,0):2}   # 0: vision, 1: audio, 2: backbone
     model_names = [""]*len(profilemaping)
     #model_names = ["vision", "audio", "thinker"]
-    band = 400
+    band = 450
     lanratio = 1
     name = "mesh"
     band_Str = construct_band(name,band,lanratio)
 
     alpha = 0 # 0 by default
-    set_list = ["2630"]*0 +["4060"]*2+ ["4050"]*2+ ["A40"]*0 + ["Camera"]*0 + ["Samsung"]*2 + ["V100"]*0 + ["Xiaomi"]*2
+    set_list = ["2630"]*0 +["4060"]*6+ ["4050"]*6+ ["A40"]*0 + ["Camera"]*0 + ["Samsung"]*0 + ["V100"]*0 + ["Xiaomi"]*0
     #mem_list = [32*2]*0+     [8*2]*0+    [12*2]*0 + [48*2]*0+    [16*2]*0+     [12*2]*2+       [32*2]*0+    [12*2]*2
     mem_list = [40*2]*10
     mem_list = [x*1024 for x in mem_list]

@@ -12,11 +12,34 @@ from matplotlib.patches import Rectangle
 #import random
 
 class BandwidthStack:
-    def __init__(self):
+    def __init__(self, plan_list,BatchAllocateList, band_str,steps_dlist):
         self.tasks = []  # store {"id", "start", "end", "remaining", "active"}
         self.time = 0.0
         self.next_id = 0
         self.lazy_stack = []
+        self.plan_list = plan_list
+        self.BatchAllocateList = BatchAllocateList
+        self.band_str = band_str
+        self.steps_dlist = steps_dlist
+        self.resource_ratio_list = band_str.resource_ratio_list()
+
+        n = len(band_str.LAN_resource)
+        self.LAN_count = [0]*n
+        self.shared_count = 0
+
+
+    def init_path_extract(self, steps_index,sd_list, plan_list, band_str, BatchAllocateList):
+    #print(steps_index, sd_list, plan_list)
+        to_index = sd_list[steps_index]
+        to_device_tuple = plan_list[to_index//2]['device']
+        from_device_tuple = plan_list[steps_index//2]['device']
+
+
+
+        _, path =  band_str.available_bw(from_device_tuple[0], to_device_tuple[0])
+
+        return from_device_tuple, to_device_tuple, path
+        
 
     def _active_tasks(self):
         return [t for t in self.tasks if t["active"] and not t["dead"]]    
@@ -65,13 +88,14 @@ class BandwidthStack:
             # Time until each active task finishes under current n
             # time_to_finish_i = remaining_i * n
             times_to_finish = [
-                t["remaining"] * n for t in active if t["remaining"] > eps
+                self.remain_time(t) for t in active if t["remaining"] > eps
             ]
             if not times_to_finish:
                 # All effectively done, mark and exit
                 for t in active:
                     t["active"] = False
                     t["end"] = self.time
+                    self.r_counter_update(t, "sub")
                 remaining_dt = 0.0
                 meet_end = True
                 break
@@ -83,14 +107,14 @@ class BandwidthStack:
                 dt = next_finish  # actual step to next finish event
 
                 # All active tasks progress for dt with 1/n share
-                step_progress = dt / n
                 for t in active:
-                    t["remaining"] -= step_progress
+                    t["remaining"] -= self.cal_progress( t, dt)
                     if t["remaining"] <= eps:
                         # mark finished exactly at this event time
                         t["remaining"] = 0.0
                         t["active"] = False
                         t["end"] = self.time + dt
+                        self.r_counter_update(t, "sub")
                         meet_end = True
 
                 # Move time forward and reduce remaining_dt
@@ -103,9 +127,8 @@ class BandwidthStack:
             else:
                 # No one finishes within remaining_dt: just partial progress
                 dt = remaining_dt
-                step_progress = dt / n
                 for t in active:
-                    t["remaining"] -= step_progress
+                    t["remaining"] -= self.cal_progress( t, dt)
                 self.time += dt
                 remaining_dt = 0.0
         return meet_end
@@ -113,6 +136,8 @@ class BandwidthStack:
     def lazy_add_task(self, start,end, index):
 
         duration = end - start
+
+        ftuple, ttuple, path = self.init_path_extract(index[1],self.steps_dlist, self.plan_list, self.band_str, self.BatchAllocateList)
         task = {
             "index": index, # index of the (mbatch, stage)...
             "id": self.next_id,
@@ -120,11 +145,54 @@ class BandwidthStack:
             "end": None,
             "remaining": duration,
             "active": True,
-            "dead": False
+            "dead": False,
+            "ftuple": ftuple,
+            "ttuple": ttuple,
+            "path": path,
+            "BatchAllocateList": self.BatchAllocateList
         }
         self.next_id += 1
         self.lazy_stack.append(task)
 
+
+    def cal_progress(self, task, time):
+        shared_resource_init = 1
+        act_shared_r = 1/self.shared_count
+
+        tmin = float("inf")
+        for perLAN in task["path"]:
+            LAN_resource_init = self.resource_ratio_list[perLAN]
+            act_LAN = LAN_resource_init/self.LAN_count[perLAN]
+            if tmin>act_LAN:
+                tmin = act_LAN
+        
+        if len(task["path"]) == 0:
+            tmin = 0
+
+        return time*(act_shared_r + tmin)
+
+
+    
+    def remain_time(self, task):
+        remaining_work = task["remaining"]
+        shared_resource_init = 1
+        act_shared_r = 1/self.shared_count
+
+        tmin = float("inf")
+        for perLAN in task["path"]:
+            LAN_resource_init = self.resource_ratio_list[perLAN]
+            act_LAN = LAN_resource_init/self.LAN_count[perLAN]
+            if tmin>act_LAN:
+                tmin = act_LAN
+        
+        if len(task["path"]) == 0:
+            tmin = 0
+
+        return remaining_work/(act_shared_r + tmin)
+
+
+
+    #unused method......
     def sync_dump(self):
         """Add a new task starting at 'start' (simulate to that point first)."""
         # advance time to new task start
@@ -141,6 +209,18 @@ class BandwidthStack:
         #print(f"Task {task['id']} joined at t={start}, duration={duration}")
         return
 
+    def r_counter_update(self,per_task, mode = "add"):
+        if mode == "add":
+            for LAN_r in per_task["path"]:
+                self.LAN_count[LAN_r]+=1
+            self.shared_count+=1
+        elif mode == "sub":
+            for LAN_r in per_task["path"]:
+                self.LAN_count[LAN_r]-=1
+                if self.LAN_count[LAN_r]<0: print("LAN_counter update error......")
+            self.shared_count-=1
+            if  self.shared_count<0: print("shared_counter update error......")
+
     def add_start_until_end(self):
         """Add a new task starting at 'start' (simulate to that point first)."""
         # advance time to new task start
@@ -154,13 +234,28 @@ class BandwidthStack:
             if  meet_end == True:
                 break
             self.tasks.append(per_task)
+            ##now we add the task into our runtime counter, so, we need to maintain the resource_counter...
+            self.r_counter_update(per_task, "add")
+
             counter += 1
 
         self.lazy_stack = self.lazy_stack[counter:]
 
         #print(f"Task {task['id']} joined at t={start}, duration={duration}")
         return meet_end
-
+    
+    def step_until_next_finish(self):
+        active = [t for t in self.tasks if t["active"]]
+        if not active:
+            return None
+        n = len(active)
+        # smallest remaining time among all * total bandwidth share*
+        min_remaining_time = min(self.remain_time(t) for t in active)
+        next_finish_time = self.time + min_remaining_time
+        self.advance_to(next_finish_time)
+        return next_finish_time
+    
+    ##main method used for the update...
     def pop_finished(self):
         """Pop and return all finished tasks (earliest ones)."""
         finished = [t for t in self.tasks if not t["active"] and t["dead"] == False]
@@ -185,16 +280,6 @@ class BandwidthStack:
         
         return candidate["index"], candidate["start"],candidate["end"]
 
-    def step_until_next_finish(self):
-        active = [t for t in self.tasks if t["active"]]
-        if not active:
-            return None
-        n = len(active)
-        # smallest remaining time among all * total bandwidth share*
-        min_remaining = min(t["remaining"] for t in active)
-        next_finish_time = self.time + min_remaining * n
-        self.advance_to(next_finish_time)
-        return next_finish_time
 
 
 
@@ -380,10 +465,13 @@ def construct_processing_even_channel(num_microbatches,num_stages,
                          start_percent,
                          enableshare,
                          Idependent,
-                         mode = ""
+                         mode = "",
+                        plan_list = None,
+                        BatchAllocateList = None,
+                        band_str = None
                          ):
     communication_recorder_end = 0
-    router_stack = BandwidthStack()
+    router_stack = BandwidthStack(plan_list,BatchAllocateList, band_str,steps_dlist)
     while(1):  #brute force update:
         #print(len(fp_schedule)+len(bp_schedule))
         upi = 0 
@@ -579,7 +667,10 @@ def pip_ploting_graph(num_stages = 5, num_microbatches = 10,
                 enableshare = False, enablegraph = True,
                 storage = "./scratch",
                 group_plan = [],percentage = 0.6,
-                trivial_mode = "fifo"):
+                trivial_mode = "fifo",
+                plan_list = None,
+                BatchAllocateList = None,
+                band_str = None):
     # ----------------------
     # Parameters
     # ----------------------
@@ -664,7 +755,10 @@ def pip_ploting_graph(num_stages = 5, num_microbatches = 10,
                          start_percent,
                          enableshare,
                          Idependent,
-                         mode = trivial_mode
+                         mode = trivial_mode,
+                        plan_list = plan_list,
+                        BatchAllocateList = BatchAllocateList,
+                        band_str = band_str
                           #this is a func
                          )
     #print(len(bp_schedule), len(fp_schedule),len(gathering_schedule))

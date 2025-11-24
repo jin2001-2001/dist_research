@@ -4,6 +4,15 @@ import itertools
 from collections import defaultdict
 from itertools import product
 
+def make_hashable_plan(plan_list):
+    #print( plan_list)
+    return tuple(
+        tuple(sorted((k, v) for k, v in item.items()))
+        for item in plan_list
+    )
+def make_hashable_allocateplan(ap_list):
+    return tuple(tuple(inner) for inner in ap_list)
+
 class TopKContainer:
     """
     Maintains the k smallest (score, plan) pairs.
@@ -12,29 +21,36 @@ class TopKContainer:
         self.k = k
         self.heap = []  # This is a max-heap: (-score, plan)
         self.id = 0
+        self.seen = set()
+
     def amount(self):
         return len(self.heap)
 
 
-    def update(self, score, plan, allocateplan, device_order=None):
-        """
-        Add a (score, plan) pair.
-        """
+    def update(self, score, plan, allocateplan, device_order = None):
+        key = (make_hashable_plan(plan), make_hashable_allocateplan(allocateplan))
+
+        # If this exact plan combination already exists, skip
+        if key in self.seen:
+            return
+
         entry = (-score, self.id, plan, allocateplan, device_order)
 
-
-
+        # If heap not full → push directly
         if len(self.heap) < self.k:
-            self.id+=1
+            self.id += 1
             heapq.heappush(self.heap, entry)
+            self.seen.add(key)
         else:
-            # If the new score is smaller than the largest (worst) in heap
-            if score < - self.heap[0][0]:
-                # Replace the worst one
-                self.id+=1
-                #print(self.heap)
-                #print(entry)
-                heapq.heapreplace(self.heap, entry)
+            # Only replace if better (score is smaller is worse since we use -score)
+            if score < -self.heap[0][0]:
+                # remove old one from seen
+                old = heapq.heapreplace(self.heap, entry)
+                old_plan = (make_hashable_plan(old[2]), make_hashable_allocateplan(old[3]))
+                self.seen.discard(old_plan)
+
+                self.id += 1
+                self.seen.add(key)
     
     def merge(self, container):
         for j in range(len(container.scores)):

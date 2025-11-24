@@ -135,7 +135,7 @@ def dynamic_programming_planning_MM(Structure, Layer_structure, N, M, k, s, Prof
                                     continue #this means we rely on a special non-esixt sub problem
                                 if n_prime*l_prime>0 and p-1 ==0:
                                     continue #stage 0's only afford that np and lp are both 0
-                                if n_prime > 0 and l_prime == 0: # inherently means p-1==0
+                                if n_prime > 0 and l_prime == 0 and p-1 == 0: # inherently means p-1==0
                                     # it is the base statement of this phase index's
                                     # a single stage, and we need to concatinte the last phase's plans onto it...
                                     # original:Previous_Plan = P[((phase, branch_num), 0, 0, p-1)]
@@ -143,12 +143,14 @@ def dynamic_programming_planning_MM(Structure, Layer_structure, N, M, k, s, Prof
                                     if Previous_Plan == [[]]:
                                         continue
 
-                                elif n_prime == 0 and l_prime == 0 and last_chunk_index == (-1, -1):
+                                elif n_prime == 0 and l_prime == 0 and p-1 == 0 and last_chunk_index == (-1, -1):
                                     Previous_Plan = P[(last_chunk_index, n_prime)]
 
                                 elif n_prime == 0 and l_prime == 0 and last_chunk_index != (-1, -1):
                                     continue     
                                 else:
+                                    if ((phase, branch_num), l_prime, n_prime, p-1) not in P:
+                                        continue
                                     Previous_Plan = P[((phase, branch_num), l_prime, n_prime, p-1)]
                                     if Previous_Plan == [[]]:
                                         continue

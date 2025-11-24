@@ -474,7 +474,7 @@ class GraphProfilelor:
 
 
 
-    def getall(self, P):
+    def getall(self, P, mode = "shared"):
         #print("profilor's info:", P)
 
         ##warning: if having multiple decoders at the end,,, we need to change stepsN to s*len(P) and consider 
@@ -530,6 +530,12 @@ class GraphProfilelor:
                 E_gathering.append(ee)
             else: # communication step:
                 T = self.communication_solver(phase_index, self.MbatchSize)
+
+                if mode != "shared":
+                    ratio_l = self.band_str.resource_ratio_list()
+                    T = T/ratio_l[0]
+
+
                 B_ft.append(T)
                 B_bt.append(T)
                 B_fe.append(0)
