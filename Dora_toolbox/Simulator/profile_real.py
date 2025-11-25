@@ -384,13 +384,47 @@ class GraphProfilelor:
         self.total_layers = total_layer # list...
         self.phase_mapping = map_dict
 
+    def dependency_list(self, plan):   ## the same one in O2_omni,,, if we need to do modification, we need change omni on as well
+
+        L = []
+
+        for shard in plan:
+            index = shard['phase']
+            L.append(index)
+            if shard !=plan[-1]:
+                L.append(index) 
+
+        #L = [(0,0), (0,0), (0,1), (0,1), (1,0), (1,0)]
+
+        n = len(L)
+        deps = [-1] * n  # initialize all with -1
+
+        # 1Rule 1: identical neighbors
+        for i in range(n - 1):
+            if L[i] == L[i + 1]:
+                deps[i] = i + 1
+
+        # Rule 2: last (0,*) → first (1,0)
+        first_1_idx = next(i for i, t in enumerate(L) if t == (1,0))
+        # find last index of each unique (0, y)
+        seen = set()
+        for i in range(n - 1, -1, -1):
+            if L[i][0] == 0 and L[i][1] not in seen:
+                deps[i] = first_1_idx
+                seen.add(L[i][1])
+
+        return(deps)
+
+
     
-    def communication_solver(self,phase_index, device_slice_from, layer_slice=1): #simple version
+    def communication_solver(self,phase_index, mode="shared", device_slice= None, next_device_slice = None ): #simple version
         index = self.phase_mapping[phase_index]
 
+        if mode == "shared":
         #bw = self.band_str.available_bw(device_slice_from[0], device_slice_from[-1]+1)
-        bw =  self.band_str.shardband
-
+            bw =  self.band_str.shardband
+        else: 
+            bw = self.band_str.available_bw(device_slice[0], next_device_slice[0])
         T = self.MbatchSize*self.hiddenSize[index]*4*self.seq_len[index]/(bw)/1e6*8
         
         #T = self.DList[0][index].activation_bytes_per_sample * self.MbatchSize/1e6/self.bandwidth*8
@@ -480,16 +514,25 @@ class GraphProfilelor:
         ##warning: if having multiple decoders at the end,,, we need to change stepsN to s*len(P) and consider 
         ##redundant communication step envolved that might affect drawing...
         stepsN = 2*len(P)-1
+        dp_list = self.dependency_list(P)
         B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering = ([] for _ in range(6))
         BatchAllocateList = []
         for s in range(stepsN):
+
+
+            stepinfo = P[s//2]
+
+            nextstepinfo = P[dp_list[s//2]] if dp_list[s//2]  != -1 else None
+
+            layer_slice = stepinfo['layer']
+            device_slice = stepinfo['device']
+            next_device_slice = nextstepinfo['device'] if nextstepinfo != None else None
+            phase_index = stepinfo['phase']
+            #for each loops, use DP solver to get the answer,
+            inverseStage = stepinfo['inver_internal_stage_idx']
+
             if s%2 == 0: # calculation step:
-                stepinfo = P[s//2]
-                layer_slice = stepinfo['layer']
-                device_slice = stepinfo['device']
-                phase_index = stepinfo['phase']
-                #for each loops, use DP solver to get the answer,
-                inverseStage = stepinfo['inver_internal_stage_idx']
+
                 batch_shard = self.DP_solver(phase_index,device_slice, layer_slice, inverseStage, P)
                 if batch_shard == False:
                     return False #failed to allocate batch for one Devices group
@@ -528,13 +571,11 @@ class GraphProfilelor:
                     tt = self.gathering_solver(phase_index, device_slice, layer_slice)
                 T_gathering.append(tt)
                 E_gathering.append(ee)
+
+
             else: # communication step:
-                T = self.communication_solver(phase_index, self.MbatchSize)
 
-                if mode != "shared":
-                    ratio_l = self.band_str.resource_ratio_list()
-                    T = T/ratio_l[0]
-
+                T = self.communication_solver(phase_index, mode, device_slice, next_device_slice)
 
                 B_ft.append(T)
                 B_bt.append(T)

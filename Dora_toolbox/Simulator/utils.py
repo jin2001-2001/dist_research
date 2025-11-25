@@ -193,7 +193,7 @@ def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha):
     
     
     try:
-        B_ft_a, B_bt_a, B_fe_a, B_be_a, T_gathering_a, E_gathering_a, BatchAllocateList_a = Profilelor.getall(P) 
+        B_ft_a, B_bt_a, B_fe_a, B_be_a, T_gathering_a, E_gathering_a, BatchAllocateList_a = Profilelor.getall(P, mode = "shortest path") 
 
     except Exception as e:
         # Code that runs *only* if an error occurs

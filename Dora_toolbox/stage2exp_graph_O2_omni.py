@@ -278,7 +278,8 @@ def structure_generator_for_DPsolver(M, L):
     return counter, result    
 
 
-def dependency_generator_for_drawing(plan):
+def dependency_generator_for_drawing(plan):  ## the same one in profile_real,,, if we need to do modification, we need change  one as well
+
 
     L = []
 
@@ -507,7 +508,7 @@ def simulator_eval(  ndevice,
     print(score_compare)
     print([k/(E_consumption**alpha) for k in score_compare])
 
-def construct_band(name, band, ratio):
+def construct_band(name, band, lanband):
     if name == "mesh":
         structure = Bandwidth_str("mesh", band)
         ch = [1,3,2,4]
@@ -516,7 +517,7 @@ def construct_band(name, band, ratio):
         #  3             1 
         #  |             |
         #  3  --- 2 ---- 2
-        structure.LAN_resource = [band*ratio]*4
+        structure.LAN_resource = [lanband]*4
         structure.LAN_link = {(ch[0],ch[1]):[[0],[3,2,1]], (ch[0],ch[2]):[[0,1],[2,3]], (ch[0],ch[3]):[[3],[0,1,2]],
                               (ch[1],ch[2]):[[1],[0,2,3]], (ch[1],ch[3]):[[1,2],[0,3]],
                               (ch[2],ch[3]):[[2],[0,1,3]]      
@@ -536,9 +537,9 @@ if __name__ == "__main__":
     model_names = [""]*len(profilemaping)
     #model_names = ["vision", "audio", "thinker"]
     band = 450
-    lanratio = 1
+    lanband = 450
     name = "mesh"
-    band_Str = construct_band(name,band,lanratio)
+    band_Str = construct_band(name,band,lanband)
 
     alpha = 0 # 0 by default
     set_list = ["2630"]*0 +["4060"]*6+ ["4050"]*6+ ["A40"]*0 + ["Camera"]*0 + ["Samsung"]*0 + ["V100"]*0 + ["Xiaomi"]*0
