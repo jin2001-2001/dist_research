@@ -28,7 +28,10 @@ class BandwidthStack:
         self.shared_count = 0
 
 
-    def init_path_extract(self, steps_index,sd_list, plan_list, band_str, BatchAllocateList):
+    def init_path_extract(self, tindex,sd_list, plan_list, band_str, BatchAllocateList):
+
+
+        steps_index = tindex[1]
     #print(steps_index, sd_list, plan_list)
         to_index = sd_list[steps_index]
         to_device_tuple = plan_list[to_index//2]['device']
@@ -37,6 +40,10 @@ class BandwidthStack:
 
 
         _, path =  band_str.available_bw(from_device_tuple[0], to_device_tuple[0])
+
+        if tindex[0] == 'g':
+            path = [i for i in range(len(band_str.LAN_resource))]
+            to_device_tuple  = None
 
         return from_device_tuple, to_device_tuple, path
         
@@ -60,6 +67,7 @@ class BandwidthStack:
 
 
     def advance_to(self, new_time: float):
+       
         """Advance simulated time to new_time, updating all tasks with
         correct event-based bandwidth redistribution."""
         if new_time <= self.time:
@@ -90,7 +98,8 @@ class BandwidthStack:
             times_to_finish = [
                 self.remain_time(t) for t in active if t["remaining"] > eps
             ]
-            if not times_to_finish:
+            #print("advance to time and the remaining time:", new_time,remaining_dt, times_to_finish)
+            if  times_to_finish == []:
                 # All effectively done, mark and exit
                 for t in active:
                     t["active"] = False
@@ -109,14 +118,16 @@ class BandwidthStack:
                 # All active tasks progress for dt with 1/n share
                 for t in active:
                     t["remaining"] -= self.cal_progress( t, dt)
+                    #print("rest pregress", t["index"], t["remaining"])
                     if t["remaining"] <= eps:
                         # mark finished exactly at this event time
                         t["remaining"] = 0.0
                         t["active"] = False
                         t["end"] = self.time + dt
-                        self.r_counter_update(t, "sub")
                         meet_end = True
-
+                for t in active:
+                    if t["active"] == False:
+                        self.r_counter_update(t, "sub")
                 # Move time forward and reduce remaining_dt
                 self.time += dt
                 remaining_dt -= dt
@@ -137,7 +148,7 @@ class BandwidthStack:
 
         duration = end - start
 
-        ftuple, ttuple, path = self.init_path_extract(index[1],self.steps_dlist, self.plan_list, self.band_str, self.BatchAllocateList)
+        ftuple, ttuple, path = self.init_path_extract(index,self.steps_dlist, self.plan_list, self.band_str, self.BatchAllocateList)
         task = {
             "index": index, # index of the (mbatch, stage)...
             "id": self.next_id,
@@ -151,9 +162,10 @@ class BandwidthStack:
             "path": path,
             "BatchAllocateList": self.BatchAllocateList
         }
+
         self.next_id += 1
         self.lazy_stack.append(task)
-
+        #print(self.lazy_stack)
 
     def cal_progress(self, task, time):
         shared_resource_init = 1
@@ -277,7 +289,7 @@ class BandwidthStack:
         candidate = finished[0]
 
         candidate["dead"] = True
-        
+        #print(self.tasks)
         return candidate["index"], candidate["start"],candidate["end"]
 
 
@@ -297,7 +309,8 @@ def construct_processing(num_microbatches,num_stages,
                          start_percent,
                          enableshare,
                          Idependent,
-                         mode = ''
+                         mode = '',
+                         jmode = None
                          ):
     #print("with in precessing func:", num_stages, num_microbatches, Idependent)
     communication_recorder_end = 0
@@ -388,6 +401,8 @@ def construct_processing(num_microbatches,num_stages,
             for s in range(num_stages-1, -1,-1):
                 if (s, m) in bp_schedule:
                     continue
+                if jmode != "training":
+                    continue
                 if m>=0: #
                     start = 0
                     if s<num_stages-1: # there is inter-dependency
@@ -420,6 +435,8 @@ def construct_processing(num_microbatches,num_stages,
 
         #each time, we only update one communication task...
         for s in range(num_stages): # updatind the gathering shedule times:
+            if jmode != "training":
+                continue
             if gathering_times[s] == 0:
                 continue
             if s in gathering_schedule:
@@ -466,6 +483,7 @@ def construct_processing_even_channel(num_microbatches,num_stages,
                          enableshare,
                          Idependent,
                          mode = "",
+                         jmode = None,
                         plan_list = None,
                         BatchAllocateList = None,
                         band_str = None
@@ -562,6 +580,8 @@ def construct_processing_even_channel(num_microbatches,num_stages,
             for s in range(num_stages-1, -1,-1):
                 if (s, m) in bp_schedule:
                     continue
+                if jmode != "training":
+                    continue
                 if m>=0: #
                     start = 0
                     if s<num_stages-1: # there is inter-dependency
@@ -595,6 +615,8 @@ def construct_processing_even_channel(num_microbatches,num_stages,
 
         #all gathering update...
         for s in range(num_stages): # updatind the gathering shedule times:
+            if jmode != "training":
+                continue
             if gathering_times[s] == 0:
                 continue
             if s in gathering_schedule:
@@ -670,13 +692,14 @@ def pip_ploting_graph(num_stages = 5, num_microbatches = 10,
                 trivial_mode = "fifo",
                 plan_list = None,
                 BatchAllocateList = None,
-                band_str = None):
+                band_str = None,
+                jmode= "training"):
     # ----------------------
     # Parameters
     # ----------------------
 
     #print(num_stages,num_microbatches,forward_times,backward_times,gathering_times)
-    comm_delay = 0.2    
+    #comm_delay = 0.2    
     start_percent = 1-percentage
     # ----------------------
     # Schedule initialization
@@ -691,7 +714,7 @@ def pip_ploting_graph(num_stages = 5, num_microbatches = 10,
     for s in range(num_stages): 
 
         ini = []
-        if(num_stages-s>num_microbatches): #no enouch microbatches we can use...
+        if(num_stages-s>num_microbatches or jmode != "training"): #no enouch microbatches we can use...
             for i in range(num_microbatches):
                 ini.append((i,'f'))
             
@@ -744,7 +767,8 @@ def pip_ploting_graph(num_stages = 5, num_microbatches = 10,
                          start_percent,
                          enableshare,
                          Idependent,
-                         mode = trivial_mode
+                         mode = trivial_mode,
+                         jmode = jmode
                           #this is a func
                          )
     else:
@@ -756,6 +780,7 @@ def pip_ploting_graph(num_stages = 5, num_microbatches = 10,
                          enableshare,
                          Idependent,
                          mode = trivial_mode,
+                         jmode = jmode,
                         plan_list = plan_list,
                         BatchAllocateList = BatchAllocateList,
                         band_str = band_str
@@ -769,10 +794,14 @@ def pip_ploting_graph(num_stages = 5, num_microbatches = 10,
 
     max_time = 0
     try:
-        max_time = max(bp_schedule[(i, num_microbatches - 1)][1]for i in range(0,num_stages,2))
+        if  jmode == "training":
+            max_time = max(bp_schedule[(i, num_microbatches - 1)][1]for i in range(0,num_stages,2))
+        else:
+            max_time = max(fp_schedule[(i, num_microbatches - 1)][1]for i in range(0,num_stages,2))
     except:
-        print(fp_schedule,bp_schedule,gathering_schedule)
-        print("erro drawing, need further debug...")
+        if jmode == "training":
+            print(fp_schedule,bp_schedule,gathering_schedule)
+            print("erro drawing, need further debug...")
         return 0
     for s in range(num_stages): #searching for biggest time...
         if gathering_times[s] == 0:
@@ -823,7 +852,8 @@ def pip_ploting_graph(num_stages = 5, num_microbatches = 10,
         gathering_schedule = {0:(-1,0)}
     ax.set_xlim(0, max(
         max(et for (_, et) in gathering_schedule.values()),
-        max(et for (_, et) in bp_schedule.values())
+        max(et for (_, et) in bp_schedule.values()) if bp_schedule !={} else 0,
+        max(et for (_, et) in fp_schedule.values())
     ) + 2)  
 
     
@@ -855,7 +885,8 @@ def pip_ploting_graph_real(RCPSP_tasks, TaskL = None,
                         storage = "./scratch",
                         group_plan = [],
                         percentage = 0.6,
-                        ratio = 0):
+                        ratio = 0,
+                         jmode= "training"):
     fp_schedule = {}
     bp_schedule = {}
     gathering_schedule = {}
@@ -924,7 +955,7 @@ def pip_ploting_graph_real(RCPSP_tasks, TaskL = None,
     biggest_end = 0
     for i in range(fb_amount): 
         if_compute,if_first_part, nsteps, nmicrobatch, ntasks, if_back = sgg.partitioner_shift(i,s,b,a,aa)
-        if if_compute == 0:
+        if True:
             start, end = cj.RCPSP_sol_parser_shift(RCPSP_tasks,s, a,b,
                             nsteps, nmicrobatch, 
                             ntasks,
@@ -933,6 +964,10 @@ def pip_ploting_graph_real(RCPSP_tasks, TaskL = None,
                 continue
             if end>biggest_end: biggest_end = end
             comm_Independent.append([0,nsteps, nmicrobatch, ntasks,if_back, start])
+            if if_back ==0:
+                fp_schedule[(nsteps, nmicrobatch, ntasks)] = (start/ratio, end/ratio)
+            else:
+                bp_schedule[(nsteps, nmicrobatch, ntasks)] = (start/ratio, end/ratio)
     for i in range(fb_amount, total_amount):
         nsteps, ntasks = sgg.partitioner_shift(i,s,b,a,aa)
         start, end = cj.RCPSP_sol_parser_shift(RCPSP_tasks,s, a,b,
@@ -944,221 +979,10 @@ def pip_ploting_graph_real(RCPSP_tasks, TaskL = None,
             continue
         if end>biggest_end: biggest_end = end
         comm_Independent.append([1,nsteps,-1, ntasks,-1, start])
+        gathering_schedule[(nsteps,ntasks)] = (start/ratio, end/ratio)
+    #comm_Independent.sort(key=lambda x: x[-1])
+    max_time = biggest_end/ratio
 
-    comm_Independent.sort(key=lambda x: x[-1])
-    return biggest_end/ratio
-    #print(comm_Independent)
-    ##now, we want to reindex the ntasks value, so that biggest ntask is always the final one to be finished...
-    counter_dict = {}
-    for s in range(ns):
-        for j in range(2*b):
-            for ib in range(2):
-                counter_dict[(0,s,j,ib)] = 0
-    for s in range(ns):
-        counter_dict[(1,s)] = 0
-
-    for item in comm_Independent:
-        if item[0] == 0:
-            counter_dict[(0,item[1],item[2],item[4])]+=1
-            item[3] = counter_dict[(0,item[1],item[2],item[4])]
-        if item[0] == 1:
-            counter_dict[(1,item[1])]+=1
-            item[3] = counter_dict[(1,item[1])]            
-    #print(comm_Independent)
-    max_time = 0
-    comm_ava_start = 0
-#######code ready for update......        
-    while(1):  #brute force update:
-        #print(len(fp_schedule)+len(bp_schedule))
-        upi = 0 
-    
-        for m in range(b):
-            for s in range(ns):
-                ##
-                #consider if it is communication:
-                comm_available = 0
-                if s%2 == 1:
-                    if len(comm_Independent) == 0:
-                        continue
-                    (is_g,cnsteps, cnmicrobatch, cntasks, if_back,_) = comm_Independent[0]
-                    if is_g == 0 and cnsteps == s and cnmicrobatch == m and if_back == 0:
-                        comm_available = 1
-                    else:
-                        continue
-                ##over
-                ##
-
-                if comm_available == 0 and (s, m, -1) in fp_schedule:
-                    continue
-                if m== 0 and steps_plist[s]==[]: # first microbatches
-                    fp_schedule[(s, m, -1)] = (0, forward_times[s])
-                    upi = 1
-                    continue
-                if m == 0 and s!=0: # no intra-dependency
-
-                    #all precedence are finished...
-                    indicator = True
-                    for p_item in steps_plist[s]:
-                        if (p_item,m, -1) not in fp_schedule and (p_item,m, a-2) not in fp_schedule:
-                            indicator = False
-                    if indicator == False: continue
-
-                    start = 0
-
-                    for p_item in steps_plist[s]:
-                        if (p_item,m,-1) in fp_schedule or (p_item,m,a-2) in fp_schedule: # interdepence
-                            if s%2 == 1:
-                                start = max(start,
-                                            fp_schedule[(p_item, m, -1)][0]+start_percent*(fp_schedule[(p_item, m, -1)][1]-fp_schedule[(p_item, m, -1)][0])) # end time
-                                ##noticed that communication can start earlier now...
-                            else:
-                                start = max(start,
-                                            fp_schedule[(p_item, m, a-2)][1]) # end time
-                            if s%2 == 1 and comm_available == 1: ####meaning it is a commun tasks..
-                                if start < comm_ava_start:
-                                    start = comm_ava_start
-                                fp_schedule[(s, m, cntasks)] = (start, start+forward_times[s])
-                                comm_ava_start = start+forward_times[s]
-                                del comm_Independent[0]  
-                                upi = 1                        
-                            elif s%2 == 0:    
-                                fp_schedule[(s, m, -1)] = (start, start+forward_times[s])
-                                upi = 1
-
-                        else: 
-                            continue
-                if m>0: #
-                    start = 0
-                    if s>0: # there is inter-dependency
-                        indicator = True
-                        #all precedence are finished...
-                        for p_item in steps_plist[s]:
-                            if (p_item,m, -1) not in fp_schedule and (p_item,m, a-2) not in fp_schedule:
-                                indicator = False
-                        if indicator == False: continue
-                        
-                        for p_item in steps_plist[s]:
-                            if (p_item,m,-1) in fp_schedule or (p_item,m,a-2) in fp_schedule:
-                                if s%2 == 1:
-                                    k = fp_schedule[(p_item, m, -1)][0]+start_percent*(fp_schedule[(p_item, m, -1)][1]-fp_schedule[(p_item, m, -1)][0])
-                                    start = max(start, k)
-                                else:
-                                    start = max(start, fp_schedule[(p_item, m, a-2)][1])
-                            else:
-                                continue
-                    #then is intra-dependency
-
-
-                    pref = Idependent[s][cal_index(s, m, 'f') - 1]
-                    #print(pref)
-                    if pref[1] == 'f' and (s,pref[0],-1) in fp_schedule:
-                        start = max(start, fp_schedule[(s,pref[0], -1)][1])
-                    elif pref[1] == 'b' and (s,pref[0],-1) in bp_schedule:
-                        start = max(start, bp_schedule[(s,pref[0],-1)][1])
-                    else:
-                        if comm_available == 0:
-                            continue
-
-
-                    if s%2 == 1 and comm_available == 1: ####
-                        if start < comm_ava_start:
-                            start = comm_ava_start
-                        fp_schedule[(s, m, cntasks)] = (start, start+forward_times[s])
-                        comm_ava_start = start+forward_times[s]
-                        del comm_Independent[0]   
-                        upi = 1    
-                    elif s%2 == 0:
-                        fp_schedule[(s, m, -1)] = (start, start+forward_times[s])
-                        upi = 1
-        #search for backward updating...          
-        for m in range(b):
-            for s in range(ns-1, -1,-1):
-                ##
-                #consider if it is communication:
-                comm_available = 0
-                if s%2 == 1:
-                    if len(comm_Independent) == 0:
-                        continue
-                    (is_g,cnsteps, cnmicrobatch, cntasks, if_back, _) = comm_Independent[0]
-                    if is_g == 0 and cnsteps == s and cnmicrobatch == m+b and if_back == 1:
-                        comm_available = 1
-                    else:
-                        continue
-                ##over
-                ##
-
-                if comm_available == 0 and (s, m, -1) in bp_schedule:
-                    continue
-                if m>=0: #
-                    start = 0
-                    if s<ns-1: # there is inter-dependency
-                        
-                        if (steps_dlist[s],m,-1) in bp_schedule or (steps_dlist[s],m,a-2) in bp_schedule:
-                            if s%2 == 1:
-                                k = bp_schedule[(steps_dlist[s], m, -1)][0]+start_percent*(bp_schedule[(steps_dlist[s], m, -1)][1]-bp_schedule[(steps_dlist[s], m, -1)][0])
-                                start = max(start, k)
-                            else:
-                                start = max(start, bp_schedule[(steps_dlist[s], m, a-2)][1])
-                        else:
-                            continue
-                    #then is intra-dependency
-                    pref = Idependent[s][cal_index(s, m, 'b') - 1]
-                    if pref[1] == 'f' and (s,pref[0],-1) in fp_schedule:
-                        start = max(start, fp_schedule[(s,pref[0], -1)][1])
-                    elif pref[1] == 'b' and (s,pref[0],-1) in bp_schedule:
-                        start = max(start, bp_schedule[(s,pref[0], -1)][1])
-                    else:
-                        if comm_available == 0:
-                            continue
-
-                    if s%2 == 1 and comm_available == 1: 
-                        if start < comm_ava_start:
-                            start = comm_ava_start
-                        bp_schedule[(s, m, cntasks)] = (start, start+backward_times[s])
-                        comm_ava_start = start+backward_times[s]
-                        del comm_Independent[0]
-                        upi = 1   
-                    elif s%2 == 0:
-                        bp_schedule[(s, m, -1)] = (start, start+backward_times[s])
-                        upi = 1
-
-        #each time, we only update one communication task...
-        for s in range(ns): # updatind the gathering shedule times:
-            comm_available = 0
-            if gathering_times[s] == 0:
-                continue
-            if s%2 == 0: ##only computation has gathering...
-                if len(comm_Independent) == 0:
-                    continue
-                (is_g,cnsteps,_, cntasks,_, _) = comm_Independent[0]
-                if is_g == 1 and cnsteps == s:
-                    comm_available = 1
-                else:
-                    continue
-
-            if (s, b-1, -1) not in bp_schedule:
-                continue
-            start = bp_schedule[(s, b-1, -1)][1]
-            if comm_available == 1:
-                if start<comm_ava_start:
-                    start = comm_ava_start
-                gathering_schedule[(s, cntasks)] = (start, start+gathering_times[s])
-                comm_ava_start = start+gathering_times[s]
-                if len(comm_Independent) == 1:
-                    max_time = comm_ava_start
-                del comm_Independent[0]
-                upi = 1
-
-        if upi == 0: # no update happened ...
-            break   
-    
-    #print(len(bp_schedule), len(fp_schedule),len(gathering_schedule))
-    #print(bp_schedule)
-    #print(comm_Independent)
-    max_time1 = max(bp_schedule[(i, b - 1, -1)][1]for i in range(0,ns,2))
-    max_time = max(max_time1, max_time)
-
-    #print(max_time)
     if enablegraph == False:
         return max_time
 
@@ -1235,7 +1059,8 @@ def pip_ploting_graph_real(RCPSP_tasks, TaskL = None,
         
     ax.set_xlim(0, max(
         max(et for (_, et) in gathering_schedule.values()),
-        max(et for (_, et) in bp_schedule.values())
+        max(et for (_, et) in bp_schedule.values()) if bp_schedule !={} else 0,
+        max(et for (_, et) in fp_schedule.values())
     ) + 2)  
 
     ax.set_yticks([stage_y[ss] + 2.0 for ss in range(s)])

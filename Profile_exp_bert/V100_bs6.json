@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0028817244815310876,
-      "backward_time_s": 0.008168787728788247
+      "forward_time_s": 0.001435146278260218,
+      "backward_time_s": 0.004479303130925001
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.00273711303616794,
-      "backward_time_s": 0.008281735926040656
+      "forward_time_s": 0.001363127395491632,
+      "backward_time_s": 0.004541237561146766
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.002742291407426534,
-      "backward_time_s": 0.00745082864082866
+      "forward_time_s": 0.001365706309710132,
+      "backward_time_s": 0.0040856148019652655
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0026171986216165046,
-      "backward_time_s": 0.008108943942930586
+      "forward_time_s": 0.0013034080410369653,
+      "backward_time_s": 0.004446488169114458
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0026094326139904224,
-      "backward_time_s": 0.008206444358127228
+      "forward_time_s": 0.0012995404412671251,
+      "backward_time_s": 0.004499951905663478
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0026351576751967158,
-      "backward_time_s": 0.007397684145417221
+      "forward_time_s": 0.0013123519456579309,
+      "backward_time_s": 0.00405647335373679
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0025673699757830675,
-      "backward_time_s": 0.0070998928557951604
+      "forward_time_s": 0.00127859255431125,
+      "backward_time_s": 0.0038931813818735236
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0025279487286467223,
-      "backward_time_s": 0.007618640340984115
+      "forward_time_s": 0.0012589601236348642,
+      "backward_time_s": 0.004177633287310787
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0025332788749544894,
-      "backward_time_s": 0.00745321337943115
+      "forward_time_s": 0.0012616146243288758,
+      "backward_time_s": 0.004086922458308315
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.002615194776523162,
-      "backward_time_s": 0.007088910589893868
+      "forward_time_s": 0.0013024100931601464,
+      "backward_time_s": 0.003887159325765621
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0028570973043707793,
-      "backward_time_s": 0.007237111857175305
+      "forward_time_s": 0.00142288153821578,
+      "backward_time_s": 0.003968424554166808
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0026419977485584597,
-      "backward_time_s": 0.007830374266611971
+      "forward_time_s": 0.0013157584149061355,
+      "backward_time_s": 0.004293736247441027
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 8.324568090542657e-05,
-      "backward_time_s": 4.0025716855449515e-07
+      "forward_time_s": 4.1457720853724795e-05,
+      "backward_time_s": 2.1947848907407952e-07
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.007281829029321385,
-      "backward_time_s": 0.017942904849525286
+      "forward_time_s": 0.0036264708501228256,
+      "backward_time_s": 0.009838878489536941
     }
   ]
 }

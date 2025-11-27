@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0012668122089249379,
-      "backward_time_s": 0.002989222862496338
+      "forward_time_s": 0.0006308933551924011,
+      "backward_time_s": 0.0016391214671700927
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0012661122555608232,
-      "backward_time_s": 0.0027887326014845357
+      "forward_time_s": 0.0006305447668828999,
+      "backward_time_s": 0.0015291838994811655
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0012492016540978938,
-      "backward_time_s": 0.0028355747430625143
+      "forward_time_s": 0.0006221230086932446,
+      "backward_time_s": 0.0015548694918108607
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0011601407487771712,
-      "backward_time_s": 0.002827500018954088
+      "forward_time_s": 0.0005777692102546057,
+      "backward_time_s": 0.001550441767871755
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0011488361977564066,
-      "backward_time_s": 0.0025803636190255106
+      "forward_time_s": 0.0005721393575643745,
+      "backward_time_s": 0.0014149260846738243
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.001139771461121021,
-      "backward_time_s": 0.0027783937652791483
+      "forward_time_s": 0.0005676249693468131,
+      "backward_time_s": 0.0015235146639810552
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0011494643679136917,
-      "backward_time_s": 0.0025906086708448518
+      "forward_time_s": 0.0005724521966539959,
+      "backward_time_s": 0.0014205438940984882
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.001153436259675586,
-      "backward_time_s": 0.0026272018409189595
+      "forward_time_s": 0.0005744302642021838,
+      "backward_time_s": 0.001440609527669277
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.001249272779258557,
-      "backward_time_s": 0.0025540862624829903
+      "forward_time_s": 0.0006221584301952898,
+      "backward_time_s": 0.0014005170622654526
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0012270638941189128,
-      "backward_time_s": 0.0025445546715956117
+      "forward_time_s": 0.0006110980394269348,
+      "backward_time_s": 0.0013952904746343323
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.001224266344590932,
-      "backward_time_s": 0.0025910786608372674
+      "forward_time_s": 0.0006097048136626185,
+      "backward_time_s": 0.0014208016101408712
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0012602427396617999,
-      "backward_time_s": 0.002848516982575983
+      "forward_time_s": 0.0006276216512444483,
+      "backward_time_s": 0.0015619662870635465
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 4.060920682426442e-05,
-      "backward_time_s": 4.188048115747841e-07
+      "forward_time_s": 2.0224054176746878e-05,
+      "backward_time_s": 2.2964897191809678e-07
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.0034755375616120597,
-      "backward_time_s": 0.007908810709644793
+      "forward_time_s": 0.0017308749772813187,
+      "backward_time_s": 0.00433674637532296
     }
   ]
 }

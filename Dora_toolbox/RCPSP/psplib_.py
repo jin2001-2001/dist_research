@@ -13,7 +13,8 @@ class TaskStatus_prime:
                 plan_list = None,
                 BatchAllocateList = None,
                 band_str = None,
-                sd_list = None):
+                sd_list = None,
+                jmode = None):
         self.index = index
         self.s = s
         self.b = b
@@ -33,6 +34,7 @@ class TaskStatus_prime:
         self.BatchAllocateList = BatchAllocateList
         self.band_str = band_str
         self.sd_list = sd_list
+        self.jmode = jmode
         """
         Initialize the status variables based on input parameters.
         """

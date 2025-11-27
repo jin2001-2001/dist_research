@@ -52,19 +52,23 @@ def generate_profiler_samples_nolimit(n=4,hidden_size = 0, seq = 256, layers = 2
     return simprofile, band
 
 
-def generate_profiler_samples_nolimit_MM(model_names=['x','x', 'x'],n=4,hidden_size = [0]*3, seq = [0]*3, layers = [0]*3, type_list = ["cpu100"]*5,MbatchSize=4, profilehome="../../Profile", band_str = None, mem_list = [100*1024]*5,map_dict={}):
+def generate_profiler_samples_nolimit_MM(model_names=['x','x', 'x'],n=4,hidden_size = [0]*3, seq = [0]*3, layers = [0]*3, type_list = ["cpu100"]*5,MbatchSize=4, profilehome="../../Profile", band_str = None, mem_list = [100*1024]*5,map_dict={}, jmode = None):
     dList = []
     for i in range(len(type_list)):
         # type, tprofile_loc, eprofile_loc = 0, Mem = 0, Energy = 1000)
         pd_modellist = []
         for idx, model_name in enumerate(model_names):
+            if(idx>=len(layers)): continue
             real_profile_name = str(type_list[i])+str(model_name)
             #print(idx, i, layers, mem_list)
-            pd_modellist.append(Device(real_profile_name, profilehome, layers[idx], Mem = mem_list[i]))
+            omni_sim = 0
+            if len(model_names)>1:
+                omni_sim = 1
+            pd_modellist.append(Device(real_profile_name, profilehome, layers[idx], Mem = mem_list[i],Energy = 0, jmode = jmode,omni_sim=omni_sim))
             
 
         dList.append(pd_modellist)
-    simprofile = GraphProfilelor(dList,hiddenSize=hidden_size, seq=seq, total_layer= layers ,MbatchSize = MbatchSize, band_str = band_str,map_dict=map_dict)
+    simprofile = GraphProfilelor(dList,hiddenSize=hidden_size, seq=seq, total_layer= layers ,MbatchSize = MbatchSize, band_str = band_str,map_dict=map_dict, jmode = jmode)
     return simprofile, 0
 
 

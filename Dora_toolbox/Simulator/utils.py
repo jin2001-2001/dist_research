@@ -179,7 +179,7 @@ def plan_parser(P):
 
 
 
-def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha):
+def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha, jmode = "training"):
     """
     Implements Algorithm 2: Plan Estimator.
     """
@@ -190,24 +190,28 @@ def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha):
     #M = Profilelor.M  #XXXXX ERROR
     #SLO_latency = Profilelor.slo_T #XXXXXXX ERROR
 
-    
-    
+    #Profilelor.getall(P, mode = "shortest path") 
+    Profilelor.getall(P, mode = "the fastest") 
     try:
-        B_ft_a, B_bt_a, B_fe_a, B_be_a, T_gathering_a, E_gathering_a, BatchAllocateList_a = Profilelor.getall(P, mode = "shortest path") 
+        B_ft_a, B_bt_a, B_fe_a, B_be_a, T_gathering_a, E_gathering_a, BatchAllocateList_a = Profilelor.getall(P, mode = "the fastest") 
 
+    
     except Exception as e:
         # Code that runs *only* if an error occurs
         print("❌ Error caught:", e)
         print("profilelor getall: error")   
         return -len(P), []
 
-
+    if jmode != "training":
+        B_bt_a = [0]*len(B_bt_a)
+        B_be_a = [0]*len(B_be_a)
     # noticed that dependency don't count communication index, i,.e. len of dependency *2 - 1 equal to len of B_f/b
     chain_list = plan_parser(P)
 
     T_max = -1
     BatchAllocateList = BatchAllocateList_a
     #print(T_gathering_a,B_ft_a, chain_list )
+
     for per_chain in chain_list:
         ##construct the index list:
         actual_index_l = []
@@ -223,7 +227,7 @@ def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha):
         T_gathering = [T_gathering_a[i] for i in actual_index_l]
 
 
-        #print(T_gathering, B_ft, B_bt)
+        #print(per_chain, T_gathering, B_ft, B_bt)
 
         B_list = [B_ft, B_bt]
 
@@ -238,6 +242,7 @@ def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha):
         T1 = start_phase_time_est(B_ft, B_list, d)
         T2 = (M - S + d) * (B_ft[d] + B_bt[d])
         T3_list = end_phase_time_est(B_ft, B_list, d)
+        #print(T1, T2, T3_list, d,  B_list)
 
         T_latency = float('-inf')
 
@@ -258,7 +263,7 @@ def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha):
         for i in range(S)
     )
 
-    return abs(T_max-SLO)+95e-6*(E_consumption**alpha), BatchAllocateList
+    return abs(T_max-SLO)+alpha*(E_consumption), BatchAllocateList
 
 
 

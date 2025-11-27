@@ -12,97 +12,97 @@
       "index": 0,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.00553010974111977,
-      "backward_time_s": 0.020909959585309962
+      "forward_time_s": 0.0018433699137065899,
+      "backward_time_s": 0.006969986528436655
     },
     {
       "index": 1,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005370233147058644,
-      "backward_time_s": 0.019038075995550127
+      "forward_time_s": 0.0017900777156862147,
+      "backward_time_s": 0.006346025331850042
     },
     {
       "index": 2,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0053510890549652,
-      "backward_time_s": 0.018070434293094625
+      "forward_time_s": 0.0017836963516550668,
+      "backward_time_s": 0.006023478097698209
     },
     {
       "index": 3,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006578383370938444,
-      "backward_time_s": 0.018546678692383804
+      "forward_time_s": 0.0021927944569794812,
+      "backward_time_s": 0.006182226230794602
     },
     {
       "index": 4,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006545738190212807,
-      "backward_time_s": 0.022059857513064916
+      "forward_time_s": 0.0021819127300709354,
+      "backward_time_s": 0.007353285837688305
     },
     {
       "index": 5,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.0068116114952212255,
-      "backward_time_s": 0.014513337710501973
+      "forward_time_s": 0.0022705371650737416,
+      "backward_time_s": 0.004837779236833991
     },
     {
       "index": 6,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.007763655022748581,
-      "backward_time_s": 0.021556365787959685
+      "forward_time_s": 0.0025878850075828604,
+      "backward_time_s": 0.0071854552626532285
     },
     {
       "index": 7,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005327001202818927,
-      "backward_time_s": 0.020929387018907716
+      "forward_time_s": 0.001775667067606309,
+      "backward_time_s": 0.0069764623396359055
     },
     {
       "index": 8,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.005245607991293236,
-      "backward_time_s": 0.01406642227851031
+      "forward_time_s": 0.0017485359970977451,
+      "backward_time_s": 0.004688807426170104
     },
     {
       "index": 9,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.006447292776947487,
-      "backward_time_s": 0.015200257489760609
+      "forward_time_s": 0.0021490975923158287,
+      "backward_time_s": 0.00506675249658687
     },
     {
       "index": 10,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.008911026590269393,
-      "backward_time_s": 0.017298579590029423
+      "forward_time_s": 0.0029703421967564644,
+      "backward_time_s": 0.005766193196676475
     },
     {
       "index": 11,
       "param_bytes": 28351488,
       "activation_bytes_per_sample": 786432,
-      "forward_time_s": 0.008029092661883576,
-      "backward_time_s": 0.016342082874254718
+      "forward_time_s": 0.0026763642206278585,
+      "backward_time_s": 0.005447360958084906
     }
   ],
   "head&tail": [
     {
       "index": "embed",
-      "forward_time_s": 0.0009868068939494683,
-      "backward_time_s": 3.5605411807984373e-06
+      "forward_time_s": 0.0003289356313164894,
+      "backward_time_s": 1.1868470602661458e-06
     },
     {
       "index": "lm_head",
-      "forward_time_s": 0.016995695079788892,
-      "backward_time_s": 0.04651528043302122
+      "forward_time_s": 0.005665231693262964,
+      "backward_time_s": 0.015505093477673742
     }
   ]
 }

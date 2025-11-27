@@ -22,10 +22,12 @@ def RCPSP_sol_parser_shift(tasks,s, a,b, step, nmicrobatch, ntasks = -1,aa = 0,i
     else:
         i = gindexer_shift(s,a,b,step, nmicrobatch, ntasks,aa)
 
+    #print(s,a,b,step, nmicrobatch, ntasks, aa, if_gathering, i)
+
     return (tasks[i].start, tasks[i].end)
 
 
-def RCPSP_solver(pfile = "./scratch1.sm"):
+def RCPSP_solver(pfile = "./scratch1.sm", t =10):
     instance = Instance.read_instance(pfile)
     model = Model()
 
@@ -53,7 +55,7 @@ def RCPSP_solver(pfile = "./scratch1.sm"):
             model.add_end_before_start(task, tasks[succ])
 
 
-    result = model.solve(time_limit=10, display=False)
+    result = model.solve(time_limit=t, display=False)
     #print(result.best.tasks)
     #print(result.status)
     #print(result.objective/result.lower_bound)

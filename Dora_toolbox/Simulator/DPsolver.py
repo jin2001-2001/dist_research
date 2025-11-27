@@ -62,7 +62,7 @@ def dynamic_programming_planning(L, N, M, k, s, Profilelor, alpha, SLO): # layer
     return top_k_container
 
 
-def dynamic_programming_planning_MM(Structure, Layer_structure, N, M, k, s, Profilelor, alpha, SLO): # layers, devices amounts,M is microbatch amount. k, s are hyper parameters...
+def dynamic_programming_planning_MM(Structure, Layer_structure, N, M, k, s, Profilelor, alpha, SLO, jmode = "training"): # layers, devices amounts,M is microbatch amount. k, s are hyper parameters...
     #followed by Structure, the L's stucture will also change...
     """
     Implements Algorithm 1: Dynamic Programming for Planning.
@@ -168,7 +168,7 @@ def dynamic_programming_planning_MM(Structure, Layer_structure, N, M, k, s, Prof
                                         continue                                    
 
                                     plan = [add_shard]+ subplan
-                                    score, allocateplan = graph_plan_estimator((phase,branch_num),plan,M,SLO, Profilelor, alpha)
+                                    score, allocateplan = graph_plan_estimator((phase,branch_num),plan,M,SLO, Profilelor, alpha, jmode = jmode)
                                     # Update inner top-k
                                     top_s_container.update(score, plan, allocateplan)
 

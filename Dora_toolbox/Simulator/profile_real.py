@@ -47,7 +47,7 @@ class ComputProfile:
     batchFuncbackward: object
 
 class Device:
-    def __init__(self, type, tprofile_loc, actual_layers, eprofile_loc = 0, Mem = 0, Energy = 1000):
+    def __init__(self, type, tprofile_loc, actual_layers, eprofile_loc = 0, Mem = 0, Energy = 1000, jmode = None,omni_sim = None):
         self.type = type
         self.Eability = 0
         self.Mconstraint = Mem  # unit: MB
@@ -58,6 +58,8 @@ class Device:
         self.embedding_param_bytes = 0
         self.tail_param_bytes = 0
         self.total_layers = actual_layers
+        self.jmode = jmode
+        self.omni_sim =omni_sim
         #self.total_parameters_bytes = 0
 
         root = Path(tprofile_loc)
@@ -156,11 +158,15 @@ class Device:
 
 
 
-
     def Tlatency(self, layer_slice, batch_size,seq, hidden):
         layers = layer_slice[1]-layer_slice[0]
-        Tf = self.computeprofile.batchFuncforward(batch_size)*layers/self.computeprofile.layer_base       *seq*hidden/2048/256
-        Tb = self.computeprofile.batchFuncbackward(batch_size)*layers/self.computeprofile.layer_base      *seq*hidden/2048/256
+
+        ratio = 1
+        if self.omni_sim == 1:
+            ratio = seq*hidden/(2048*256)
+
+        Tf = self.computeprofile.batchFuncforward(batch_size)*layers/self.computeprofile.layer_base       *ratio
+        Tb = self.computeprofile.batchFuncbackward(batch_size)*layers/self.computeprofile.layer_base      *ratio
         if layer_slice[0] == 0:
             Tf+=self.computeprofile_h.batchFuncforward(batch_size)
             Tb+=self.computeprofile_h.batchFuncbackward(batch_size)
@@ -180,12 +186,19 @@ class Device:
 
     def maximum_batches_available(self, layer_slice, inversestage,seq,hidden): #reversely get the maximum batches that can be assigned on this devices
         layers = layer_slice[1]-layer_slice[0]
-        batch_act_storage = 6*seq*hidden*4 *layers *(inversestage*2+1)   #no batch, we need calculate batches...#4 is float32 needs 4 bytes
-        parameter_storage = self.layer_param_bytes * layers *4 #(2 for opt, 1 for gradient)
+        #batch_act_storage = 6*seq*hidden*2 *layers *(inversestage*2+1)   #no batch, we need calculate batches...#4 is fp16 needs 2 bytes
+        if self.jmode == "training":
+            batch_act_storage = 6*seq*hidden*2 *layers *(inversestage*1+1) #2 is fp16 needs 2 bytes
+        else:
+            batch_act_storage = 6*seq*hidden*2 * 1 *(1) #consider only one layer's peak...
+
+        parameter_storage = self.layer_param_bytes * layers *3 #(1 for opt, 1 for gradient)
+
+
         if layer_slice[1] == self.total_layers:
-            parameter_storage+= self.tail_param_bytes*4
+            parameter_storage+= self.tail_param_bytes*2#f16
         if layer_slice[0] == 0:
-            parameter_storage+= self.embedding_param_bytes*4
+            parameter_storage+= self.embedding_param_bytes*2#f16
 
         #print(layer_slice, (parameter_storage+batch_act_storage*8)/1024/1024/1024)
         max1 = (self.Mconstraint*1024*1024-parameter_storage)/(batch_act_storage)
@@ -374,7 +387,7 @@ class GraphProfilelor:
     """
     Maintains the k smallest (score, plan) pairs.
     """
-    def __init__(self,DList,hiddenSize, seq, total_layer, MbatchSize, band_str, map_dict):
+    def __init__(self,DList,hiddenSize, seq, total_layer, MbatchSize, band_str, map_dict, jmode):
         #self.deviceN = damount
         self.DList = DList      #per ele should be a list of Devices, and use map_dict to get the correct devices...
         self.hiddenSize = hiddenSize # the same, is a list 
@@ -383,17 +396,20 @@ class GraphProfilelor:
         self.band_str = band_str # not list 
         self.total_layers = total_layer # list...
         self.phase_mapping = map_dict
+        self.jmode = jmode
 
     def dependency_list(self, plan):   ## the same one in O2_omni,,, if we need to do modification, we need change omni on as well
 
         L = []
-
+        biggest_phase = 0
         for shard in plan:
             index = shard['phase']
             L.append(index)
             if shard !=plan[-1]:
-                L.append(index) 
-
+                L.append(index)
+            if index[0]>=biggest_phase:
+                biggest_phase = index[0]
+        #print(L)
         #L = [(0,0), (0,0), (0,1), (0,1), (1,0), (1,0)]
 
         n = len(L)
@@ -403,16 +419,23 @@ class GraphProfilelor:
         for i in range(n - 1):
             if L[i] == L[i + 1]:
                 deps[i] = i + 1
-
-        # Rule 2: last (0,*) → first (1,0)
-        first_1_idx = next(i for i, t in enumerate(L) if t == (1,0))
-        # find last index of each unique (0, y)
-        seen = set()
-        for i in range(n - 1, -1, -1):
-            if L[i][0] == 0 and L[i][1] not in seen:
-                deps[i] = first_1_idx
-                seen.add(L[i][1])
-
+        if biggest_phase == 1:
+            # Rule 2: last (0,*) → first (1,0)
+            first_1_idx = next(i for i, t in enumerate(L) if t == (1,0))
+            # find last index of each unique (0, y)
+            seen = set()
+            for i in range(n - 1, -1, -1):
+                if L[i][0] == 0 and L[i][1] not in seen:
+                    deps[i] = first_1_idx
+                    seen.add(L[i][1])
+        if biggest_phase>1:
+            for j in range(biggest_phase-1):
+                lower = 1+j
+                higher = lower +1
+                first_higher_idx= next(i for i, t in enumerate(L) if t == (higher,0))
+                deps[first_higher_idx-1] = first_higher_idx
+            
+        #print("recodrded for dp_list gen:", plan, deps, n,L)
         return(deps)
 
 
@@ -424,14 +447,16 @@ class GraphProfilelor:
         #bw = self.band_str.available_bw(device_slice_from[0], device_slice_from[-1]+1)
             bw =  self.band_str.shardband
         else: 
-            bw = self.band_str.available_bw(device_slice[0], next_device_slice[0])
-        T = self.MbatchSize*self.hiddenSize[index]*4*self.seq_len[index]/(bw)/1e6*8
+            bw, _ = self.band_str.available_bw(device_slice[0], next_device_slice[0]) 
+
+
+        T = self.MbatchSize*self.hiddenSize[index]*4*self.seq_len[index]/(bw)/1e6*8                    # consider fp16
         
         #T = self.DList[0][index].activation_bytes_per_sample * self.MbatchSize/1e6/self.bandwidth*8
         #print(T)
         return T
 
-    def gathering_solver(self,phase_index, device_slice, layer_slice): #simple version
+    def gathering_solver(self,phase_index,mode="shared", device_slice = None, layer_slice = None): #simple version
 
         index = self.phase_mapping[phase_index]
 
@@ -448,11 +473,16 @@ class GraphProfilelor:
         total_parameter_bytes = accum*(D_amount-1)/D_amount *2 #plus embedding estimiation
 
 
-        #local_lan = self.band_str.available_group_lan_bw(list(range(device_slice[0], device_slice[1])))
-        local_lan = 0
-        bb = local_lan + self.band_str.shardband
+        local_lan = self.band_str.available_group_lan_bw(list(range(device_slice[0], device_slice[1])))
+        #local_lan = 0
+        bb = self.band_str.shardband
+        if bb<=50 and mode != "shared":
+            bb = 0 ## goes into don't care shared BW mode
+        
+        if mode == "shared":
+            local_lan = 0
 
-        T = total_parameter_bytes*8/1e6/(bb/D_amount)
+        T = total_parameter_bytes*2/1e6/(bb/D_amount+local_lan)                 # consider fp16
 
         return T
 
@@ -515,6 +545,7 @@ class GraphProfilelor:
         ##redundant communication step envolved that might affect drawing...
         stepsN = 2*len(P)-1
         dp_list = self.dependency_list(P)
+        #print("what is the dp_list?:", dp_list, P)
         B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering = ([] for _ in range(6))
         BatchAllocateList = []
         for s in range(stepsN):
@@ -522,11 +553,11 @@ class GraphProfilelor:
 
             stepinfo = P[s//2]
 
-            nextstepinfo = P[dp_list[s//2]] if dp_list[s//2]  != -1 else None
 
+            
             layer_slice = stepinfo['layer']
             device_slice = stepinfo['device']
-            next_device_slice = nextstepinfo['device'] if nextstepinfo != None else None
+            
             phase_index = stepinfo['phase']
             #for each loops, use DP solver to get the answer,
             inverseStage = stepinfo['inver_internal_stage_idx']
@@ -568,13 +599,19 @@ class GraphProfilelor:
                 ###jin important: we gathering actually only involve transmission energy cost, it is little...
                 if (devices > 1):
                     #print("a DP group")
-                    tt = self.gathering_solver(phase_index, device_slice, layer_slice)
+                    tt = self.gathering_solver(phase_index, mode, device_slice, layer_slice)
                 T_gathering.append(tt)
                 E_gathering.append(ee)
 
 
             else: # communication step:
+                
+                if dp_list[s]%2 != 0:
+                    print("####################something error on communication cal#######################")
+                nextstepinfo = P[dp_list[s]//2] if dp_list[s]  != -1 else None
+                next_device_slice = nextstepinfo['device'] if nextstepinfo != None else None
 
+                #print(device_slice, next_device_slice,P, s, dp_list)
                 T = self.communication_solver(phase_index, mode, device_slice, next_device_slice)
 
                 B_ft.append(T)

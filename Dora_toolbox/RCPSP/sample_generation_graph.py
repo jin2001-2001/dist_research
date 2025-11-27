@@ -17,6 +17,18 @@ def extract_path(steps_index,sd_list, plan_list, band_str, BatchAllocateList):
 
 class TaskStatus_graph(TaskStatus_prime):
     def initialize(self):
+
+        original_UnitR = self.UnitR
+        if (self.a-2) %4 !=0:
+            print("subtask allocation error......")
+
+        if self.band_str.shardband<=50:
+            buf = self.band_str.LAN_resource[0]
+            r = buf/self.band_str.shardband
+            original_UnitR = original_UnitR*r/4
+
+
+
         if self.isgathering == False:
             self.isgathering = False
             self.if_compute, self.if_firstpart ,self.nsteps, self.nmicrobatch, self.ntasks, self.if_back = self.partitioner(self.index,self.s,self.b,self.a)
@@ -25,6 +37,14 @@ class TaskStatus_graph(TaskStatus_prime):
             ratio = ratio if self.if_compute == 1 else 1
             self.T = int(self.Tprofile[self.nsteps][self.if_back]*ratio)  # get total time span
             self.R = 0 # by default
+
+            if self.if_back == 1 and self.jmode != "training":
+                self.T = 0
+                self.R = 0
+                self.substitution = [[]]
+                return
+
+
             if self.ntasks>=0: #subTask of communication...
                 self.R = self.Rprofile[self.nsteps//2][self.if_back] #get overall resource needed 
                 if self.ntasks ==0 or self.ntasks == self.a - 1:
@@ -32,9 +52,17 @@ class TaskStatus_graph(TaskStatus_prime):
                     self.R = 0
                 else: # ok, we have the subtask
 
-                    self.T, self.R = self.suballocator(self.T, self.R, self.a-2 ,self.UnitR)
+
+
+
+
+                    self.T, self.R = self.suballocator(self.T, self.R, self.a-2 ,original_UnitR, mode = "comm")
                     self.R = math.ceil(self.R)
                     self.substitution = extract_path(self.nsteps,self.sd_list, self.plan_list, self.band_str, self.BatchAllocateList)
+
+
+
+
         else:
             #print(aa)
             self.isgathering = True
@@ -42,17 +70,39 @@ class TaskStatus_graph(TaskStatus_prime):
             #print(self.nsteps,self.ntasks)
             self.T = 0
             self.R = 0
+
+            if self.jmode != "training":
+                self.T = 0
+                self.R = 0
+                self.substitution = [[]]
+                return
+
             if self.ntasks>0 and self.ntasks<self.aa-1 and self.gatheringTprofile[self.nsteps]>0:
                 self.R = self.gatheringRprofile[self.nsteps]
                 self.T = self.gatheringTprofile[self.nsteps]
+
+                if self.band_str.shardband<=50:
+                    buf = self.band_str.LAN_resource[0]
+                    r = buf/self.band_str.shardband
+                    all_gather_R =  self.R*r
+
+
                 #print(self.R, self.T)
-                self.T, self.R = self.suballocator(self.T, self.R, self.aa-2 ,self.UnitR)
+                self.T, self.R = self.suballocator(self.T, self.R, self.aa-2 ,original_UnitR, mode = "all-g")
                 self.R = math.ceil(self.R)
+                self.substitution = [[i for i in range(len(self.band_str.LAN_resource))]]
+
+
     
 
-def suballocator_shift(T, R, a ,UnitR):
+def suballocator_shift(T, R, a ,UnitR, mode = "comm"):
+
+
+
     totalR = T*R # T should be integer
     #print(T,R,a,UnitR)
+
+
     totalunit = math.ceil(totalR /UnitR) # get necessary time unit
     pertaskunit = math.ceil(totalunit/a) # get necessart per sub task
     totalunit = pertaskunit*a
@@ -134,16 +184,16 @@ def get_rank(steps_dependent_list):
 
 
 
-def OFOB_graph_scheduler(steps, b, steps_dependent_list):
+def OFOB_graph_scheduler(steps, b, steps_dependent_list, jmode = "training"):
 
     rank_list = get_rank(steps_dependent_list)
-
+    #print(rank_list)
     #first, generate default 1F1B order schedule:
     order = []
     final_order = []
     for s in range(steps):
         ini = []
-        if(steps-s>b): #no enouch microbatches we can use...
+        if(steps-s>b or jmode !="training"): #no enouch microbatches we can use.../ or we consider inference mode...
             for i in range(b):
                 ini.append(i)
             
@@ -174,11 +224,11 @@ def OFOB_graph_scheduler(steps, b, steps_dependent_list):
     for i in range(steps):
         final_order.append(order[steps - 1 - rank_list[i]])
 
-
+    #print(final_order)
     return final_order
 
 
-def depedency_generate_graph(TaskL, s= 3, b=3, a=4, aa = 5,sd_list = [1,4,3,4,-1],indexer = None, indexerg = None, scheduler = None):
+def depedency_generate_graph(TaskL, s= 3, b=3, a=4, aa = 5,sd_list = [1,4,3,4,-1],indexer = None, indexerg = None, scheduler = None, jmode = "training"):
     total_amount = (s//2+1)*b*2*2+(s//2)*b*2*a   #one more *2 for two divided computation tasks...
     end_node_index = total_amount+s*aa
     mbatch = b*2 #microbatch
@@ -203,12 +253,13 @@ def depedency_generate_graph(TaskL, s= 3, b=3, a=4, aa = 5,sd_list = [1,4,3,4,-1
                     id2 = indexer(s,a,b,tnext,j,0)
                     TaskL[id1].add_dependency(id2)
                     TaskL[id2].add_precedence(id1)
+                    
+                    if jmode == "training":
+                        id1 = indexer(s,a,b,tnext,b+j,a-1)
+                        id2 = indexer(s,a,b,i,b+j)
 
-                    id1 = indexer(s,a,b,tnext,b+j,a-1)
-                    id2 = indexer(s,a,b,i,b+j)
-
-                    TaskL[id1].add_dependency(id2)
-                    TaskL[id2].add_precedence(id1)
+                        TaskL[id1].add_dependency(id2)
+                        TaskL[id2].add_precedence(id1)
 
             else:
                 next = sd_list[i]
@@ -223,13 +274,14 @@ def depedency_generate_graph(TaskL, s= 3, b=3, a=4, aa = 5,sd_list = [1,4,3,4,-1
 
                     TaskL[id1].add_dependency(id2)
                     TaskL[id2].add_precedence(id1)
+                    
+                    if jmode == "training":
+                        id1 = indexer(s,a,b,tnext,b+j)
+                        id2 = indexer(s,a,b,i,b+j,0)
 
-                    id1 = indexer(s,a,b,tnext,b+j)
-                    id2 = indexer(s,a,b,i,b+j,0)
 
-
-                    TaskL[id1].add_dependency(id2)
-                    TaskL[id2].add_precedence(id1)             
+                        TaskL[id1].add_dependency(id2)
+                        TaskL[id2].add_precedence(id1)             
 
 
 
@@ -258,50 +310,66 @@ def depedency_generate_graph(TaskL, s= 3, b=3, a=4, aa = 5,sd_list = [1,4,3,4,-1
     #new:so do for gathering tasks:
     for i in range(steps):
         for k in range(aa-2):
-            
-            id1 = indexerg(s,a,b,i,-1,0,aa)
-            id2 = indexerg(s,a,b,i,-1,k+1,aa)
-            TaskL[id1].add_dependency(id2)
-            TaskL[id2].add_precedence(id1)
+            if jmode == "training":
+                id1 = indexerg(s,a,b,i,-1,0,aa)
+                id2 = indexerg(s,a,b,i,-1,k+1,aa)
+                TaskL[id1].add_dependency(id2)
+                TaskL[id2].add_precedence(id1)
 
-            id1 = indexerg(s,a,b,i,-1,k+1,aa)
-            id2 = indexerg(s,a,b,i,-1,aa-1,aa)
-            TaskL[id1].add_dependency(id2)
-            TaskL[id2].add_precedence(id1)
+                id1 = indexerg(s,a,b,i,-1,k+1,aa)
+                id2 = indexerg(s,a,b,i,-1,aa-1,aa)
+                TaskL[id1].add_dependency(id2)
+                TaskL[id2].add_precedence(id1)
 
 
     #append intra steps and intra phase's dependency...
-    order = scheduler(steps, b, sd_list)
+    order = scheduler(steps, b, sd_list, jmode = jmode)
     #print(order)
     #append over scratch Dep
-    for i in range(steps):
-        for j in range(2*b-1):
-            if i%2 == 0: # means it is computation task
-                id1 = indexer(s,a,b,i,order[i][j]) + 1 #2nd computation blk
-                id2 = indexer(s,a,b,i,order[i][j+1])
-                TaskL[id1].add_dependency(id2)
-                TaskL[id2].add_precedence(id1)
-            else: #means it is communication task, we add dep btn sub small task...
-                id1 = indexer(s,a,b,i,order[i][j],a-1)
-                id2 = indexer(s,a,b,i,order[i][j+1],0)
-                TaskL[id1].add_dependency(id2)
-                TaskL[id2].add_precedence(id1)
-            #Dep.append(((i,order[i][j],amount-1),(i,order[i][j+1],0)))
+    if jmode == "training":
+        for i in range(steps):
+            for j in range(2*b-1):
+                if i%2 == 0: # means it is computation task
+                    id1 = indexer(s,a,b,i,order[i][j]) + 1 #2nd computation blk
+                    id2 = indexer(s,a,b,i,order[i][j+1])
+                    TaskL[id1].add_dependency(id2)
+                    TaskL[id2].add_precedence(id1)
+                else: #means it is communication task, we add dep btn sub small task...
+                    id1 = indexer(s,a,b,i,order[i][j],a-1)
+                    id2 = indexer(s,a,b,i,order[i][j+1],0)
+                    TaskL[id1].add_dependency(id2)
+                    TaskL[id2].add_precedence(id1)
+                #Dep.append(((i,order[i][j],amount-1),(i,order[i][j+1],0)))
+    else:
+        for i in range(steps):
+            for j in range(b-1):
+                if i%2 == 0: # means it is computation task
+                    id1 = indexer(s,a,b,i,order[i][j]) + 1 #2nd computation blk
+                    id2 = indexer(s,a,b,i,order[i][j+1])
+                    TaskL[id1].add_dependency(id2)
+                    TaskL[id2].add_precedence(id1)
+                else: #means it is communication task, we add dep btn sub small task...
+                    id1 = indexer(s,a,b,i,order[i][j],a-1)
+                    id2 = indexer(s,a,b,i,order[i][j+1],0)
+                    TaskL[id1].add_dependency(id2)
+                    TaskL[id2].add_precedence(id1)
+
 
     #append for gathering tasks:
     for i in range(steps):
-        id2 = indexerg(s,a,b,i,-1,0,aa)
-        if i%2 == 0:
-            id1 = indexer(s,a,b,i,mbatch-1) + 1 # 2nd computation blk
-            TaskL[id1].add_dependency(id2)
-            TaskL[id2].add_precedence(id1)
-        else:
-            id1 = indexer(s,a,b,i,mbatch-1,a-1)
-            TaskL[id1].add_dependency(id2)
-            TaskL[id2].add_precedence(id1)
+        if jmode == "training":
+            id2 = indexerg(s,a,b,i,-1,0,aa)
+            if i%2 == 0:
+                id1 = indexer(s,a,b,i,mbatch-1) + 1 # 2nd computation blk
+                TaskL[id1].add_dependency(id2)
+                TaskL[id2].add_precedence(id1)
+            else:
+                id1 = indexer(s,a,b,i,mbatch-1,a-1)
+                TaskL[id1].add_dependency(id2)
+                TaskL[id2].add_precedence(id1)
 
-        #add to a final dummy nodes...
-        TaskL[indexerg(s,a,b,i,-1,aa-1,aa)].add_dependency(end_node_index)
+            #add to a final dummy nodes...
+            TaskL[indexerg(s,a,b,i,-1,aa-1,aa)].add_dependency(end_node_index)
 
 
 
@@ -315,7 +383,8 @@ def generatesm_graph(pfile = "scratch_graph.sm",s= 5, b=3, a=3,
                 BatchAllocateList = None,
                 band_str = None,
                 indexer = indexer_shift, indexerg = gindexer_shift,
-                d_generate = depedency_generate_graph, scheduler = OFOB_graph_scheduler):
+                d_generate = depedency_generate_graph, scheduler = OFOB_graph_scheduler,
+                jmode = "training"):
     total_LAN_resource = len(band_str.LAN_resource)
     total_amount = (s//2+1)*b*2*2+(s//2)*b*2*a   #one more *2 for two divided computation tasks...
     end_node_index = total_amount+s*aa
@@ -330,7 +399,8 @@ def generatesm_graph(pfile = "scratch_graph.sm",s= 5, b=3, a=3,
                                     plan_list = plan_list,
                                     BatchAllocateList = BatchAllocateList,
                                     band_str = band_str,
-                                    sd_list = sd_list
+                                    sd_list = sd_list,
+                                    jmode = jmode
                                     )
         ptr.initialize()
         TaskL.append(ptr)
@@ -343,6 +413,8 @@ def generatesm_graph(pfile = "scratch_graph.sm",s= 5, b=3, a=3,
                                 gatheringTprofile = gatheringTprofile, 
                                 gatheringRprofile = gatheringRprofile,
                                 method1=partitioner_shift,method2=suballocator_shift,
+                                band_str=band_str,
+                                jmode = jmode
                                 )
         ptr.initialize()
         TaskL.append(ptr)
@@ -351,7 +423,7 @@ def generatesm_graph(pfile = "scratch_graph.sm",s= 5, b=3, a=3,
     amount = a  #smaller tasks
     steps = s
     Dep = []
-    d_generate(TaskL, s, b, a, aa,sd_list ,indexer, indexerg, scheduler = scheduler)
+    d_generate(TaskL, s, b, a, aa,sd_list ,indexer, indexerg, scheduler = scheduler, jmode = jmode)
     file_name = pfile
     with open(file_name, "w") as file:
         #step 0: total numbers:
@@ -401,7 +473,12 @@ def generatesm_graph(pfile = "scratch_graph.sm",s= 5, b=3, a=3,
             #if if_comput == 0:
             #    cost = RProfile[step_counter//2]
             cost = TaskL[t].R
-            strline= strline+str(cost)+" " + "0 "*total_LAN_resource
+
+            #if we meet too small shared bandw, we should forbit it...(which means it is sharedband forbidden mode)
+            shared_cost = cost
+            if band_str.shardband <=50 and shared_cost!=0:
+                shared_cost = UnitR*10  ##always overflow the shared bw channel,,, so cannot use shared bw
+            strline= strline+str(shared_cost)+" " + "0 "*total_LAN_resource
             file.write(strline + "\n")
             
             
@@ -421,6 +498,7 @@ def generatesm_graph(pfile = "scratch_graph.sm",s= 5, b=3, a=3,
                     strline= strline+str(T)+" "*5
                     strline= strline+"0"+" " + pure
                     file.write(strline + "\n")
+
 
 
 
