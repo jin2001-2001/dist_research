@@ -16,13 +16,19 @@ def main():
     # enumerate all inputs, add suffix
     # for final test, we use above dictionary for mem searching...:
     mem_dict = {
+        "SamsungINT8": 12*2,
         "Samsung": 12*2,
         "Xiaomi": 12*2,
+        "XiaomiINT8": 12*2,
         "2630": 32*2,
         "4050":12*2,
+        "4050INT8":12*2,
         "4060":12*2,
+        "4060INT8":12*2,
         "V100": 32*2,
+        "V100INT8": 32*2,
         "A40": 48*2,
+        "A40INT8": 48*2,
         "Camera": 16*2,
         "CameraINT8": 16*2
     }

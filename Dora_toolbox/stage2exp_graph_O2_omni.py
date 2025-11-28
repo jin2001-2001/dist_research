@@ -176,7 +176,7 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
 
     #call RCPSP solver:
     start_T = time.time()
-    model, result = cj.RCPSP_solver("./scratch/scratchtest_graph.mm", t = 20)
+    model, result = cj.RCPSP_solver("./scratch/scratchtest_graph.mm", t = 25)
     #cj.RCPSP_plot(model, result)
     time_cost = time.time()-start_T
     #print("successfully get RCPSP results...")
@@ -450,7 +450,7 @@ def dora_best_MM(
 
         B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList = simprofile.getall(plan_list[j])
         #print("examine the solutions...")
-        #print(B_ft, B_bt)
+        #print(B_ft, B_bt,T_gathering)
         res = utils.graph_plan_estimator(0 ,plan_list[j], nmbatch, 0, simprofile, alpha, jmode)
         ##Actually, the UnitR's value doesn't matter...
 
@@ -541,8 +541,13 @@ def simulator_eval(
     #print(B_ft, B_bt)
     ##Actually, the UnitR's value doesn't matter...
     UnitR = 10000
-    subtasksfb = mbatchsize*2+2    
-    subtasksg = mbatchsize*2*4+2
+
+
+    bestam = mbatchsize*2 if mbatchsize<=6 else mbatchsize
+    subtasksfb = bestam+2    
+    subtasksg = bestam*4+2
+
+
     percentage = 0
     rprofile = [(UnitR, UnitR) for i in range(int((len(B_ft)-1)/2))]
     grprofile = [UnitR if x != 0 else 0 for x in T_gathering]
@@ -603,14 +608,26 @@ if __name__ == "__main__":
     mbatchsize = 4
     choice0= ["home1", "home2", "traffic", "station"]
     choice1= ["bert", "0.6", "1.7", "omni"]
-    device_setting = choice0[0]
-    model_setting = choice1[0]
+    device_setting = choice0[3]
+    model_setting = choice1[3]
 
     plan1 = [{'phase': (0, 0), 'layer': (0, 32), 'device': (1, 2), 'inver_internal_stage_idx': 0},
             {'phase': (0, 1), 'layer': (0, 32), 'device': (2, 3), 'inver_internal_stage_idx': 0}, 
-            {'phase': (1, 0), 'layer': (0, 36), 'device': (3, 4), 'inver_internal_stage_idx': 0}]
+            {'phase': (1, 0), 'layer': (0, 36), 'device': (3, 4), 'inver_internal_stage_idx': 0}]  # for omni...
 
-
+    plan1 = [{'phase': (0, 0), 'layer': (0, 1), 'device': (0, 1), 'inver_internal_stage_idx': 4},
+             {'phase': (0, 0), 'layer': (1, 2), 'device': (1, 2), 'inver_internal_stage_idx': 3},
+             {'phase': (0, 0), 'layer': (2,8), 'device': (2, 3), 'inver_internal_stage_idx': 2},
+             {'phase': (0, 0), 'layer': (8, 18), 'device': (3, 4), 'inver_internal_stage_idx': 1},
+             {'phase': (0, 0), 'layer': (18, 28), 'device': (4, 5), 'inver_internal_stage_idx': 0}]  #for 5 steps
+    '''
+    plan1 = [{'phase': (0, 0), 'layer': (0, 8), 'device': (0, 1), 'inver_internal_stage_idx': 4},
+             {'phase': (0, 0), 'layer': (8, 16), 'device': (1, 2), 'inver_internal_stage_idx': 3},
+             {'phase': (0, 0), 'layer': (16, 20), 'device': (2, 3), 'inver_internal_stage_idx': 2},
+             {'phase': (0, 0), 'layer': (20, 28), 'device': (3, 4), 'inver_internal_stage_idx': 1}]  #for 4 steps
+    '''
+    plan1 = [{'phase': (0, 0), 'layer': (0, 22), 'device': (0, 2), 'inver_internal_stage_idx': 1},
+             {'phase': (0, 0), 'layer': (22, 28), 'device': (2, 4), 'inver_internal_stage_idx': 0}]        
     if model_setting == "omni":
         nmbatch = 5
         mbatchsize = 4
@@ -632,19 +649,19 @@ if __name__ == "__main__":
         profilehome="../Profile_exp_0.6"
         profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
         #profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
-        model_names = [""]*(len(profilemaping)+1)
+        model_names = [""]*(len(profilemaping))
         #model_names = ["vision", "audio", "thinker"]
 
     if model_setting == "1.7":
-        nmbatch = 9
-        mbatchsize = 8
+        nmbatch = 9   #9
+        mbatchsize = 8  #8
         layers = [28]  ## should be a list 
         hidden_size = [2048] ## should be a list 
         seq = [512] ## should be a list
         profilehome="../Profile_exp_1.7"
         profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
         #profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
-        model_names = [""]*(len(profilemaping)+1)
+        model_names = [""]*(len(profilemaping))
         #model_names = ["vision", "audio", "thinker"]
 
     if model_setting == "bert":
@@ -656,7 +673,7 @@ if __name__ == "__main__":
         profilehome="../Profile_exp_bert"
         profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
         #profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
-        model_names = [""]*(len(profilemaping)+1)
+        model_names = [""]*(len(profilemaping))
         #model_names = ["vision", "audio", "thinker"]
 
     band = 250
@@ -670,7 +687,7 @@ if __name__ == "__main__":
     alpha = 0 # 0 by default
     if device_setting == "home1":
         ndevice = 5
-        band = 750
+        band = 1000
         lanband = 0
         name = "mesh4"
         band_Str = construct_band(name,band,lanband)
@@ -683,7 +700,7 @@ if __name__ == "__main__":
 
     if device_setting == "home2":
         ndevice = 5
-        band = 450
+        band = 600
         lanband = 0
         name = "mesh4"
         band_Str = construct_band(name,band,lanband)
@@ -729,7 +746,9 @@ if __name__ == "__main__":
 
 
 
+
     if 1==1:
+        print(set_list)
         dora_best_MM(
                 profilemaping, 
                 model_names,
@@ -744,7 +763,7 @@ if __name__ == "__main__":
                 set_list, 
                 mem_list,ks=4, ss = 4,
                 alpha=alpha,
-                jmode = "inference")
+                jmode = "training")
     
     if 1==0:    
         simulator_eval(
@@ -762,5 +781,5 @@ if __name__ == "__main__":
                 test_dlist,
                 mem_tlist,ks = 5, ss = 4,
                 alpha=alpha,
-                jmode = "inference")
+                jmode = "training")
     

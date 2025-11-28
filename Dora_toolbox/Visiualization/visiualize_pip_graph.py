@@ -697,7 +697,7 @@ def pip_ploting_graph(num_stages = 5, num_microbatches = 10,
     # ----------------------
     # Parameters
     # ----------------------
-
+    
     #print(num_stages,num_microbatches,forward_times,backward_times,gathering_times)
     #comm_delay = 0.2    
     start_percent = 1-percentage
@@ -810,7 +810,8 @@ def pip_ploting_graph(num_stages = 5, num_microbatches = 10,
             continue
         if(gathering_schedule[s][1]>max_time):
             max_time = gathering_schedule[s][1]
-    
+    #print("drawing...")
+    #print(gathering_schedule)
         
     if enablegraph == False:
         return max_time

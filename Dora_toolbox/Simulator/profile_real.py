@@ -63,6 +63,7 @@ class Device:
         #self.total_parameters_bytes = 0
 
         root = Path(tprofile_loc)
+        self.root = tprofile_loc
         batch = 1
         total_profile_layers = 0
         path = root / f"{type}_bs{batch}.json"
@@ -186,19 +187,24 @@ class Device:
 
     def maximum_batches_available(self, layer_slice, inversestage,seq,hidden): #reversely get the maximum batches that can be assigned on this devices
         layers = layer_slice[1]-layer_slice[0]
+        per_b_s = 2
+        if "bert" in str(self.root):
+            per_b_s = 4
+
+
         #batch_act_storage = 6*seq*hidden*2 *layers *(inversestage*2+1)   #no batch, we need calculate batches...#4 is fp16 needs 2 bytes
         if self.jmode == "training":
-            batch_act_storage = 6*seq*hidden*2 *layers *(inversestage*1+1) #2 is fp16 needs 2 bytes
+            batch_act_storage = 6*seq*hidden*per_b_s *layers *(inversestage*1+1) #2 is fp16 needs 2 bytes
         else:
-            batch_act_storage = 6*seq*hidden*2 * 1 *(1) #consider only one layer's peak...
+            batch_act_storage = 6*seq*hidden*per_b_s * 1 *(1) #consider only one layer's peak...
 
         parameter_storage = self.layer_param_bytes * layers *3 #(1 for opt, 1 for gradient)
 
 
         if layer_slice[1] == self.total_layers:
-            parameter_storage+= self.tail_param_bytes*2#f16
+            parameter_storage+= self.tail_param_bytes*per_b_s#f16
         if layer_slice[0] == 0:
-            parameter_storage+= self.embedding_param_bytes*2#f16
+            parameter_storage+= self.embedding_param_bytes*per_b_s#f16
 
         #print(layer_slice, (parameter_storage+batch_act_storage*8)/1024/1024/1024)
         max1 = (self.Mconstraint*1024*1024-parameter_storage)/(batch_act_storage)
@@ -450,8 +456,14 @@ class GraphProfilelor:
             bw, _ = self.band_str.available_bw(device_slice[0], next_device_slice[0]) 
 
 
-        T = self.MbatchSize*self.hiddenSize[index]*4*self.seq_len[index]/(bw)/1e6*8                    # consider fp16
-        
+        per_b_s = 4
+        if "bert" in str(self.DList[0][0].root):
+            per_b_s = 4
+
+        T = self.MbatchSize*self.hiddenSize[index]*per_b_s*self.seq_len[index]/(bw)/1e6*8                    # consider fp16
+    
+
+
         #T = self.DList[0][index].activation_bytes_per_sample * self.MbatchSize/1e6/self.bandwidth*8
         #print(T)
         return T
@@ -482,7 +494,13 @@ class GraphProfilelor:
         if mode == "shared":
             local_lan = 0
 
-        T = total_parameter_bytes*2/1e6/(bb/D_amount+local_lan)                 # consider fp16
+        #print(bb, D_amount)
+
+        per_b_s = 2
+        if "bert" in str(self.DList[0][0].root):
+            per_b_s = 4
+
+        T = total_parameter_bytes*per_b_s/1e6/(bb/D_amount+local_lan)                 # consider fp16
 
         return T
 
@@ -497,6 +515,7 @@ class GraphProfilelor:
 
         #print(device_slice,layer_slice)
         layers = layer_slice[1]-layer_slice[0]
+        #print(len(self.DList[0]), index, self.DList[4][0], device_slice)
         c_list = [1/self.DList[i][index].computeprofile.forward for i in range(device_slice[0],device_slice[1])]
         #notice here, we need to take the rest stage into calculation...
         b_list = [int(self.DList[i][index].maximum_batches_available(layer_slice, inverseStage + rest_stage,self.seq_len[index],self.hiddenSize[index])) for i in range(device_slice[0],device_slice[1])] #memeory bound but tranfer to upperbound of batches
@@ -600,6 +619,7 @@ class GraphProfilelor:
                 if (devices > 1):
                     #print("a DP group")
                     tt = self.gathering_solver(phase_index, mode, device_slice, layer_slice)
+                    #print(tt)
                 T_gathering.append(tt)
                 E_gathering.append(ee)
 

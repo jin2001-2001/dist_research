@@ -113,7 +113,6 @@ class InterStagePlanGenerator:
                                                                   group_shapes=self.group_shapes,
                                                                   variance=variance,
                                                                   max_permute_len=max_permute_len)
-
         self.curr = InterStagePlan(ns_idx=0, node_sequence=list(self.node_sequences[0]), dg_idx=0,
                                    device_groups=self.device_groups[0], num_stage=1, batches=gbs+1, gbs=gbs)
 

@@ -61,6 +61,11 @@ class DeviceType(Enum):
     A40 = "A40"
     G4060 = "4060"
     G4050 = "4050"
+    SamsungINT8 = "SamsungINT8"
+    XiaomiINT8 = "XiaomiINT8"
+    A40INT8 = "A40INT8"
+    G4060INT8 = "4060INT8"
+    G4050INT8 = "4050INT8"
     Camera = "Camera"
     CameraINT8 = "CameraINT8"
     
