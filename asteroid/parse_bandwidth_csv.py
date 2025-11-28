@@ -62,7 +62,7 @@ def main():
 
     #print(host_name)
     for pair in list(itertools.permutations(host_name, 2)):
-        bm[pair] = args.mbps * 1e6 /8.0
+        bm[pair] = float(args.mbps) * 1e6 /8.0
 
     #with open(args.csv, newline="") as f:
     #    for row in csv.reader(f):

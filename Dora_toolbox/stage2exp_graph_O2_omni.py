@@ -603,8 +603,12 @@ if __name__ == "__main__":
     mbatchsize = 4
     choice0= ["home1", "home2", "traffic", "station"]
     choice1= ["bert", "0.6", "1.7", "omni"]
-    device_setting = choice0[3]
-    model_setting = choice1[3]
+    device_setting = choice0[0]
+    model_setting = choice1[0]
+
+    plan1 = [{'phase': (0, 0), 'layer': (0, 32), 'device': (1, 2), 'inver_internal_stage_idx': 0},
+            {'phase': (0, 1), 'layer': (0, 32), 'device': (2, 3), 'inver_internal_stage_idx': 0}, 
+            {'phase': (1, 0), 'layer': (0, 36), 'device': (3, 4), 'inver_internal_stage_idx': 0}]
 
 
     if model_setting == "omni":
@@ -670,8 +674,10 @@ if __name__ == "__main__":
         lanband = 0
         name = "mesh4"
         band_Str = construct_band(name,band,lanband)
-
-        set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*0 + ["Xiaomi"]*0  + ["Samsung"]*0+["4050"]*2+ ["4060"]*3
+        if model_setting == "omni":
+            set_list =  ["4050INT8"]*2+ ["4060INT8"]*3
+        else:
+            set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*0 + ["Xiaomi"]*0  + ["Samsung"]*0+["4050"]*2+ ["4060"]*3
         mem_list = [32*2]*0   + [48*2]*0+    [32*2]*0+     [16*2]*0+            [12*2]*0+  [12*2]*0+   [12*2]*2+    [12*2]*3 #12+24 =36
         mem_list = [x*1024 for x in mem_list]
 
@@ -681,8 +687,10 @@ if __name__ == "__main__":
         lanband = 0
         name = "mesh4"
         band_Str = construct_band(name,band,lanband)
-
-        set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*0 + ["Xiaomi"]*2  + ["Samsung"]*1+["4060"]*0+ ["4050"]*2
+        if model_setting == "omni":
+            set_list =  ["XiaomiINT8"]*2  + ["SamsungINT8"]*1+ ["4050INT8"]*2
+        else:
+            set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*0 + ["Xiaomi"]*2  + ["Samsung"]*1+["4060"]*0+ ["4050"]*2
         mem_list = [32*2]*0   + [48*2]*0+    [32*2]*0+     [16*2]*0+            [12*2]*2+  [12*2]*1+   [12*2]*0+    [12*2]*2
         mem_list = [x*1024 for x in mem_list]
 
@@ -692,8 +700,10 @@ if __name__ == "__main__":
         lanband = 50 ##actual situation is *2(as INT8 model)
         name = "mesh4"
         band_Str = construct_band(name,band,lanband)
-
-        set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*4 + ["Xiaomi"]*0  + ["Samsung"]*0+["4060"]*0+ ["4050"]*0
+        if model_setting == "omni":
+            set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*4 + ["Xiaomi"]*0  + ["Samsung"]*0+["4060"]*0+ ["4050"]*0
+        else:
+            set_list = ["Camera"]*4
         mem_list = [32*2]*0   + [48*2]*0+    [32*2]*0+     [16*2]*4+            [12*2]*0+  [12*2]*0+   [12*2]*0+    [8*2]*0
         mem_list = [x*1024 for x in mem_list]
 
@@ -704,7 +714,10 @@ if __name__ == "__main__":
         name = "mesh4"
         band_Str = construct_band(name,band,lanband)
 
-        set_list = ["2630"]*0 + ["A40"]*2+ ["V100"]*2  + ["CameraINT8"]*0 + ["Xiaomi"]*0  + ["Samsung"]*0+["4060"]*0+ ["4050"]*0
+        if model_setting == "omni":
+            set_list = ["A40INT8"]*2+ ["V100INT8"]*2
+        else:
+            set_list = ["2630"]*0 + ["A40"]*2+ ["V100"]*2  + ["CameraINT8"]*0 + ["Xiaomi"]*0  + ["Samsung"]*0+["4060"]*0+ ["4050"]*0
         mem_list = [32*2]*0   + [48*2]*2+    [32*2]*2+     [16*2]*0+            [12*2]*0+  [12*2]*0+   [12*2]*0+    [8*2]*0
         mem_list = [x*1024 for x in mem_list]
 
@@ -714,9 +727,6 @@ if __name__ == "__main__":
     mem_tlist = mem_list
     mem_tlist = [x*1024 for x in mem_tlist]
 
-    plan1 = [{'phase': (0, 0), 'layer': (0, 32), 'device': (1, 2), 'inver_internal_stage_idx': 0},
-            {'phase': (0, 1), 'layer': (0, 32), 'device': (2, 3), 'inver_internal_stage_idx': 0}, 
-            {'phase': (1, 0), 'layer': (0, 36), 'device': (3, 4), 'inver_internal_stage_idx': 0}]
 
 
     if 1==1:
@@ -734,7 +744,7 @@ if __name__ == "__main__":
                 set_list, 
                 mem_list,ks=4, ss = 4,
                 alpha=alpha,
-                jmode = "training")
+                jmode = "inference")
     
     if 1==0:    
         simulator_eval(

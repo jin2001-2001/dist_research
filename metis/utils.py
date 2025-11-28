@@ -62,6 +62,7 @@ class DeviceType(Enum):
     G4060 = "4060"
     G4050 = "4050"
     Camera = "Camera"
+    CameraINT8 = "CameraINT8"
     
 
     @staticmethod

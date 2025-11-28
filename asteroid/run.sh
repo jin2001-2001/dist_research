@@ -1,33 +1,57 @@
 #!/bin/bash
 
+# ========================================================
 # Usage:
-#   ./run_aggregate.sh CPU100_bs5 CPU70_bs4 ...
+#   ./run.sh <mbps> <#mbatch> <name1> <name2> ...
+#
+# Example:
+#   ./run.sh 500 6 A6000_bs8 4090_bs4 Pi5_bs1
+#
+# This will pass:
+#   --mbps 500   → to parse_bandwidth_csv.py
+#   --nbatch 6   → to plan_from_measured.py
+# ========================================================
 
-if [ $# -eq 0 ]; then
-  echo "Usage: $0 <#mbatch> <name1> <name2> ..."
+if [ $# -lt 3 ]; then
+  echo "Usage: $0 <mbps> <#mbatch> <name1> <name2> ..."
   exit 1
 fi
 
+# First argument = MBPS bandwidth
+MBPS=$1
+shift
 
+# Second argument = NBATCH (microbatch count)
 NBATCH=$1
-shift 
+shift
 
+# Remaining args = device profile names
 inputs=""
 pureinputs=""
 for f in "$@"; do
   pureinputs="$pureinputs ${f}"
-  inputs="$inputs ../Profile_exp_bert/${f}.json"
+  inputs="$inputs ../Profile_exp_1.7/${f}.json"
 done
 
-LAST_INPUT=${!#}   # the last argument, e.g., CPU100_bs6
-lastinput="../Profile_exp_bert/${LAST_INPUT}.json"
+# Last device is used as layer profile
+LAST_INPUT=${!#}
+lastinput="../Profile_exp_1.7/${LAST_INPUT}.json"
 
-echo "inputs = $inputs"
-echo "last input = $lastinput"
+echo "=== Arguments ==="
+echo "MBPS (bandwidth): $MBPS"
+echo "NBATCH:           $NBATCH"
+echo "inputs:           $inputs"
+echo "last input:       $lastinput"
+echo "pureinputs:       $pureinputs"
+echo "==================="
 
-echo "Running:..."
+echo "Running..."
+
 python3 aggregate_capacities.py --inputs $inputs
-python3 parse_bandwidth_csv.py --inputs $inputs
+
+# Pass MBPS to parse_bandwidth_csv.py
+python3 parse_bandwidth_csv.py --inputs $inputs --mbps $MBPS
+
 python3 aggregate_mem_profile.py --inputs $pureinputs
 
 python3 plan_from_measured.py \

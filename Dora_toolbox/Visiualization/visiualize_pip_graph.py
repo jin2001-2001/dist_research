@@ -804,6 +804,8 @@ def pip_ploting_graph(num_stages = 5, num_microbatches = 10,
             print("erro drawing, need further debug...")
         return 0
     for s in range(num_stages): #searching for biggest time...
+        if jmode != "training":
+            continue
         if gathering_times[s] == 0:
             continue
         if(gathering_schedule[s][1]>max_time):

@@ -1,26 +1,26 @@
 {
   "IP0": {
-    "instance_type": "G4050",
+    "instance_type": "A40",
     "inter_bandwidth": 312500000.0,
     "intra_bandwidth": 5312500000.0,
-    "memory": 16
+    "memory": 48
   },
   "IP1": {
-    "instance_type": "G4060",
+    "instance_type": "A40",
     "inter_bandwidth": 100.0,
     "intra_bandwidth": 5312500000.0,
-    "memory": 24
+    "memory": 48
   },
   "IP2": {
-    "instance_type": "Samsung",
+    "instance_type": "V100",
     "inter_bandwidth": 100.0,
     "intra_bandwidth": 5312500000.0,
-    "memory": 24
+    "memory": 48
   },
   "IP3": {
-    "instance_type": "Xiaomi",
+    "instance_type": "V100",
     "inter_bandwidth": 100.0,
     "intra_bandwidth": 5312500000.0,
-    "memory": 24
+    "memory": 48
   }
 }
