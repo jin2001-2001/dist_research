@@ -5,7 +5,7 @@ import numpy as np
 values = [297, 25.6, 24.08, 545, 64.62, 43.53]
 # Grouping: Group 1 -> bars 1&2; Group 2 -> bars 3,4,5
 group_indices = [[0, 1, 2], [3, 4, 5]]
-group_names = ["Cloud Network Setup", "Edge Network Setup"]
+group_names = ["Qwen-0.6", "Qwen-1.7"]
 
 # Colors (close shades) and legend mapping:
 
@@ -18,8 +18,8 @@ color_map = {
 }
 colors = [color_map["cat1"], color_map["cat2"], color_map["cat3"],
           color_map["cat1"], color_map["cat2"], color_map["cat3"]]
-legend_items = [("Metis", color_map["cat1"]),
-                ("Astroid", color_map["cat2"]),
+legend_items = [("D2D", color_map["cat1"]),
+                ("Shared", color_map["cat2"]),
                 ("Oracle",      color_map["cat3"])]
 
 # Bar layout within groups
@@ -33,7 +33,7 @@ for gi, idxs in enumerate(group_indices):
     offsets = np.linspace(-(n-1)*(width+gap)/2, (n-1)*(width+gap)/2, n)
     positions.extend(group_centers[gi] + offsets)
 
-fig, ax = plt.subplots(figsize=(8,5))
+fig, ax = plt.subplots(figsize=(8,2))
 
 bars = ax.bar(positions, values, width=width,
               color=colors, edgecolor="black", linewidth=0.6)

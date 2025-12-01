@@ -120,7 +120,7 @@ def plot_panel(ax, values_4x3, title=None):
 # ----------------------------
 # 2) Draw the 4 panels
 # ----------------------------
-fig, axes = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
+fig, axes = plt.subplots(1, 4, figsize=(10, 7), constrained_layout=True)
 axes = axes.flatten()
 
 panel_titles = ["Smart home 1", "Smart home 2", "Traffic monitor", "Edge cluster"]

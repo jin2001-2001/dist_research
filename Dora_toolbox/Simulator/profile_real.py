@@ -3,6 +3,30 @@ import json
 from pathlib import Path
 from dataclasses import dataclass
 import numpy as np
+
+Profile_Energy_checklist ={
+    "9600x":8,                          #65W
+    "4050":8*1.53, "4050INT8":8*1.53,             #100W
+    "4060":8*1.76, "4060INT8":8*1.76,             #115W
+    "Xiaomi":8*0.14, "XiaomiINT8":8*0.14,         #9.3W
+    "Samsung":8*0.136, "SamsungINT8":8*0.136,                 #8.9W
+    "Camera":8*0.153, "CameraINT8":8*0.153,             #10W
+    "A40":8*1.53*3, "A40INT8":8*1.53*3,               # 300W
+    "V100":8*1.53*2.5, "V100INT8":8*1.53*2.5,             # 250W
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 ##profile is based on: for a fixed model...
 ##first, we need time/energy cost for Batch size, layer amounts...
 ##so, the input can be two elements: B and L
@@ -11,7 +35,6 @@ import numpy as np
 ## we use ax**2 + bx + c to simulate a time cost under batches  for a fixed number of layers
 ## we need extract out important things...
 ## 1. forward & backward time cost for base situation: 1 batches, for a fixed number of layers
-
 ## how to get more 
 def syn_func(original_fun, tlist):
     def new_func(x):
@@ -47,7 +70,7 @@ class ComputProfile:
     batchFuncbackward: object
 
 class Device:
-    def __init__(self, type, tprofile_loc, actual_layers, eprofile_loc = 0, Mem = 0, Energy = 1000, jmode = None,omni_sim = None):
+    def __init__(self, type, tprofile_loc, actual_layers, eprofile_loc = 0, Mem = 0, util = 1, Energy = 1000, jmode = None,omni_sim = None):
         self.type = type
         self.Eability = 0
         self.Mconstraint = Mem  # unit: MB
@@ -60,6 +83,7 @@ class Device:
         self.total_layers = actual_layers
         self.jmode = jmode
         self.omni_sim =omni_sim
+        self.util = util
         #self.total_parameters_bytes = 0
 
         root = Path(tprofile_loc)
@@ -74,10 +98,10 @@ class Device:
             data = json.load(f)  # parses JSON -> Python objects
             forward = 0
             backward = 0
-            tailforward = data["head&tail"][1]["forward_time_s"]
-            tailbackward = data["head&tail"][1]["backward_time_s"]
-            headforward = data["head&tail"][0]["forward_time_s"]
-            headbackward = data["head&tail"][0]["backward_time_s"]
+            tailforward = data["head&tail"][1]["forward_time_s"]/util
+            tailbackward = data["head&tail"][1]["backward_time_s"]/util
+            headforward = data["head&tail"][0]["forward_time_s"]/util
+            headbackward = data["head&tail"][0]["backward_time_s"]/util
             self.activation_bytes_seq_len = data["seq_len"]
             self.activation_bytes_per_sample = data["layers"][0]["activation_bytes_per_sample"]
             self.layer_param_bytes = data["layers"][0]["param_bytes"]
@@ -86,8 +110,8 @@ class Device:
             #self.total_parameters_bytes = data["total_parameters_bytes"]
             total_profile_layers = len(data["layers"])
             for i in range(total_profile_layers):
-                forward+=data["layers"][i]["forward_time_s"]
-                backward+=data["layers"][i]["backward_time_s"]
+                forward+=data["layers"][i]["forward_time_s"]/util
+                backward+=data["layers"][i]["backward_time_s"]/util
             forward =forward/total_profile_layers
             backward=backward/total_profile_layers
         
@@ -110,17 +134,17 @@ class Device:
                 backward = 0
                 self.total_layers = total_profile_layers
                 for i in range(total_profile_layers):
-                    forward+=data["layers"][i]["forward_time_s"]
-                    backward+=data["layers"][i]["backward_time_s"]
+                    forward+=data["layers"][i]["forward_time_s"]/util
+                    backward+=data["layers"][i]["backward_time_s"]/util
                 forward =forward/total_profile_layers
                 backward=backward/total_profile_layers
                 outforward.append(forward)
                 outbackward.append(backward)
 
-                tf = data["head&tail"][1]["forward_time_s"]
-                tb = data["head&tail"][1]["backward_time_s"]
-                hf = data["head&tail"][0]["forward_time_s"]
-                hb = data["head&tail"][0]["backward_time_s"]
+                tf = data["head&tail"][1]["forward_time_s"]/util
+                tb = data["head&tail"][1]["backward_time_s"]/util
+                hf = data["head&tail"][0]["forward_time_s"]/util
+                hb = data["head&tail"][0]["backward_time_s"]/util
                 headoutforward.append(hf)
                 headoutbackward.append(hb)
                 tailoutforward.append(tf)
@@ -184,7 +208,14 @@ class Device:
         coff = (1/self.computeprofile.forward)**1.5
         E =(T1+T2)*coff
         return E
-
+    def Econsumpf(self, layer_slice, layers_size, batch_size,seq,hidden):
+        T1, T2 = self.Tlatency(layer_slice, batch_size,seq,hidden)
+        E =T1*self.util*Profile_Energy_checklist[str(self.type)]
+        return E
+    def Econsumpb(self, layer_slice, layers_size, batch_size,seq,hidden):
+        T1, T2 = self.Tlatency(layer_slice, batch_size,seq,hidden)
+        E =T2*self.util*Profile_Energy_checklist[str(self.type)]
+        return E
     def maximum_batches_available(self, layer_slice, inversestage,seq,hidden): #reversely get the maximum batches that can be assigned on this devices
         layers = layer_slice[1]-layer_slice[0]
         per_b_s = 2
@@ -317,13 +348,15 @@ class Profilelor:
                 latencyf = 0
                 latencyb = 0
                 index = 0
-                total_energy = 0
+                f_energy = 0
+                b_energy = 0
 
                 for i in range(device_slice[0],device_slice[1]):
                     d = self.DList[i]
                     b = batch_shard[index]
                     lf,lb = d.Tlatency(layer_slice, b,self.seq_len,self.hiddenSize)
-                    total_energy+=d.Econsump(layer_slice, self.DList[0].layer_param_bytes, b,self.seq_len,self.hiddenSize)
+                    f_energy+=d.Econsumpf(layer_slice, self.DList[0].layer_param_bytes, b,self.seq_len,self.hiddenSize)
+                    b_energy+=d.Econsumpb(layer_slice, self.DList[0].layer_param_bytes, b,self.seq_len,self.hiddenSize)
                     if lf>latencyf:
                         latencyf = lf
                     if lb>latencyb:
@@ -334,8 +367,8 @@ class Profilelor:
                 ###jin important: we multiply a constant to estimate the backward cost
                 B_ft.append(latencyf)
                 B_bt.append(latencyb)
-                B_fe.append(total_energy*0.4)
-                B_be.append(total_energy*0.6)
+                B_fe.append(f_energy)
+                B_be.append(b_energy)
                 tt=0
                 ee=0
                 ###jin important: we gathering actually only involve transmission energy cost, it is little...
@@ -502,6 +535,7 @@ class GraphProfilelor:
 
         T = total_parameter_bytes*per_b_s/1e6/(bb/D_amount+local_lan)                 # consider fp16
 
+        #print((1.7*10**9/2)*per_b_s/1e6/(bb/3+local_lan))
         return T
 
 
@@ -593,14 +627,15 @@ class GraphProfilelor:
                 latencyf = 0
                 latencyb = 0
                 index = 0
-                total_energy = 0
-
+                energyf = 0
+                energyb = 0
                 the_model_index = self.phase_mapping[phase_index]
                 for i in range(device_slice[0],device_slice[1]):
                     d = self.DList[i][the_model_index]
                     b = batch_shard[index]
                     lf,lb = d.Tlatency(layer_slice, b,self.seq_len[the_model_index],self.hiddenSize[the_model_index])
-                    total_energy+=d.Econsump(layer_slice, self.DList[0][the_model_index].layer_param_bytes, b,self.seq_len[the_model_index],self.hiddenSize[the_model_index])
+                    energyf+=d.Econsumpf(layer_slice, self.DList[0][the_model_index].layer_param_bytes, b,self.seq_len[the_model_index],self.hiddenSize[the_model_index])
+                    energyb+=d.Econsumpb(layer_slice, self.DList[0][the_model_index].layer_param_bytes, b,self.seq_len[the_model_index],self.hiddenSize[the_model_index])
                     if lf>latencyf:
                         latencyf = lf
                     if lb>latencyb:
@@ -611,8 +646,8 @@ class GraphProfilelor:
                 ###jin important: we multiply a constant to estimate the backward cost
                 B_ft.append(latencyf)
                 B_bt.append(latencyb)
-                B_fe.append(total_energy*0.4)
-                B_be.append(total_energy*0.6)
+                B_fe.append(energyf)
+                B_be.append(energyb)
                 tt=0
                 ee=0
                 ###jin important: we gathering actually only involve transmission energy cost, it is little...

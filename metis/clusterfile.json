@@ -3,30 +3,24 @@
     "instance_type": "G4060",
     "inter_bandwidth": 312500000.0,
     "intra_bandwidth": 5312500000.0,
-    "memory": 48
+    "memory": 100
   },
   "IP1": {
     "instance_type": "G4060",
     "inter_bandwidth": 100.0,
     "intra_bandwidth": 5312500000.0,
-    "memory": 48
+    "memory": 100
   },
   "IP2": {
     "instance_type": "G4050",
     "inter_bandwidth": 100.0,
     "intra_bandwidth": 5312500000.0,
-    "memory": 48
+    "memory": 100
   },
   "IP3": {
     "instance_type": "G4050",
     "inter_bandwidth": 100.0,
     "intra_bandwidth": 5312500000.0,
-    "memory": 48
-  },
-  "IP4": {
-    "instance_type": "G4050",
-    "inter_bandwidth": 100.0,
-    "intra_bandwidth": 5312500000.0,
-    "memory": 48
+    "memory": 100
   }
 }

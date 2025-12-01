@@ -1,5 +1,5 @@
 Chosen number of stages: 5
-Pipeline round latency (objective): 1.620364 seconds
+Pipeline round latency (objective): 1.016384 seconds
 Stages:
   - Stage 0: layers [0, 1), Ef=0.002499, Eb=0.007252, Ta=0.000000
       y[4060_0] = 8
@@ -7,7 +7,8 @@ Stages:
       y[4060_1] = 8
   - Stage 2: layers [2, 3), Ef=0.002802, Eb=0.009760, Ta=0.000000
       y[4050_2] = 8
-  - Stage 3: layers [3, 4), Ef=0.002751, Eb=0.008068, Ta=0.000000
+  - Stage 3: layers [3, 11), Ef=0.021238, Eb=0.065536, Ta=0.000000
       y[4050_3] = 8
-  - Stage 4: layers [4, 12), Ef=0.021088, Eb=0.066310, Ta=0.000000
-      y[4050_4] = 8
+  - Stage 4: layers [11, 12), Ef=0.001300, Eb=0.004421, Ta=0.226812
+      y[4050_4] = 4
+      y[4050_5] = 4

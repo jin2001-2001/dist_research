@@ -43,6 +43,16 @@ def load_bandwidth_matrix(path: str) -> Dict[Tuple[str,str], float]:
         d[(src, dst)] = float(v)
     return d
 
+def pad_to_n(lst, n):
+    if not lst:
+        return [None] * n   # or raise an error if empty list not allowed
+
+    last = lst[-1]
+    if len(lst) >= n:
+        return lst[:n]
+
+    return lst + [last] * (n - len(lst))
+
 def main():
     Tstart = time.time()
     ap = argparse.ArgumentParser()
@@ -74,6 +84,8 @@ def main():
     ws = [lr["param_bytes"] for lr in layers["layers"]]
     as_ = [lr["activation_bytes_per_sample"] for lr in layers["layers"]]
 
+    #ws = pad_to_n(ws,100)
+    #as_ = pad_to_n(as_,100)
     # Fold head/tail params into first/last
     ws[0]  += layers.get("embed_param_bytes", 0)
     tail = layers.get("tail_param_bytes", 0)
@@ -85,10 +97,15 @@ def main():
     as_[-1] = 0
 
     L = len(ws)
+    ## important: h
+    #L = 100
 
     # Latency function built from measured tf/tb on the REF host scaled by per-device capacity
     tf_ref = [max(1e-9, lr["forward_time_s"]) for lr in layers["layers"]]
     tb_ref = [max(1e-9, lr["backward_time_s"] if lr["backward_time_s"]>0 else lr["forward_time_s"]*2.0) for lr in layers["layers"]]  # fallback if bwd missing
+
+    #tf_ref = pad_to_n(tf_ref,100)
+    #tb_ref = pad_to_n(tb_ref, 100)
 
     def latency_of_layer(dev_name: str, layer_idx: int, batch: int):
         #assert batch == B, "Measured times are for batch=%d; please measure again for batch=%d" % (B, batch)

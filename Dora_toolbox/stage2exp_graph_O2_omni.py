@@ -176,7 +176,7 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
 
     #call RCPSP solver:
     start_T = time.time()
-    model, result = cj.RCPSP_solver("./scratch/scratchtest_graph.mm", t = 25)
+    model, result = cj.RCPSP_solver("./scratch/scratchtest_graph.mm", t = 10)
     #cj.RCPSP_plot(model, result)
     time_cost = time.time()-start_T
     #print("successfully get RCPSP results...")
@@ -348,6 +348,7 @@ def dora_best_MM(
                 band_str,
                 profilehome,
                 test_list = [],
+                util_list = [],
                 mem_list = [],
                 ks=10, ss = 1,
                 alpha = 0,
@@ -378,6 +379,7 @@ def dora_best_MM(
             continue
         device_order = [test_list[i] for i in perm_indices]
         mem_order    = [mem_list[i] for i in perm_indices]
+        util_order = [util_list[i] for i in perm_indices]
         print("generate profiler:")
         simprofile, _ = tr.generate_profiler_samples_nolimit_MM(
             model_names = model_names,
@@ -390,6 +392,7 @@ def dora_best_MM(
             profilehome=profilehome,
             band_str = band_str,
             mem_list = mem_order,
+            util_list = util_order,
             map_dict = model_maping,
             jmode = jmode)
         #print("Communication" ,simprofile.communication_solver(10))
@@ -434,6 +437,7 @@ def dora_best_MM(
         perm_indices = device_order_list[j]
         device_order = [test_list[i] for i in perm_indices]
         mem_order    = [mem_list[i] for i in perm_indices]
+        util_order = [util_list[i] for i in perm_indices]
         simprofile, _= tr.generate_profiler_samples_nolimit_MM(
             model_names = model_names,
             n = ndevice,
@@ -445,6 +449,7 @@ def dora_best_MM(
             profilehome=profilehome,
             band_str = band_str,
             mem_list = mem_order,
+            util_list = util_order,
             map_dict = model_maping,
             jmode = jmode)
 
@@ -508,6 +513,7 @@ def simulator_eval(
                 profilehome,
                 test_plan,
                 test_list = [],
+                util_dlist= [],
                 mem_list = []
                 ,ks=10, ss = 1,
                 alpha = 0,
@@ -528,13 +534,22 @@ def simulator_eval(
             profilehome=profilehome,
             band_str = band_str,
             mem_list = mem_list,
+            util_list =util_dlist,
             map_dict = model_maping,
             jmode = jmode)
 
     B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList = simprofile.getall(test_plan)
-
-    E_consumption = sum(
+    #print(B_ft,B_bt)
+    #print(B_fe, B_be)
+    #print("xx",T_gathering)
+    if jmode == "training":
+        E_consumption = sum(
         nmbatch * (B_fe[i] + B_be[i]) + E_gathering[i]
+        for i in range(len(B_fe))
+    )
+    else:
+        E_consumption = sum(
+        nmbatch * (B_fe[i]) + E_gathering[i]
         for i in range(len(B_fe))
     )
 
@@ -568,7 +583,7 @@ def simulator_eval(
     
     #print(B_ft, B_bt, T_gathering)
     print(score_compare)
-    print([k/(E_consumption**alpha) for k in score_compare])
+    print(E_consumption)
 
 def construct_band(name, band, lanband):
     if name == "mesh4":
@@ -599,35 +614,56 @@ def construct_band(name, band, lanband):
                               (ch[3],ch[4]):[[3],[0,1,2,4]]
         }
         return structure
+    if name == "mesh3dead":
+        structure = Bandwidth_str("mesh5", band)
+        ch = [0,1,2]
+        #   0 -----  1 ---------  2
 
+        #      4----------3
+        structure.LAN_resource = [lanband]*3
+        structure.LAN_link = {
+        }
+        return structure
 
 
 if __name__ == "__main__":
     ndevice = 4
     nmbatch = 5
     mbatchsize = 4
-    choice0= ["home1", "home2", "traffic", "station"]
-    choice1= ["bert", "0.6", "1.7", "omni"]
-    device_setting = choice0[3]
-    model_setting = choice1[3]
+    choice0= ["home1", "home2", "traffic", "station", "motivation_graph","motivation_3b"]
+    choice1= ["bert", "0.6", "1.7", "omni","serial_omni_0"]
+    util_dlist = [1]*10
+    work_mode = "trainingx"
+    device_setting = choice0[1]
+    model_setting = choice1[4]
+    f_able = 0
+    v_able = 1
 
     plan1 = [{'phase': (0, 0), 'layer': (0, 32), 'device': (1, 2), 'inver_internal_stage_idx': 0},
             {'phase': (0, 1), 'layer': (0, 32), 'device': (2, 3), 'inver_internal_stage_idx': 0}, 
             {'phase': (1, 0), 'layer': (0, 36), 'device': (3, 4), 'inver_internal_stage_idx': 0}]  # for omni...
+    '''
+    plan1 = [{'phase': (0, 0), 'layer': (0, 20), 'device': (0, 1), 'inver_internal_stage_idx': 4},
+             {'phase': (0, 0), 'layer': (20, 40), 'device': (1, 2), 'inver_internal_stage_idx': 3},
+             {'phase': (0, 0), 'layer': (40, 60), 'device': (2, 3), 'inver_internal_stage_idx': 2},
+             {'phase': (0, 0), 'layer': (60, 80), 'device': (3, 4), 'inver_internal_stage_idx': 1},
+             {'phase': (0, 0), 'layer': (80, 100), 'device': (4, 5), 'inver_internal_stage_idx': 0}]  #for 5 steps
+    '''
 
-    plan1 = [{'phase': (0, 0), 'layer': (0, 1), 'device': (0, 1), 'inver_internal_stage_idx': 4},
-             {'phase': (0, 0), 'layer': (1, 2), 'device': (1, 2), 'inver_internal_stage_idx': 3},
-             {'phase': (0, 0), 'layer': (2,8), 'device': (2, 3), 'inver_internal_stage_idx': 2},
-             {'phase': (0, 0), 'layer': (8, 18), 'device': (3, 4), 'inver_internal_stage_idx': 1},
-             {'phase': (0, 0), 'layer': (18, 28), 'device': (4, 5), 'inver_internal_stage_idx': 0}]  #for 5 steps
+    plan1 = [{'phase': (0, 0), 'layer': (0, 22), 'device': (0, 1), 'inver_internal_stage_idx': 3},
+             {'phase': (0, 0), 'layer': (22, 49), 'device': (1, 2), 'inver_internal_stage_idx': 2},
+             {'phase': (0, 0), 'layer': (49, 77), 'device': (2, 3), 'inver_internal_stage_idx': 1},
+             {'phase': (0, 0), 'layer': (77, 100), 'device': (3, 4), 'inver_internal_stage_idx': 0}]  #for 4 steps
+
     '''
-    plan1 = [{'phase': (0, 0), 'layer': (0, 8), 'device': (0, 1), 'inver_internal_stage_idx': 4},
-             {'phase': (0, 0), 'layer': (8, 16), 'device': (1, 2), 'inver_internal_stage_idx': 3},
-             {'phase': (0, 0), 'layer': (16, 20), 'device': (2, 3), 'inver_internal_stage_idx': 2},
-             {'phase': (0, 0), 'layer': (20, 28), 'device': (3, 4), 'inver_internal_stage_idx': 1}]  #for 4 steps
+    plan1 = [{'phase': (0, 0), 'layer': (0, 32), 'device': (0, 1), 'inver_internal_stage_idx': 0}, 
+             {'phase': (0, 1), 'layer': (0, 32), 'device': (1, 2), 'inver_internal_stage_idx': 0}, 
+             {'phase': (1, 0), 'layer': (0, 12), 'device': (2, 3), 'inver_internal_stage_idx': 2},
+             {'phase': (1, 0), 'layer': (12, 24), 'device': (3, 4), 'inver_internal_stage_idx': 1}, 
+             {'phase': (1, 0), 'layer': (24, 36), 'device': (4, 5), 'inver_internal_stage_idx': 0}]
     '''
-    plan1 = [{'phase': (0, 0), 'layer': (0, 22), 'device': (0, 2), 'inver_internal_stage_idx': 1},
-             {'phase': (0, 0), 'layer': (22, 28), 'device': (2, 4), 'inver_internal_stage_idx': 0}]        
+    #plan1 = [{'phase': (0, 0), 'layer': (0, 50), 'device': (0, 2), 'inver_internal_stage_idx': 1},
+    #         {'phase': (0, 0), 'layer': (50, 100), 'device': (2, 4), 'inver_internal_stage_idx': 0}]        
     if model_setting == "omni":
         nmbatch = 5
         mbatchsize = 4
@@ -639,6 +675,44 @@ if __name__ == "__main__":
         #profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
         model_names = [""]*len(profilemaping)
         #model_names = ["vision", "audio", "thinker"]
+
+
+
+    if model_setting == "serial_omni_0":
+        nmbatch = 5
+        mbatchsize = 4
+        layers = [100]  ## should be a list 
+        hidden_size = [2109*1.5] ## should be a list 
+        seq = [1208*1.5] ## should be a list       #768+768 = 1536
+        profilehome="../Profile_exp_1.7"
+        profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
+        #profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
+        model_names = [""]*len(profilemaping)
+        #model_names = ["vision", "audio", "thinker"]
+    if model_setting == "serial_omni_1":
+        nmbatch = 5
+        mbatchsize = 4
+        layers = [32,32,36]  ## should be a list 
+        hidden_size = [1280,1280,3584] ## should be a list 
+        seq = [768, 512, 768+512+256] ## should be a list
+        profilehome="../Profile_exp_1.7"
+        profilemaping = {(0,0):0, (1,0):1, (1,0):2}   # 0: vision, 1: audio, 2: backbone
+        #profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
+        model_names = [""]*len(profilemaping)
+        #model_names = ["vision", "audio", "thinker"]
+    if model_setting == "serial_omni_2":
+        nmbatch = 5
+        mbatchsize = 4
+        layers = [32,32,36]  ## should be a list 
+        hidden_size = [1280,1280,3584] ## should be a list 
+        seq = [768, 512, 768+512+256] ## should be a list
+        profilehome="../Profile_exp_1.7"
+        profilemaping = {(0,0):0, (1,0):1, (1,0):2}   # 0: vision, 1: audio, 2: backbone
+        #profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
+        model_names = [""]*len(profilemaping)
+        #model_names = ["vision", "audio", "thinker"]
+
+
 
     if model_setting == "0.6":
         nmbatch = 10
@@ -691,10 +765,11 @@ if __name__ == "__main__":
         lanband = 0
         name = "mesh4"
         band_Str = construct_band(name,band,lanband)
-        if model_setting == "omni":
+        if "omni" in model_setting:
             set_list =  ["4050INT8"]*2+ ["4060INT8"]*3
         else:
             set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*0 + ["Xiaomi"]*0  + ["Samsung"]*0+["4050"]*2+ ["4060"]*3
+        util_list = [1]*5
         mem_list = [32*2]*0   + [48*2]*0+    [32*2]*0+     [16*2]*0+            [12*2]*0+  [12*2]*0+   [12*2]*2+    [12*2]*3 #12+24 =36
         mem_list = [x*1024 for x in mem_list]
 
@@ -704,10 +779,11 @@ if __name__ == "__main__":
         lanband = 0
         name = "mesh4"
         band_Str = construct_band(name,band,lanband)
-        if model_setting == "omni":
+        if "omni" in model_setting:
             set_list =  ["XiaomiINT8"]*2  + ["SamsungINT8"]*1+ ["4050INT8"]*2
         else:
             set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*0 + ["Xiaomi"]*2  + ["Samsung"]*1+["4060"]*0+ ["4050"]*2
+        util_list = [1]*5
         mem_list = [32*2]*0   + [48*2]*0+    [32*2]*0+     [16*2]*0+            [12*2]*2+  [12*2]*1+   [12*2]*0+    [12*2]*2
         mem_list = [x*1024 for x in mem_list]
 
@@ -717,12 +793,18 @@ if __name__ == "__main__":
         lanband = 50 ##actual situation is *2(as INT8 model)
         name = "mesh4"
         band_Str = construct_band(name,band,lanband)
-        if model_setting == "omni":
+        if "omni" in model_setting:
             set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*4 + ["Xiaomi"]*0  + ["Samsung"]*0+["4060"]*0+ ["4050"]*0
         else:
             set_list = ["Camera"]*4
+        util_list = [0.7,0.7,1,1]
         mem_list = [32*2]*0   + [48*2]*0+    [32*2]*0+     [16*2]*4+            [12*2]*0+  [12*2]*0+   [12*2]*0+    [8*2]*0
         mem_list = [x*1024 for x in mem_list]
+
+
+
+
+
 
     if device_setting == "station":
         ndevice = 4
@@ -731,24 +813,49 @@ if __name__ == "__main__":
         name = "mesh4"
         band_Str = construct_band(name,band,lanband)
 
-        if model_setting == "omni":
+        if "omni" in model_setting:
             set_list = ["A40INT8"]*2+ ["V100INT8"]*2
         else:
             set_list = ["2630"]*0 + ["A40"]*2+ ["V100"]*2  + ["CameraINT8"]*0 + ["Xiaomi"]*0  + ["Samsung"]*0+["4060"]*0+ ["4050"]*0
+        util_list = [1]*5
         mem_list = [32*2]*0   + [48*2]*2+    [32*2]*2+     [16*2]*0+            [12*2]*0+  [12*2]*0+   [12*2]*0+    [8*2]*0
         mem_list = [x*1024 for x in mem_list]
 
+    if device_setting == "motivation_graph":
+        ndevice = 5
+        band = 500
+        lanband = 0 ##actual situation is *2(as INT8 model)
+        name = "mesh4"
+        band_Str = construct_band(name,band,lanband)
+        if model_setting == "omni":
+            set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*0 + ["Xiaomi"]*0  + ["Samsung"]*0+["4060"]*0+ ["4050INT8"]*5
+        else:
+            set_list = ["4050"]*5
+        util_list = [1]*5
+        mem_list = [32*2]*0   + [48*2]*0+    [32*2]*0+     [16*2]*5+            [12*2]*0+  [12*2]*0+   [12*2]*0+    [8*2]*0
+        mem_list = [x*1024 for x in mem_list] 
 
+    if device_setting == "motivation_3b":
+        ndevice = 3
+        band = 500
+        lanband = 0 ##actual situation is *2(as INT8 model)
+        name = "mesh3dead"
+        band_Str = construct_band(name,band,lanband)
+        set_list =  ["Xiaomi"]*3
+        util_list = [0.50,0.50,0.50]
+        util_dlist = util_list
+        mem_list = [16*2]*3
+        mem_list = [x*1024 for x in mem_list] 
+        plan1 = [{'phase': (0, 0), 'layer': (0, 28), 'device': (2, 3), 'inver_internal_stage_idx': 0}]
     test_dlist = set_list
     #test_dlist = ["CPU60"]*4
     mem_tlist = mem_list
     mem_tlist = [x*1024 for x in mem_tlist]
+    util_dlist = util_list
 
 
-
-
-    if 1==1:
-        print(set_list)
+    print(set_list)
+    if 1==f_able:
         dora_best_MM(
                 profilemaping, 
                 model_names,
@@ -760,12 +867,13 @@ if __name__ == "__main__":
                 layers,
                 band_Str,
                 profilehome,
-                set_list, 
+                set_list,
+                util_list, 
                 mem_list,ks=4, ss = 4,
                 alpha=alpha,
-                jmode = "training")
+                jmode = work_mode)
     
-    if 1==0:    
+    if 1==v_able:    
         simulator_eval(
                 profilemaping, 
                 model_names,
@@ -779,7 +887,8 @@ if __name__ == "__main__":
                 profilehome,
                 plan1,
                 test_dlist,
+                util_dlist,
                 mem_tlist,ks = 5, ss = 4,
                 alpha=alpha,
-                jmode = "training")
+                jmode = work_mode)
     
