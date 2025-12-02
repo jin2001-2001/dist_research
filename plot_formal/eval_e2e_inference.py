@@ -8,24 +8,24 @@ import matplotlib.font_manager as fm
 #    For each panel: a (4, 3) array-like where axis=0 is groups, axis=1 is bar index in group
 # ----------------------------
 panel_data = [
-    np.array([[58.0, 11.4, 11.5, 14.8,  2.7],
-              [16.4,  16.5, 16.5, 16.4,  8.5],
-              [38.2, 37.9, 20.2,  20.1,   10.4],
-              [97,96,  26,  26,  22.2]], dtype=float),
+    np.array([[0, 11.4, 0, 14.8,  2.7],
+              [0,  16.5, 0,   23.8,  8.5],
+              [0, 38.4, 0,  20.1,   10.4],
+              [0,0,  0,  0,  22.2]], dtype=float),
 
-    np.array([[37, 18.8, 96.9, 24.1 , 3.0],
-              [27.0, 27.0,27.2,  26.9 ,  7.9],
-              [172, 62.8,32.8, 32.4 ,  17.0],
+    np.array([[0, 18.8, 0, 24.1 , 3.0],
+              [0, 27.0,0,  26.9 ,  7.9],
+              [0, 62.8,0, 32.4 ,  17.0],
               [0, 0, 0, 0 ,  25.6]], dtype=float),
 
-    np.array([[211,  210, 853,  210,   25.4],
-              [745,746,243,  240,  68.5],
-              [1958, 1959, 291, 290,  87.9],
-              [ 1890,1890, 349,  349,  130.8]], dtype=float),
+    np.array([[0,  210, 0,  210,   25.4],
+              [0,746,0,  240,  68.5],
+              [0, 1959, 0, 290,  87.9],
+              [ 0,0,0,  0,  130.8]], dtype=float),
 
-    np.array([[0.60, 0.80, 1.14, 0.56,  0.5],
-              [2.84, 2.59, 2.99, 2.10,  1.89],
-              [4.21,3.9,4.4, 3.7,  2.58],
+    np.array([[0, 0.80, 0, 0.56,  0.5],
+              [0, 2.59, 0, 2.10,  1.89],
+              [0,3.9,0, 3.7,  2.58],
               [0, 0,0, 0, 12.8]], dtype=float),
 ]
 ymax_manual_list = [45,60,500,17]
@@ -136,5 +136,5 @@ for ax, pdata, ttl in zip(axes, panel_data, panel_titles):
 
 # Shared y-label for the whole figure (optional)
 fig.suptitle("", y=0.995)
-fig.savefig("training.pdf", dpi=300, bbox_inches="tight")
+fig.savefig("infernece.pdf", dpi=300, bbox_inches="tight")
 plt.show()

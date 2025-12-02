@@ -633,9 +633,9 @@ if __name__ == "__main__":
     choice0= ["home1", "home2", "traffic", "station", "motivation_graph","motivation_3b"]
     choice1= ["bert", "0.6", "1.7", "omni","serial_omni_0"]
     util_dlist = [1]*10
-    work_mode = "trainingx"
-    device_setting = choice0[1]
-    model_setting = choice1[4]
+    work_mode = "training"
+    device_setting = choice0[3]
+    model_setting = choice1[3]
     f_able = 0
     v_able = 1
 
@@ -650,10 +650,10 @@ if __name__ == "__main__":
              {'phase': (0, 0), 'layer': (80, 100), 'device': (4, 5), 'inver_internal_stage_idx': 0}]  #for 5 steps
     '''
 
-    plan1 = [{'phase': (0, 0), 'layer': (0, 22), 'device': (0, 1), 'inver_internal_stage_idx': 3},
-             {'phase': (0, 0), 'layer': (22, 49), 'device': (1, 2), 'inver_internal_stage_idx': 2},
-             {'phase': (0, 0), 'layer': (49, 77), 'device': (2, 3), 'inver_internal_stage_idx': 1},
-             {'phase': (0, 0), 'layer': (77, 100), 'device': (3, 4), 'inver_internal_stage_idx': 0}]  #for 4 steps
+    plan1 = [{'phase': (0, 0), 'layer': (0, 32), 'device': (0, 1), 'inver_internal_stage_idx': 3},
+             {'phase': (0, 0), 'layer': (32, 64), 'device': (1, 2), 'inver_internal_stage_idx': 2},
+             {'phase': (0, 0), 'layer': (64, 82), 'device': (2, 3), 'inver_internal_stage_idx': 1},
+             {'phase': (0, 0), 'layer': (82, 100), 'device': (3, 4), 'inver_internal_stage_idx': 0}]  #for 4 steps
 
     '''
     plan1 = [{'phase': (0, 0), 'layer': (0, 32), 'device': (0, 1), 'inver_internal_stage_idx': 0}, 
@@ -662,8 +662,8 @@ if __name__ == "__main__":
              {'phase': (1, 0), 'layer': (12, 24), 'device': (3, 4), 'inver_internal_stage_idx': 1}, 
              {'phase': (1, 0), 'layer': (24, 36), 'device': (4, 5), 'inver_internal_stage_idx': 0}]
     '''
-    #plan1 = [{'phase': (0, 0), 'layer': (0, 50), 'device': (0, 2), 'inver_internal_stage_idx': 1},
-    #         {'phase': (0, 0), 'layer': (50, 100), 'device': (2, 4), 'inver_internal_stage_idx': 0}]        
+    #plan1 = [{'phase': (0, 0), 'layer': (0, 58), 'device': (0, 2), 'inver_internal_stage_idx': 1},
+    #         {'phase': (0, 0), 'layer': (58, 100), 'device': (2, 4), 'inver_internal_stage_idx': 0}]        
     if model_setting == "omni":
         nmbatch = 5
         mbatchsize = 4
