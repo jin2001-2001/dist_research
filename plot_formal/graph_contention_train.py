@@ -18,7 +18,7 @@ colors = [
 legend_items = [
     ("D2D", color_map["cat1"]),
     ("Shared", color_map["cat2"]),
-    ("Oracle", color_map["cat3"])
+    ("Optimal", color_map["cat3"])
 ]
 
 # Bar layout within groups

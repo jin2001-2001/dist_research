@@ -84,8 +84,11 @@ def main():
     ws = [lr["param_bytes"] for lr in layers["layers"]]
     as_ = [lr["activation_bytes_per_sample"] for lr in layers["layers"]]
 
-    #ws = pad_to_n(ws,100)
-    #as_ = pad_to_n(as_,100)
+
+    layer_num = 100
+
+    ws = pad_to_n(ws,layer_num)
+    as_ = pad_to_n(as_,layer_num)
     # Fold head/tail params into first/last
     ws[0]  += layers.get("embed_param_bytes", 0)
     tail = layers.get("tail_param_bytes", 0)
@@ -98,14 +101,14 @@ def main():
 
     L = len(ws)
     ## important: h
-    #L = 100
+    L = layer_num
 
     # Latency function built from measured tf/tb on the REF host scaled by per-device capacity
     tf_ref = [max(1e-9, lr["forward_time_s"]) for lr in layers["layers"]]
     tb_ref = [max(1e-9, lr["backward_time_s"] if lr["backward_time_s"]>0 else lr["forward_time_s"]*2.0) for lr in layers["layers"]]  # fallback if bwd missing
 
-    #tf_ref = pad_to_n(tf_ref,100)
-    #tb_ref = pad_to_n(tb_ref, 100)
+    tf_ref = pad_to_n(tf_ref,layer_num)
+    tb_ref = pad_to_n(tb_ref, layer_num)
 
     def latency_of_layer(dev_name: str, layer_idx: int, batch: int):
         #assert batch == B, "Measured times are for batch=%d; please measure again for batch=%d" % (B, batch)

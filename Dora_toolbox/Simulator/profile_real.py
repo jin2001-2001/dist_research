@@ -17,10 +17,42 @@ Profile_Energy_checklist ={
 
 
 
+#0, 5%, 10%,... 100%
+# so, int(0.7/0.05)
+util_to_power_ratio = [
+    0.000,
+    0.000,
+    0.000,
+    0.000,
+    0.030,
+    0.071,
+    0.143,
+    0.262,
+    0.357,
+    0.500,
+    0.595,
+    0.679,
+    0.750,
+    0.810,
+    0.857,
+    0.905,
+    0.952,
+    0.976,
+    0.988,
+    0.994,
+    1.000
+]
 
+def util_to_ratio(util):
+    index = int(util//0.05)
+    rest = util%0.05
 
-
-
+    value_base = util_to_power_ratio[index]
+    value_next = 1
+    if index <len(util_to_power_ratio)-1:
+        value_next = util_to_power_ratio[index+1]
+    
+    return value_base + rest*(value_next-value_base)
 
 
 
@@ -70,7 +102,7 @@ class ComputProfile:
     batchFuncbackward: object
 
 class Device:
-    def __init__(self, type, tprofile_loc, actual_layers, eprofile_loc = 0, Mem = 0, util = 1, Energy = 1000, jmode = None,omni_sim = None):
+    def __init__(self, type, tprofile_loc, actual_layers, eprofile_loc = 0, Mem = 0, util = 1, Energy = 1000, jmode = None,omni_sim = None, linear_map = True):
         self.type = type
         self.Eability = 0
         self.Mconstraint = Mem  # unit: MB
@@ -84,6 +116,7 @@ class Device:
         self.jmode = jmode
         self.omni_sim =omni_sim
         self.util = util
+        self.linear_map = linear_map
         #self.total_parameters_bytes = 0
 
         root = Path(tprofile_loc)
@@ -181,14 +214,28 @@ class Device:
                                             1,0,a,b)
 
 
+    def util_map(self, layers):
+        half = self.util/2
+        percent= layers/self.total_layers
+        bonus_util = percent*half/2
+        final_util = half+bonus_util
+        if final_util<0.2:
+            final_util = 0.2
+        return final_util, final_util/self.util
 
 
     def Tlatency(self, layer_slice, batch_size,seq, hidden):
         layers = layer_slice[1]-layer_slice[0]
-
+        
         ratio = 1
         if self.omni_sim == 1:
             ratio = seq*hidden/(2048*256)
+
+        # 20% --- 100%
+        futil, the_util_r = self.util_map(layers)
+
+        if self.linear_map == False:
+            the_util_r = 1        
 
         Tf = self.computeprofile.batchFuncforward(batch_size)*layers/self.computeprofile.layer_base       *ratio
         Tb = self.computeprofile.batchFuncbackward(batch_size)*layers/self.computeprofile.layer_base      *ratio
@@ -201,7 +248,7 @@ class Device:
 
 
         #print(batch_size,Tf,Tb)
-        return Tf,Tb
+        return Tf/the_util_r,Tb/the_util_r
     
     def Econsump(self, layer_slice, layers_size, batch_size,seq,hidden):
         T1, T2 = self.Tlatency(layer_slice, batch_size,seq,hidden)
@@ -209,12 +256,19 @@ class Device:
         E =(T1+T2)*coff
         return E
     def Econsumpf(self, layer_slice, layers_size, batch_size,seq,hidden):
+        f_util, _ = self.util_map(layer_slice[1]-layer_slice[0])
+        if self.linear_map == False:
+            f_util = self.util
+
         T1, T2 = self.Tlatency(layer_slice, batch_size,seq,hidden)
-        E =T1*self.util*Profile_Energy_checklist[str(self.type)]
+        E =T1*util_to_ratio(f_util)*Profile_Energy_checklist[str(self.type)]
         return E
     def Econsumpb(self, layer_slice, layers_size, batch_size,seq,hidden):
+        f_util, _ = self.util_map(layer_slice[1]-layer_slice[0])
+        if self.linear_map == False:
+            f_util = self.util
         T1, T2 = self.Tlatency(layer_slice, batch_size,seq,hidden)
-        E =T2*self.util*Profile_Energy_checklist[str(self.type)]
+        E =T2*util_to_ratio(f_util)*Profile_Energy_checklist[str(self.type)]
         return E
     def maximum_batches_available(self, layer_slice, inversestage,seq,hidden): #reversely get the maximum batches that can be assigned on this devices
         layers = layer_slice[1]-layer_slice[0]
@@ -458,8 +512,9 @@ class GraphProfilelor:
         for i in range(n - 1):
             if L[i] == L[i + 1]:
                 deps[i] = i + 1
-        if biggest_phase == 1:
+        if   biggest_phase>0:
             # Rule 2: last (0,*) → first (1,0)
+            #print(L)
             first_1_idx = next(i for i, t in enumerate(L) if t == (1,0))
             # find last index of each unique (0, y)
             seen = set()
@@ -616,7 +671,7 @@ class GraphProfilelor:
             inverseStage = stepinfo['inver_internal_stage_idx']
 
             if s%2 == 0: # calculation step:
-
+                    
                 batch_shard = self.DP_solver(phase_index,device_slice, layer_slice, inverseStage, P)
                 if batch_shard == False:
                     return False #failed to allocate batch for one Devices group
@@ -629,6 +684,7 @@ class GraphProfilelor:
                 index = 0
                 energyf = 0
                 energyb = 0
+                power_total = 0
                 the_model_index = self.phase_mapping[phase_index]
                 for i in range(device_slice[0],device_slice[1]):
                     d = self.DList[i][the_model_index]
@@ -641,6 +697,7 @@ class GraphProfilelor:
                     if lb>latencyb:
                         latencyb = lb
                     index+=1
+                    power_total+=util_to_ratio(d.util)*Profile_Energy_checklist[str(d.type)]
                 #now, we get latency of the device group
 
                 ###jin important: we multiply a constant to estimate the backward cost
@@ -654,13 +711,14 @@ class GraphProfilelor:
                 if (devices > 1):
                     #print("a DP group")
                     tt = self.gathering_solver(phase_index, mode, device_slice, layer_slice)
+                    ee = power_total*0.001*tt
                     #print(tt)
                 T_gathering.append(tt)
                 E_gathering.append(ee)
 
 
             else: # communication step:
-                
+                #print(dp_list)
                 if dp_list[s]%2 != 0:
                     print("####################something error on communication cal#######################")
                 nextstepinfo = P[dp_list[s]//2] if dp_list[s]  != -1 else None
@@ -669,10 +727,20 @@ class GraphProfilelor:
                 #print(device_slice, next_device_slice,P, s, dp_list)
                 T = self.communication_solver(phase_index, mode, device_slice, next_device_slice)
 
+                power_total = 0
+                for i in range(device_slice[0],device_slice[1]):
+                    d = self.DList[i][the_model_index]
+                    power_total+=util_to_ratio(d.util)*Profile_Energy_checklist[str(d.type)]                
+                for i in range(next_device_slice[0],next_device_slice[1]):
+                    d = self.DList[i][the_model_index]
+                    power_total+=util_to_ratio(d.util)*Profile_Energy_checklist[str(d.type)]   
+                
+                ee = power_total*0.001*T
+
                 B_ft.append(T)
                 B_bt.append(T)
-                B_fe.append(0)
-                B_be.append(0)                
+                B_fe.append(ee)
+                B_be.append(ee)                
                 T_gathering.append(0)
                 E_gathering.append(0)                   
 

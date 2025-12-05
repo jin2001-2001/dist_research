@@ -3,138 +3,164 @@ import numpy as np
 import matplotlib.font_manager as fm
 
 # ----------------------------
-# 1) Put your data here
-#    Shape: 4 panels × (4 groups × 3 bars)
-#    For each panel: a (4, 3) array-like where axis=0 is groups, axis=1 is bar index in group
+# 1) Data
 # ----------------------------
 panel_data = [
-    np.array([[58.0, 11.4, 11.5, 14.8,  2.7],
-              [16.4,  16.5, 16.5, 16.4,  8.5],
-              [38.2, 37.9, 20.2,  20.1,   10.4],
-              [97,96,  26,  26,  22.2]], dtype=float),
+    np.array([[58.0, 11.51, 11.4, 14.8, 2.66],
+              [16.44, 16.5, 16.5, 16.4, 8.5],
+              [20.1, 38.1, 37.9, 20.1, 10.4],
+              [29.9, 97, 96, 29, 22.2]], dtype=float),
 
-    np.array([[37, 18.8, 96.9, 24.1 , 3.0],
-              [27.0, 27.0,27.2,  26.9 ,  7.9],
-              [172, 62.8,32.8, 32.4 ,  17.0],
-              [0, 0, 0, 0 ,  25.6]], dtype=float),
+    np.array([[96.7, 37.0, 18.75, 24.1, 3.0],
+              [27.2, 27.0, 27.03, 26.0, 7.88],
+              [32.8, 172.7, 62.7, 32.4, 17.0],
+              [36.17, 153.5, 154.2, 35.1, 25.64]], dtype=float),
 
-    np.array([[211,  210, 853,  210,   25.4],
-              [745,746,243,  240,  68.5],
-              [1958, 1959, 291, 290,  87.9],
-              [ 1890,1890, 349,  349,  130.8]], dtype=float),
+    np.array([[853, 211.6, 210.6, 210, 25.4],
+              [243, 745.8, 745.88, 240.42, 68.5],
+              [291, 1958, 1959, 292.0, 87.88],
+              [0, 1839, 1839, 1240, 133.12]], dtype=float),
 
-    np.array([[0.60, 0.80, 1.14, 0.56,  0.5],
-              [2.84, 2.59, 2.99, 2.10,  1.89],
-              [4.21,3.9,4.4, 3.7,  2.58],
-              [0, 0,0, 0, 12.8]], dtype=float),
+    np.array([[1.14, 0.69, 0.63, 0.56, 0.51],
+              [2.99, 2.84, 2.59, 2.10, 1.89],
+              [4.37, 4.21, 3.85, 3.67, 2.58],
+              [11.5, 9.9, 7.8, 6.8, 5.57]], dtype=float),
 ]
-ymax_manual_list = [45,60,500,17]
 
-group_names = ["Bert-Base","Qwen3-0.6B","Qwen3-1.7B", "Omni-INT8"]     # one label per group
-series_names = [ "Alpa","Metis", "EdgeShard", "Asteroid", "Dora"]  # bar i across groups
+group_names = ["Bert", "Qwen-0.6", "Qwen-1.7", "Omni"]
+series_names = ["EdgeShard", "Alpa", "Metis", "Asteroid", "Dora"]
+series_colors = ["#90C9E7", "#219EBC", "#0D6783", "#DD552F", "#E8A85B"]
 
-# Close shades for the 3 series (consistent across subplots)
-series_colors = ["#90C9E7", "#219EBC", "#0D6783", "#3424E9", "#EC9326"]
-
-
-# Grid style / legend font size
 GRID_ALPHA = 0.25
-LEGEND_FONTSIZE = 8
+LEGEND_FONTSIZE = 14
 
-# How aggressive to clip tall bars so small ones are visible.
-# We'll set ylim to 1.1 * percentile (e.g., 90th), but not below a minimum.
-PERCENTILE = 90
-YMIN = 0
-MIN_YMAX = 30  # never set ylim upper below this to ensure some headroom
+panel_titles = ["Smart home 1", "Smart home 2", "Traffic monitor", "Edge cluster"]
 
-canvas_counter = -1
-def plot_panel(ax, values_4x3, title=None):
-    global canvas_counter
-    canvas_counter+=1
-    """
-    values_4x3: array-like shape (4, 3), rows are groups, cols are series/bars within group
-    """
+# ------------------------------------------------
+# 2) USE A 2×4 GRID: Top = plots, Bottom = legend
+# ------------------------------------------------
+fig = plt.figure(figsize=(18, 5), constrained_layout=True)
+gs = fig.add_gridspec(2, 4, height_ratios=[20, 1])
 
-    values = np.asarray(values_4x3, dtype=float)
+axes = [fig.add_subplot(gs[0, i]) for i in range(4)]
+legend_ax = fig.add_subplot(gs[1, :])
+legend_ax.axis("off")
+
+# ------------------------------------------------
+# 3) Plotting function for each panel
+# ------------------------------------------------
+def plot_panel(ax, values, title=None):
+
+    values = np.asarray(values, float)
     G, S = values.shape
-    assert G == 4 and S == 5, "Expecting 4 groups × 5 bars."
-
-    # x layout: 4 groups centered at [0, 1, 2, 3]
-    group_centers = np.arange(G, dtype=float)
+    group_centers = np.arange(G)
     width = 0.15
     gap = 0.02
-    # offsets for 3 bars around each group center
     offsets = np.linspace(-(S-1)*(width+gap)/2, (S-1)*(width+gap)/2, S)
 
-    # Build bars
     bars = []
     for s in range(S):
         x = group_centers + offsets[s]
         bar = ax.bar(x, values[:, s], width=width,
                      color=series_colors[s],
-                     edgecolor="black", linewidth=0.6,
-                     label=series_names[s])
+                     edgecolor="black", linewidth=0.6)
         bars.append(bar)
 
-    # Light mesh/grid behind
+    # Grid
     ax.grid(True, axis="y", linestyle="--", alpha=GRID_ALPHA)
 
-    # Decide y-limit to ignore (clip) very large values, but keep small bars visible
-    flat_vals = values.flatten()
-    # choose an upper bound from percentile, make sure it's at least MIN_YMAX
-    ymax = max(MIN_YMAX, np.percentile(flat_vals, PERCENTILE) * 1.1)
-    ymax = ymax_manual_list[canvas_counter]
-    ax.set_ylim(YMIN, ymax)
+    # -----------------------------
+    # Linear y-limit (except log panel)
+    # -----------------------------
+    if  0:   # not the log panel
+        flat_vals = values.flatten()
+        ymax_lin = np.percentile(flat_vals[flat_vals > 0], 50) * 1.15
+        ymax_lin = max(9, ymax_lin)
+        ax.set_ylim(0, ymax_lin)
+
+    # -----------------------------
+    # SAFE ANNOTATION (for linear only)
+    # -----------------------------
+    if  0:
+        for s in range(S):
+            for rect, val in zip(bars[s], values[:, s]):
+                h = rect.get_height()
+                x = rect.get_x() 
+                #ax.annotate(f"{val:g}",
+                #            xy=(x, h),
+                #            xytext=(0, 3),
+                #            textcoords="offset points",
+                #            ha="center", va="bottom", fontsize=8)
+
+    # -----------------------------
+    # For LOG PANEL (3rd subplot)
+    # -----------------------------
+    if 1:  # index 2
+        if ax is axes[3]:
+            ax.set_yscale("log", base =2)
+        else:
+            ax.set_yscale("log")
+
+        # Remove zeros (log invalid)
+        nonzero = values[values > 0]
+        ymin = nonzero.min() * 0.8
+        ymax = nonzero.max() * 1.4
+        ax.set_ylim(ymin, ymax)
+
+        # Log-safe annotations
+        for s in range(S):
+            for rect, val in zip(bars[s], values[:, s]):
+                if val > 0:
+                    x = rect.get_x() + rect.get_width() / 2 
+                    #ax.text(x, val, f"{val:g}",
+                    #        ha="center", va="bottom",
+                    #        fontsize=7)
+                if val == 0:
+                    x = rect.get_x() + rect.get_width() / 2
+                    # Draw a small bar so log scale doesn't break
+                    rect.set_height(1e-9)
+
+                    # Draw a cross at the baseline (log y-min)
+                    ymin = ax.get_ylim()[0]
+                    ax.text(
+                        x, ymin+1.5,
+                        "×",
+                        ha="center", va="center",
+                        fontsize=12, color="black"
+                    )
 
 
-    # Annotate each bar; for bars taller than ymax, put the label beside the bar
-    # so it never collides with the title or gets clipped.
-    for s in range(S):
-        for rect, val in zip(bars[s], values[:, s]):
-            x = rect.get_x() + rect.get_width() / 2
-            h = rect.get_height()
-            if h > ymax:
-                # Place label to the right side of the bar, vertically centered in the visible area
-                ax.annotate(f"{val:g}",
-                            xy=(x + width/2 + 0.06, (YMIN + ymax) * 0.95),
-                            ha='left', va='center',
-                            fontsize=9)
-                # Optional: little up arrow at the top to indicate clipping
-                ax.annotate("↑", xy=(x, (YMIN + ymax)*0.99), ha='center', va='bottom')
-            else:
-                ax.annotate(f"{val:g}",
-                            xy=(x, h),
-                            xytext=(0, 3),
-                            textcoords="offset points",
-                            ha='center', va='bottom',
-                            fontsize=9)
-
-    # One x label per group (at group centers)
+    # X ticks
     ax.set_xticks(group_centers)
-    ax.set_xticklabels(group_names)
-    #ax.set_yticklabels("Iteration Latency (s)")
-
-    # Compact legend
-    ax.legend(loc="upper right", frameon=False, fontsize=LEGEND_FONTSIZE)
+    ax.set_xticklabels(group_names, fontsize=12)
 
     if title:
-        ax.set_title(title, pad=8)
+        ax.set_title(title, fontsize=15, pad=3)
 
-# ----------------------------
-# 2) Draw the 4 panels
-# ----------------------------
-fig, axes = plt.subplots(1, 4, figsize=(17, 4.5), constrained_layout=True)
-axes = axes.flatten()
+    # y label
+    ax.set_ylabel("Per-iteration time (s)", fontsize=15)
 
-panel_titles = ["Smart home 1", "Smart home 2", "Traffic monitor", "Edge cluster"]
 
+# ------------------------------------------------
+# 4) Draw all panels
+# ------------------------------------------------
 for ax, pdata, ttl in zip(axes, panel_data, panel_titles):
-    plot_panel(ax, pdata, title=ttl)
-    #add labels...
-    ax.set_ylabel("Per-iteration time (s)")
+    plot_panel(ax, pdata, ttl)
 
+# ------------------------------------------------
+# 5) SHARED LEGEND (centered)
+# ------------------------------------------------
+legend_ax.legend(
+    handles=[plt.Rectangle((0,0),1,1,color=c,ec='black') for c in series_colors],
+    labels=series_names,
+    loc="center",
+    ncol=5,
+    frameon=False,
+    fontsize=LEGEND_FONTSIZE,
+)
 
-# Shared y-label for the whole figure (optional)
-fig.suptitle("", y=0.995)
-fig.savefig("training.pdf", dpi=300, bbox_inches="tight")
+# ------------------------------------------------
+# 6) Save & show
+# ------------------------------------------------
+fig.savefig("training.pdf", dpi=300)
 plt.show()

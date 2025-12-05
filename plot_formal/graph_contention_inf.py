@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Values
-values = [5.3, 12.4, 4.4, 6.3, 14.8, 5.3]
+values = [5.3/8.3, 12.4/8.3, 4.4/8.3, 6.3/8.3, 14.8/8.3, 5.3/8.3]
 group_indices = [[0, 1, 2], [3, 4, 5]]
 group_names = ["Qwen-0.6", "Qwen-1.7"]
 
@@ -18,7 +18,7 @@ colors = [
 legend_items = [
     ("D2D", color_map["cat1"]),
     ("Shared", color_map["cat2"]),
-    ("Oracle", color_map["cat3"])
+    ("Optimal", color_map["cat3"])
 ]
 
 # Bar layout within groups
@@ -46,7 +46,7 @@ ax.spines['top'].set_visible(False)
 # Light grid
 ax.grid(True, axis='y', linestyle='--', alpha=0.25)
 
-ylim = 29.9
+ylim =2.9
 ax.set_ylim(0, ylim)
 ax.tick_params(axis='x', direction='in')
 ax.tick_params(axis='y', direction='in', labelsize=20)
@@ -55,10 +55,10 @@ ax.tick_params(axis='y', direction='in', labelsize=20)
 for bar, val in zip(bars, values):
     x = bar.get_x() + bar.get_width() / 2
     h = bar.get_height()
-    diff = 3 if h >10 else 2.3
+    diff = 0.3 if h >10 else 0.2
     ax.text(
         x, h - diff,              # middle of the bar height
-        f"{val}",
+        f"{val:.1f}",
         ha="center", va="center",
         color="black",
         fontsize=20,
@@ -69,7 +69,7 @@ for bar, val in zip(bars, values):
 ax.set_xticks(group_centers)
 ax.set_xticklabels(group_names,fontsize=20)
 
-ax.set_ylabel("Latency per iteration(s)",fontsize=20)
+ax.set_ylabel("Time between tokens(s)",fontsize=20)
 ax.set_title("", pad=12)
 
 # --- Legend on top in ONE ROW ---

@@ -22,5 +22,29 @@
     "inter_bandwidth": 100.0,
     "intra_bandwidth": 5312500000.0,
     "memory": 100
+  },
+  "IP4": {
+    "instance_type": "G4050",
+    "inter_bandwidth": 100.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 100
+  },
+  "IP5": {
+    "instance_type": "G4050",
+    "inter_bandwidth": 100.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 100
+  },
+  "IP6": {
+    "instance_type": "G4050",
+    "inter_bandwidth": 100.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 100
+  },
+  "IP7": {
+    "instance_type": "G4050",
+    "inter_bandwidth": 100.0,
+    "intra_bandwidth": 5312500000.0,
+    "memory": 100
   }
 }

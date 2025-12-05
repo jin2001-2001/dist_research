@@ -205,6 +205,8 @@ def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha, jmod
     if jmode != "training":
         B_bt_a = [0]*len(B_bt_a)
         B_be_a = [0]*len(B_be_a)
+        T_gathering_a = [0]*len(T_gathering_a)
+        E_gathering_a = [0]*len(E_gathering_a)
     # noticed that dependency don't count communication index, i,.e. len of dependency *2 - 1 equal to len of B_f/b
     chain_list = plan_parser(P)
 
@@ -262,8 +264,8 @@ def graph_plan_estimator(current_phase_index ,P, M, SLO, Profilelor, alpha, jmod
         M * (B_fe_a[i] + B_be_a[i]) + E_gathering_a[i]
         for i in range(S)
     )
-
-    return abs(T_max-SLO)+alpha*(E_consumption), BatchAllocateList
+    #print(T_max, SLO, alpha, E_consumption)
+    return abs(T_max-SLO)+alpha*E_consumption, BatchAllocateList
 
 
 

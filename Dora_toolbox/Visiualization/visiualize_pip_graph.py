@@ -817,8 +817,8 @@ def pip_ploting_graph(num_stages = 5, num_microbatches = 10,
         return max_time
     #print(max_time)
 
-    #print(fp_schedule)
-    #print(bp_schedule)
+    print(fp_schedule)
+    print(bp_schedule)
     # ----------------------
     # Visualization
     # ----------------------
@@ -890,6 +890,10 @@ def pip_ploting_graph_real(RCPSP_tasks, TaskL = None,
                         percentage = 0.6,
                         ratio = 0,
                          jmode= "training"):
+    
+
+    print(ns, a, b, aa, group_plan)
+
     fp_schedule = {}
     bp_schedule = {}
     gathering_schedule = {}

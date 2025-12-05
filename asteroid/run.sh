@@ -30,12 +30,12 @@ inputs=""
 pureinputs=""
 for f in "$@"; do
   pureinputs="$pureinputs ${f}"
-  inputs="$inputs ../Profile_exp_bert/${f}.json"
+  inputs="$inputs ../Profile_exp_1.7/${f}.json"
 done
 
 # Last device is used as layer profile
 LAST_INPUT=${!#}
-lastinput="../Profile_exp_bert/${LAST_INPUT}.json"
+lastinput="../Profile_exp_1.7/${LAST_INPUT}.json"
 
 echo "=== Arguments ==="
 echo "MBPS (bandwidth): $MBPS"

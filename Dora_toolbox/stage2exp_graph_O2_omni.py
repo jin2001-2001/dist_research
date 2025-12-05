@@ -176,7 +176,7 @@ def test_stramline(ratio1=0,ratio2=0,ratio3=0,
 
     #call RCPSP solver:
     start_T = time.time()
-    model, result = cj.RCPSP_solver("./scratch/scratchtest_graph.mm", t = 10)
+    model, result = cj.RCPSP_solver("./scratch/scratchtest_graph.mm", t = 3)
     #cj.RCPSP_plot(model, result)
     time_cost = time.time()-start_T
     #print("successfully get RCPSP results...")
@@ -317,7 +317,7 @@ def dependency_generator_for_drawing(plan):  ## the same one in profile_real,,, 
     for i in range(n - 1):
         if L[i] == L[i + 1]:
             deps[i] = i + 1
-    if biggest_phase == 1:
+    if  biggest_phase>0:
         # Rule 2: last (0,*) → first (1,0)
         first_1_idx = next(i for i, t in enumerate(L) if t == (1,0))
         # find last index of each unique (0, y)
@@ -336,6 +336,55 @@ def dependency_generator_for_drawing(plan):  ## the same one in profile_real,,, 
 
     return(deps)
 
+
+
+
+def pareto_min_min(x, y):
+    """Return indices of Pareto-optimal points for minimizing both x and y."""
+    points = list(zip(x, y))
+    pareto_idx = []
+
+    for i, (xi, yi) in enumerate(points):
+        dominated = False
+        for j, (xj, yj) in enumerate(points):
+            # j dominates i if j is <= on both axes and strictly < on one axis
+            if (xj <= xi and yj <= yi) and (xj < xi or yj < yi):
+                dominated = True
+                break
+        if not dominated:
+            pareto_idx.append(i)
+
+    return pareto_idx
+
+
+def sample_pareto_points(x, y, max_points=5):
+    idx = pareto_min_min(x, y)       # Pareto indices
+    idx = list(idx)
+
+    # Case 1: Too many Pareto points → downsample
+    if len(idx) > max_points:
+        idx = random.sample(idx, max_points)
+
+    # Case 2: Too few Pareto points → randomly add more indices
+    elif len(idx) < max_points:
+        all_idx = list(range(len(x)))
+        remaining = [i for i in all_idx if i not in idx]
+
+        needed = max_points - len(idx)
+
+        if len(remaining) >= needed:
+            idx += random.sample(remaining, needed)
+        else:
+            # If there are not enough remaining points, take all
+            idx += remaining
+
+    # Now idx has ≤ max_points, ensure unique
+    idx = idx[:max_points]
+
+    # Return in x,y,index format
+    return [x[i] for i in idx], [y[i] for i in idx], idx
+
+
 def dora_best_MM(
                 model_maping, #dict
                 model_names,
@@ -352,13 +401,14 @@ def dora_best_MM(
                 mem_list = [],
                 ks=10, ss = 1,
                 alpha = 0,
+                SLO = 0,
                 jmode = "training",
                 cmode = "shared"):
     scratch_dir = "./scratch"
     clear_scratch_folder(scratch_dir)
 
     print("begin MM model algorithm...")
-    start1 = time.time()
+    start1 = 0
     score_list = []
     plan_list = []
     allo_list = []
@@ -368,14 +418,15 @@ def dora_best_MM(
 
     Permuaccounts = 0
 
-    #perms = list(itertools.permutations(range(len(test_list))))
-    #random.shuffle(perms)   # now order is randomized
+    perms_ = list(itertools.permutations(range(len(test_list))))
+    random.shuffle(perms_)   # now order is randomized
     ##currently, we don't consider exploring possible shuffled orders...
-    perms = [[i for i in range(ndevice)]]
+    perms = [[i for i in reversed(range(ndevice))],[i for i in range(ndevice)],perms_[0] ,perms_[1]]
 
+    Tpart1 = 0
     for perm_indices in perms[:]:
         ##adjust
-        if Permuaccounts>0:
+        if Permuaccounts>8:
             continue
         device_order = [test_list[i] for i in perm_indices]
         mem_order    = [mem_list[i] for i in perm_indices]
@@ -401,9 +452,12 @@ def dora_best_MM(
         Structure,layer_Structure = structure_generator_for_DPsolver(model_maping, layers)
         
         print("begin solving...")
+        start = time.time()
         result = dynamic_programming_planning_MM(Structure=Structure,Layer_structure = layer_Structure, N= ndevice , M = nmbatch, k = ks, s = ss,
                                           Profilelor = simprofile, 
-                                          alpha = alpha, SLO = 0, jmode = jmode)
+                                          alpha = alpha, SLO = SLO, jmode = jmode)
+        tcost = time.time() - start
+        Tpart1+=tcost
         #print("the iteraion's result is ", result.amount())
         topK.merge_with_device_type(result, perm_indices)  # notice here that we use it to store perm_indices, not actual device name anymore...
         Permuaccounts+=1
@@ -417,12 +471,12 @@ def dora_best_MM(
     #print("score_list:", score_list)
 
     score_list_after = []
+    final_score = []
     print(score_list)
     print(plan_list)
     print(allo_list)
     print(device_order_list)
 
-    Tpart1 = time.time() - start1
 
     Tpart2 = 0
 
@@ -432,6 +486,7 @@ def dora_best_MM(
 
     buf = utils.graph_plan_estimator(0 ,plan_list[0], nmbatch, 0, simprofile, alpha)
     #print("tested value:::",buf)
+    Energy_list = []
     for j in range(len(score_list)):
         #noticed: we should regenerate the simprofile...
         perm_indices = device_order_list[j]
@@ -454,7 +509,21 @@ def dora_best_MM(
             jmode = jmode)
 
         B_ft, B_bt, B_fe, B_be, T_gathering, E_gathering, BatchAllocateList = simprofile.getall(plan_list[j])
-        #print("examine the solutions...")
+
+        if jmode == "training":
+            #print(B_fe)
+            E_consumption = sum(
+            nmbatch * (B_fe[i] + B_be[i]) + E_gathering[i]
+            for i in range(len(B_fe))
+        )
+        else:
+            E_consumption = sum(
+            nmbatch * (B_fe[i]) 
+            for i in range(len(B_fe))
+        )
+
+        print("Energy cost:::", E_consumption)
+        Energy_list.append(E_consumption)
         #print(B_ft, B_bt,T_gathering)
         res = utils.graph_plan_estimator(0 ,plan_list[j], nmbatch, 0, simprofile, alpha, jmode)
         ##Actually, the UnitR's value doesn't matter...
@@ -491,9 +560,17 @@ def dora_best_MM(
                                     )
         Tpart2+=timecost
         score_list_after.append(score_compare)
+        if score_compare[2]!=-1:
+            final_score.append(score_compare[2])
+        else:
+            final_score.append(score_compare[1])
 
     print(score_list_after)
+    print("energy_list:", Energy_list)
     print(f"time cost: T1:{Tpart1}, T2:{Tpart2}. Ttotal{Tpart1+Tpart2}")
+
+    final_x, final_y, _ = sample_pareto_points(final_score, Energy_list, max_points=5)
+    return final_x, final_y
 
 
 
@@ -543,13 +620,15 @@ def simulator_eval(
     #print(B_fe, B_be)
     #print("xx",T_gathering)
     if jmode == "training":
+        print(B_fe)
         E_consumption = sum(
         nmbatch * (B_fe[i] + B_be[i]) + E_gathering[i]
         for i in range(len(B_fe))
     )
     else:
+        print()
         E_consumption = sum(
-        nmbatch * (B_fe[i]) + E_gathering[i]
+        nmbatch * (B_fe[i]) 
         for i in range(len(B_fe))
     )
 
@@ -600,13 +679,13 @@ def construct_band(name, band, lanband):
                               (ch[2],ch[3]):[[2],[0,1,3]]      
         }
         return structure
-    
+    2
     if name == "mesh5":
         structure = Bandwidth_str("mesh5", band)
         ch = [0,1,2,3,4]
         #   0 -----  1 ---------  2
 
-        #      4----------3
+        #      4----------30
         structure.LAN_resource = [lanband]*5
         structure.LAN_link = {(ch[0],ch[1]):[[0],[4,3,2,1]], (ch[0],ch[2]):[[0,1],[2,3,4]], (ch[0],ch[3]):[[3,4],[0,1,2]], (ch[0],ch[4]):[[4],[0,1,2,3]],
                               (ch[1],ch[2]):[[1],[0,2,3,4]], (ch[1],ch[3]):[[1,2],[0,4,3]], (ch[1],ch[4]):[[1,2,3],[0,4]],
@@ -631,39 +710,46 @@ if __name__ == "__main__":
     nmbatch = 5
     mbatchsize = 4
     choice0= ["home1", "home2", "traffic", "station", "motivation_graph","motivation_3b"]
-    choice1= ["bert", "0.6", "1.7", "omni","serial_omni_0"]
+    choice1= ["bert", "0.6", "1.7", "omni","serial_omni_0", "serial_omni_1","serial_omni_2" ]
     util_dlist = [1]*10
-    work_mode = "training"
-    device_setting = choice0[3]
-    model_setting = choice1[3]
+    work_mode = "trainingxx"
+    device_setting = choice0[1]
+    model_setting = choice1[2]
+    #model_setting = "1.7_for_motivation"
+    #device_setting = "home1_for_motivation"
     f_able = 0
-    v_able = 1
+    v_able = 0
+    alpha= 0.0
+    SLO  = 0.0
+    ##notice line 380 around for the 
 
     plan1 = [{'phase': (0, 0), 'layer': (0, 32), 'device': (1, 2), 'inver_internal_stage_idx': 0},
             {'phase': (0, 1), 'layer': (0, 32), 'device': (2, 3), 'inver_internal_stage_idx': 0}, 
             {'phase': (1, 0), 'layer': (0, 36), 'device': (3, 4), 'inver_internal_stage_idx': 0}]  # for omni...
-    '''
-    plan1 = [{'phase': (0, 0), 'layer': (0, 20), 'device': (0, 1), 'inver_internal_stage_idx': 4},
-             {'phase': (0, 0), 'layer': (20, 40), 'device': (1, 2), 'inver_internal_stage_idx': 3},
-             {'phase': (0, 0), 'layer': (40, 60), 'device': (2, 3), 'inver_internal_stage_idx': 2},
-             {'phase': (0, 0), 'layer': (60, 80), 'device': (3, 4), 'inver_internal_stage_idx': 1},
-             {'phase': (0, 0), 'layer': (80, 100), 'device': (4, 5), 'inver_internal_stage_idx': 0}]  #for 5 steps
-    '''
+    
+    plan1 = [{'phase': (0, 0), 'layer': (0, 5), 'device': (0, 1), 'inver_internal_stage_idx': 4},
+             {'phase': (0, 0), 'layer': (5, 10), 'device': (1, 2), 'inver_internal_stage_idx': 3},
+             {'phase': (0, 0), 'layer': (10, 16), 'device': (2, 3), 'inver_internal_stage_idx': 2},
+             {'phase': (0, 0), 'layer': (16, 21), 'device': (3, 4), 'inver_internal_stage_idx': 1},
+             {'phase': (0, 0), 'layer': (21, 28), 'device': (4, 5), 'inver_internal_stage_idx': 0}]  #for 5 steps
+    
 
-    plan1 = [{'phase': (0, 0), 'layer': (0, 32), 'device': (0, 1), 'inver_internal_stage_idx': 3},
-             {'phase': (0, 0), 'layer': (32, 64), 'device': (1, 2), 'inver_internal_stage_idx': 2},
-             {'phase': (0, 0), 'layer': (64, 82), 'device': (2, 3), 'inver_internal_stage_idx': 1},
-             {'phase': (0, 0), 'layer': (82, 100), 'device': (3, 4), 'inver_internal_stage_idx': 0}]  #for 4 steps
+    plan1 = [{'phase': (0, 0), 'layer': (0, 25), 'device': (0, 1), 'inver_internal_stage_idx': 3},
+             {'phase': (0, 0), 'layer': (25, 50), 'device': (1, 2), 'inver_internal_stage_idx': 2},
+             {'phase': (0, 0), 'layer': (50, 75), 'device': (2, 3), 'inver_internal_stage_idx': 1},
+             {'phase': (0, 0), 'layer': (75, 100), 'device': (3, 4), 'inver_internal_stage_idx': 0}]  #for 4 steps
 
     '''
-    plan1 = [{'phase': (0, 0), 'layer': (0, 32), 'device': (0, 1), 'inver_internal_stage_idx': 0}, 
-             {'phase': (0, 1), 'layer': (0, 32), 'device': (1, 2), 'inver_internal_stage_idx': 0}, 
-             {'phase': (1, 0), 'layer': (0, 12), 'device': (2, 3), 'inver_internal_stage_idx': 2},
-             {'phase': (1, 0), 'layer': (12, 24), 'device': (3, 4), 'inver_internal_stage_idx': 1}, 
-             {'phase': (1, 0), 'layer': (24, 36), 'device': (4, 5), 'inver_internal_stage_idx': 0}]
+    plan1 = [
+             {'phase': (0, 0), 'layer': (0, 25), 'device': (0, 1), 'inver_internal_stage_idx': 0}, 
+             {'phase': (1, 0), 'layer': (25, 50), 'device': (1, 2), 'inver_internal_stage_idx': 0},
+             {'phase': (2, 0), 'layer': (50, 75), 'device': (2, 3), 'inver_internal_stage_idx': 0}, 
+             {'phase': (3, 0), 'layer': (75, 100), 'device': (3, 4), 'inver_internal_stage_idx': 0}]
     '''
-    #plan1 = [{'phase': (0, 0), 'layer': (0, 58), 'device': (0, 2), 'inver_internal_stage_idx': 1},
-    #         {'phase': (0, 0), 'layer': (58, 100), 'device': (2, 4), 'inver_internal_stage_idx': 0}]        
+    plan1 = [{'phase': (0, 0), 'layer': (0,28), 'device': (0,4), 'inver_internal_stage_idx': 1},]
+    #         {'phase': (1, 0), 'layer': (47, 100), 'device': (2,4), 'inver_internal_stage_idx': 0}]        
+    #plan1 =[{'phase': (0, 0), 'layer': (0, 11), 'device': (2, 3), 'inver_internal_stage_idx': 2}, {'phase': (0, 0), 'layer': (11, 22), 'device': (3, 4), 'inver_internal_stage_idx': 1}, {'phase': (0, 0), 'layer': (22, 28), 'device': (4, 5), 'inver_internal_stage_idx': 0}]
+    plan1 = [{'phase': (0, 0), 'layer': (0, 32), 'device': (0, 1), 'inver_internal_stage_idx': 0}, {'phase': (0, 1), 'layer': (0, 32), 'device': (1, 2), 'inver_internal_stage_idx': 0}, {'phase': (1, 0), 'layer': (0, 20), 'device': (2, 3), 'inver_internal_stage_idx': 1}, {'phase': (1, 0), 'layer': (20, 36), 'device': (3, 4), 'inver_internal_stage_idx': 0}]
     if model_setting == "omni":
         nmbatch = 5
         mbatchsize = 4
@@ -682,8 +768,8 @@ if __name__ == "__main__":
         nmbatch = 5
         mbatchsize = 4
         layers = [100]  ## should be a list 
-        hidden_size = [2109*1.5] ## should be a list 
-        seq = [1208*1.5] ## should be a list       #768+768 = 1536
+        hidden_size = [2109*1] ## should be a list 
+        seq = [1208*1] ## should be a list       #768+768 = 1536
         profilehome="../Profile_exp_1.7"
         profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
         #profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
@@ -692,11 +778,11 @@ if __name__ == "__main__":
     if model_setting == "serial_omni_1":
         nmbatch = 5
         mbatchsize = 4
-        layers = [32,32,36]  ## should be a list 
-        hidden_size = [1280,1280,3584] ## should be a list 
-        seq = [768, 512, 768+512+256] ## should be a list
+        layers = [20,20,20,20]  ## should be a list 
+        hidden_size = [1280,1280, 3584,3584] ## should be a list 
+        seq = [768+512+256, 768+512+256, 768+512+256, 768+512+256, 768+512+256] ## should be a list
         profilehome="../Profile_exp_1.7"
-        profilemaping = {(0,0):0, (1,0):1, (1,0):2}   # 0: vision, 1: audio, 2: backbone
+        profilemaping = {(0,0):0, (1,0):1, (2,0):2,(3,0):3}   # 0: vision, 1: audio, 2: backbone
         #profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
         model_names = [""]*len(profilemaping)
         #model_names = ["vision", "audio", "thinker"]
@@ -704,10 +790,10 @@ if __name__ == "__main__":
         nmbatch = 5
         mbatchsize = 4
         layers = [32,32,36]  ## should be a list 
-        hidden_size = [1280,1280,3584] ## should be a list 
-        seq = [768, 512, 768+512+256] ## should be a list
+        hidden_size = [1280,2816] ## should be a list 
+        seq = [ 768+512+256,  768+512+256, 768+512+256] ## should be a list
         profilehome="../Profile_exp_1.7"
-        profilemaping = {(0,0):0, (1,0):1, (1,0):2}   # 0: vision, 1: audio, 2: backbone
+        profilemaping = {(0,0):0, (1,0):1}   # 0: vision, 1: audio, 2: backbone
         #profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
         model_names = [""]*len(profilemaping)
         #model_names = ["vision", "audio", "thinker"]
@@ -738,6 +824,18 @@ if __name__ == "__main__":
         model_names = [""]*(len(profilemaping))
         #model_names = ["vision", "audio", "thinker"]
 
+    if model_setting == "1.7_for_motivation":
+        nmbatch = 5   #9
+        mbatchsize = 8  #8
+        layers = [28]  ## should be a list 
+        hidden_size = [2048] ## should be a list 
+        seq = [512] ## should be a list
+        profilehome="../Profile_exp_1.7"
+        profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
+        #profilemaping = {(0,0):0}   # 0: vision, 1: audio, 2: backbone
+        model_names = [""]*(len(profilemaping))
+        #model_names = ["vision", "audio", "thinker"]
+
     if model_setting == "bert":
         nmbatch = 12
         mbatchsize = 12
@@ -758,7 +856,7 @@ if __name__ == "__main__":
 
 
 
-    alpha = 0 # 0 by default
+
     if device_setting == "home1":
         ndevice = 5
         band = 1000
@@ -773,6 +871,17 @@ if __name__ == "__main__":
         mem_list = [32*2]*0   + [48*2]*0+    [32*2]*0+     [16*2]*0+            [12*2]*0+  [12*2]*0+   [12*2]*2+    [12*2]*3 #12+24 =36
         mem_list = [x*1024 for x in mem_list]
 
+    if device_setting == "home1_for_motivation":
+        ndevice = 3
+        band = 500
+        lanband = 0
+        name = "mesh4"
+        band_Str = construct_band(name,band,lanband)
+        set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*0 + ["Xiaomi"]*3  + ["Samsung"]*0+["4050"]*0+ ["4060"]*0
+        util_list = [0.5,0.18,0.50]
+        mem_list = [32*2]*0   + [48*2]*0+    [32*2]*0+     [16*2]*0+            [12*2]*0+  [12*2]*0+   [12*2]*2+    [12*2]*3 #12+24 =36
+        mem_list = [x*1024 for x in mem_list]
+
     if device_setting == "home2":
         ndevice = 5
         band = 600
@@ -780,10 +889,12 @@ if __name__ == "__main__":
         name = "mesh4"
         band_Str = construct_band(name,band,lanband)
         if "omni" in model_setting:
-            set_list =  ["XiaomiINT8"]*2  + ["SamsungINT8"]*1+ ["4050INT8"]*2
+            #set_list =  ["XiaomiINT8"]*2  + ["SamsungINT8"]*1+ ["4050INT8"]*2
+            set_list =  ["XiaomiINT8"]*1  + ["SamsungINT8"]*1+ ["4050INT8"]*1 +["XiaomiINT8"]*1+ ["4050INT8"]*1
         else:
-            set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*0 + ["Xiaomi"]*2  + ["Samsung"]*1+["4060"]*0+ ["4050"]*2
-        util_list = [1]*5
+            #set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*0 + ["Xiaomi"]*2  + ["Samsung"]*1+["4060"]*0+ ["4050"]*2
+            set_list =  ["Xiaomi"]*1  + ["Samsung"]*1+ ["4050"]*1 + ["Xiaomi"]*1 + ["4050"]*1
+        util_list = [0.85,0.7,0.85,0.75, 0.8]
         mem_list = [32*2]*0   + [48*2]*0+    [32*2]*0+     [16*2]*0+            [12*2]*2+  [12*2]*1+   [12*2]*0+    [12*2]*2
         mem_list = [x*1024 for x in mem_list]
 
@@ -797,7 +908,8 @@ if __name__ == "__main__":
             set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*4 + ["Xiaomi"]*0  + ["Samsung"]*0+["4060"]*0+ ["4050"]*0
         else:
             set_list = ["Camera"]*4
-        util_list = [0.7,0.7,1,1]
+        util_list = [0.55,0.6,0.55,1]
+        #util_list = [0.7,0.7,1, 1]
         mem_list = [32*2]*0   + [48*2]*0+    [32*2]*0+     [16*2]*4+            [12*2]*0+  [12*2]*0+   [12*2]*0+    [8*2]*0
         mem_list = [x*1024 for x in mem_list]
 
@@ -847,6 +959,9 @@ if __name__ == "__main__":
         mem_list = [16*2]*3
         mem_list = [x*1024 for x in mem_list] 
         plan1 = [{'phase': (0, 0), 'layer': (0, 28), 'device': (2, 3), 'inver_internal_stage_idx': 0}]
+    if model_setting == "serial_omni_0":
+        mem_list = [x*1.5 for x in mem_list]
+    
     test_dlist = set_list
     #test_dlist = ["CPU60"]*4
     mem_tlist = mem_list
@@ -869,8 +984,9 @@ if __name__ == "__main__":
                 profilehome,
                 set_list,
                 util_list, 
-                mem_list,ks=4, ss = 4,
+                mem_list,ks=5, ss = 4,
                 alpha=alpha,
+                SLO = SLO,
                 jmode = work_mode)
     
     if 1==v_able:    
@@ -891,4 +1007,43 @@ if __name__ == "__main__":
                 mem_tlist,ks = 5, ss = 4,
                 alpha=alpha,
                 jmode = work_mode)
+
+
+
+    def generate_list(n, base):
+        part1 = [0] + [(1.2) **(-i)*base for i in range(n, 0, -1)]   # 0, 1/n, 1/(n-1), ..., 1
+        part2 = [(1.1) **(i) *base for i in range(0,n)]                    # 2, 3, ..., n
+        #return part1 + part2
+        return part1+part2
     
+
+    if 1 == 1:
+        act_final_score = []
+        act_energy_list = []
+
+        alpha = 1
+        for alpha in [2]:
+            for SLO in [3.0+i*0.4 for i in range(8)]:
+                print("current alpha:", alpha)
+                final_score_sub, energy_list_sub = dora_best_MM(
+                    profilemaping, 
+                    model_names,
+                    ndevice,
+                    nmbatch,
+                    mbatchsize,
+                    hidden_size,
+                    seq,
+                    layers,
+                    band_Str,
+                    profilehome,
+                    set_list,
+                    util_list, 
+                    mem_list,ks=10, ss = 4,
+                    alpha=alpha,
+                    SLO = SLO,
+                    jmode = work_mode)
+                act_final_score.extend(final_score_sub)
+                act_energy_list.extend(energy_list_sub)
+
+        print("ox = ", act_final_score)
+        print("oy = ", act_energy_list)
