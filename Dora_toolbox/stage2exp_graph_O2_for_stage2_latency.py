@@ -974,30 +974,31 @@ if __name__ == "__main__":
   
     with open("RCPSP_perform.txt", "w") as f:
         f.write("T,mbatch,time_cost,best,lowerbound\n")  # header
-        for T in [0.5, 1, 2, 4, 8]:
+        for T in [2,4,8, 12, 16]:
         
             for mbatchsize in range(1,10):
-                time_cost, best, lowerbound = simulator_eval(
-                profilemaping, 
-                model_names,
-                ndevice,
-                nmbatch,
-                mbatchsize,
-                hidden_size,
-                seq,
-                layers,
-                band_Str,
-                profilehome,
-                plan1,
-                test_dlist,
-                util_dlist,
-                mem_tlist,ks = 5, ss = 4,
-                alpha=alpha,
-                jmode = work_mode,
-                Tlimit=T
-                )
+                for repeat in range(10):
+                    time_cost, best, lowerbound = simulator_eval(
+                    profilemaping, 
+                    model_names,
+                    ndevice,
+                    nmbatch,
+                    mbatchsize,
+                    hidden_size,
+                    seq,
+                    layers,
+                    band_Str,
+                    profilehome,
+                    plan1,
+                    test_dlist,
+                    util_dlist,
+                    mem_tlist,ks = 5, ss = 4,
+                    alpha=alpha,
+                    jmode = work_mode,
+                    Tlimit=T
+                    )
 
-                #print(best.__dict__)
-                f.write(f"{T},{mbatchsize},{time_cost},{best},{lowerbound}\n")
-                print(T, mbatchsize, time_cost, best, lowerbound )
+                    #print(best.__dict__)
+                    f.write(f"{T},{mbatchsize},{time_cost},{best},{lowerbound}\n")
+                    print(T, mbatchsize, time_cost, best, lowerbound )
 
