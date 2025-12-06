@@ -716,8 +716,9 @@ if __name__ == "__main__":
     device_setting = choice0[1]
     model_setting = choice1[2]
     #model_setting = "1.7_for_motivation"
-    #device_setting = "home1_for_motivation"
-    f_able = 0
+    device_setting = "scalable"
+    scala_amount = 16
+    f_able = 1
     v_able = 0
     alpha= 0.0
     SLO  = 0.0
@@ -914,6 +915,20 @@ if __name__ == "__main__":
         mem_list = [x*1024 for x in mem_list]
 
 
+    if device_setting == "scalable":
+        ndevice = scala_amount
+        band = 1024+512
+        lanband = 0
+        name = "mesh4"
+        band_Str = construct_band(name,band,lanband)
+        if "omni" in model_setting:
+            set_list = ["2630"]*0 + ["A40"]*0+ ["V100"]*0  + ["CameraINT8"]*4 + ["Xiaomi"]*0  + ["Samsung"]*0+["4060"]*0+ ["4050"]*0
+        else:
+            set_list = ["Xiaomi"]*scala_amount
+        util_list = [1] * scala_amount
+        #util_list = [0.7,0.7,1, 1]
+        mem_list = [32*2]*0   + [48*2]*0+    [32*2]*0+     [16*2]*scala_amount+            [12*2]*0+  [12*2]*0+   [12*2]*0+    [8*2]*0
+        mem_list = [x*1024 for x in mem_list]
 
 
 
@@ -984,7 +999,7 @@ if __name__ == "__main__":
                 profilehome,
                 set_list,
                 util_list, 
-                mem_list,ks=5, ss = 4,
+                mem_list,ks=1, ss = 1,
                 alpha=alpha,
                 SLO = SLO,
                 jmode = work_mode)
@@ -1017,7 +1032,7 @@ if __name__ == "__main__":
         return part1+part2
     
 
-    if 1 == 1:
+    if 0 == 1:
         act_final_score = []
         act_energy_list = []
 

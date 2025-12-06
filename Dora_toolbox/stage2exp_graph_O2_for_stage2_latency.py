@@ -972,7 +972,7 @@ if __name__ == "__main__":
 
     print(set_list)
   
-    with open("RCPSP_perform.txt", "w") as f:
+    with open("RCPSP_perform_new.txt", "w") as f:
         f.write("T,mbatch,time_cost,best,lowerbound\n")  # header
         for T in [2,4,8, 12, 16]:
         
